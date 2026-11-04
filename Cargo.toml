@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["core-ffi", "uniffi-bindgen"]
+members = ["core-ffi"]
+# A build tool with its own workspace, lockfile and cargo-deny checks
+exclude = ["tools/uniffi-bindgen"]
 
 [workspace.package]
 edition = "2024"

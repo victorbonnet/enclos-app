@@ -1,7 +1,11 @@
 version: 2
 updates:
+  # Both workspaces in one PR, so the app and its binding generator move to a
+  # new uniffi together
   - package-ecosystem: cargo
-    directory: /
+    directories:
+      - /
+      - /tools/uniffi-bindgen
     schedule:
       interval: weekly
     groups:

@@ -24,7 +24,9 @@ case "$(uname -s)" in
     *) host_lib="$root/target/debug/libenclos_core.so" ;;
 esac
 rm -rf "$main/kotlin/generated"
-cargo run --locked -p uniffi-bindgen -- generate \
+# Run from the repository root, where the generator's library mode finds
+# core-ffi and its uniffi.toml through cargo metadata.
+cargo run --locked --manifest-path tools/uniffi-bindgen/Cargo.toml -- generate \
     --library "$host_lib" \
     --language kotlin --no-format \
     --out-dir "$main/kotlin/generated"

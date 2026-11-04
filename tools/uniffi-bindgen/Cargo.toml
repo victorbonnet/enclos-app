@@ -1,0 +1,22 @@
+[package]
+name = "uniffi-bindgen"
+version = "0.1.0"
+description = "Generates the Kotlin (and later Swift) bindings of core-ffi"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+repository = "https://github.com/victorbonnet/enclos-app"
+publish = false
+
+# A workspace of its own, apart from the app's: this build tool depends on an
+# unmaintained crate the app must not (see deny.toml here).
+[workspace]
+
+[dependencies]
+uniffi = { version = "0.32.2", features = ["cli"] }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

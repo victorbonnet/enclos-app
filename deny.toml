@@ -10,10 +10,15 @@ targets = [
     "aarch64-unknown-linux-gnu",
     "aarch64-apple-darwin",
 ]
-all-features = true
+# The features the app is built with, not every feature of every dependency:
+# `uniffi`'s optional binding generator (and the unmaintained crate it pulls
+# in) is never built into the app. The generator is checked on its own, in
+# tools/uniffi-bindgen/deny.toml.
+all-features = false
 
 [advisories]
-# Vulnerabilities and unmaintained crates are denied by default
+# Vulnerabilities and unmaintained crates are denied by default, with no
+# exception for what ships in the app
 yanked = "deny"
 ignore = []
 

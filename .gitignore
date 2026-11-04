@@ -1,5 +1,5 @@
 # Rust
-/target/
+target/
 
 # Gradle and Android Studio
 .gradle/

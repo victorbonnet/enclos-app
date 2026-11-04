@@ -1,14 +1,25 @@
+tool := "tools/uniffi-bindgen/Cargo.toml"
+
 fmt:
     cargo fmt --all -- --check
+    cargo fmt --manifest-path {{tool}} -- --check
 
 clippy:
     cargo clippy --locked --all-targets --all-features -- -D warnings
+    cargo clippy --locked --manifest-path {{tool}} --all-targets -- -D warnings
 
 test:
     cargo test --locked --all-features
 
+# The app's crates with no exception, then the binding generator with its own
 deny:
     cargo deny check
+    cargo deny --manifest-path {{tool}} check --config tools/uniffi-bindgen/deny.toml
+
+# Both workspaces must use the same uniffi: the generated bindings must match
+# the library's scaffolding
+uniffi-versions:
+    sh scripts/check-uniffi-versions.sh
 
 # The Rust core for the app's ABIs, and its Kotlin bindings
 core-android:
@@ -18,4 +29,4 @@ core-android:
 android: core-android
     cd android && ./gradlew --no-daemon :app:assembleDebug :app:lintDebug
 
-ci: fmt clippy test deny
+ci: fmt clippy test deny uniffi-versions
