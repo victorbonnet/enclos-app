@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- The bridge, over the tailnet -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- No backup: the app will hold device keys and conversations -->
     <application
         android:allowBackup="false"
