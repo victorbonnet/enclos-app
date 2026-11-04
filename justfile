@@ -12,9 +12,10 @@ test:
     cargo test --locked --all-features
 
 # The app's crates with no exception, then the binding generator with its own
+# (cargo-deny reads the deny.toml next to each manifest)
 deny:
     cargo deny check
-    cargo deny --manifest-path {{tool}} check --config tools/uniffi-bindgen/deny.toml
+    cargo deny --manifest-path {{tool}} check
 
 # Both workspaces must use the same uniffi: the generated bindings must match
 # the library's scaffolding
