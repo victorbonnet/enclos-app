@@ -19,8 +19,12 @@ cargo ndk --platform 28 -t arm64-v8a -t x86_64 -o "$main/jniLibs" \
 # release profile strips the shipped libraries, and with them the metadata
 # UniFFI reads.
 cargo build --locked -p core-ffi
+case "$(uname -s)" in
+    Darwin) host_lib="$root/target/debug/libenclos_core.dylib" ;;
+    *) host_lib="$root/target/debug/libenclos_core.so" ;;
+esac
 rm -rf "$main/kotlin/generated"
 cargo run --locked -p uniffi-bindgen -- generate \
-    --library "$root/target/debug/libenclos_core.so" \
+    --library "$host_lib" \
     --language kotlin --no-format \
     --out-dir "$main/kotlin/generated"
