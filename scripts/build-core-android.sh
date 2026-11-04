@@ -15,8 +15,12 @@ cd "$root"
 cargo ndk --platform 28 -t arm64-v8a -t x86_64 -o "$main/jniLibs" \
     build --locked --release -p core-ffi
 
+# The bindings come from an unstripped host build of the same crate: the
+# release profile strips the shipped libraries, and with them the metadata
+# UniFFI reads.
+cargo build --locked -p core-ffi
 rm -rf "$main/kotlin/generated"
 cargo run --locked -p uniffi-bindgen -- generate \
-    --library "$main/jniLibs/arm64-v8a/libenclos_core.so" \
+    --library "$root/target/debug/libenclos_core.so" \
     --language kotlin --no-format \
     --out-dir "$main/kotlin/generated"
