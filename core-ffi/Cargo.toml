@@ -1,0 +1,27 @@
+[package]
+name = "core-ffi"
+version = "0.1.0"
+description = "The enclos app's Rust core, exported to Kotlin (and later Swift) through UniFFI"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# Kotlin loads it as libenclos_core.so; the tests link it as a Rust library
+name = "enclos_core"
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+uniffi = "0.32.2"
+
+# Not the workspace's lints: UniFFI's generated scaffolding exports
+# `#[unsafe(no_mangle)]` functions, which `unsafe_code = "deny"` refuses. This
+# crate is only that glue. Hand-written code stays safe Rust, and the logic it
+# wraps will live in enclos-protocol, which denies unsafe code.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["core-ffi", "uniffi-bindgen"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+repository = "https://github.com/victorbonnet/enclos-app"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
+# The core ships inside the app: small before fast (the app's size target is
+# measured once the core does real work).
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "s"
+strip = true

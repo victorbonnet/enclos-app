@@ -1,0 +1,15 @@
+[package]
+name = "uniffi-bindgen"
+version = "0.1.0"
+description = "Generates the Kotlin (and later Swift) bindings of core-ffi"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+uniffi = { version = "0.32.2", features = ["cli"] }
+
+[lints]
+workspace = true
