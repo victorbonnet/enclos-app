@@ -1,0 +1,35 @@
+version: 2
+updates:
+  # Both workspaces in one PR, so the app and its binding generator move to a
+  # new uniffi together
+  - package-ecosystem: cargo
+    directories:
+      - /
+      - /tools/uniffi-bindgen
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  # The Android app's dependencies, plugins and Gradle wrapper
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+    groups:
+      gradle:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: rust-toolchain
+    directory: /
+    schedule:
+      interval: weekly

@@ -1,0 +1,15 @@
+# Rust
+target/
+
+# Gradle and Android Studio
+.gradle/
+build/
+.idea/
+.kotlin/
+*.iml
+local.properties
+captures/
+
+# Built by scripts/build-core-android.sh, never committed
+/android/app/src/main/jniLibs/
+/android/app/src/main/kotlin/generated/
