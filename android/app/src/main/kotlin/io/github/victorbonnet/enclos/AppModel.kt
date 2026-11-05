@@ -641,6 +641,63 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (sent) awaiting[conversation.id] = true
     }
 
+    /**
+     * Forgets host [name] on this phone: tells its bridge to unpair this
+     * device when connected (`device.forget`; else it stays listed there
+     * until `enclos app unpair`), then deletes the device's keys for it and
+     * all the phone kept from it: agents, conversations, messages, files,
+     * how far they were read. Returns whether the bridge was told.
+     */
+    fun forgetHost(name: String): Boolean {
+        val host = paired.firstOrNull { it.name == name } ?: return false
+        // Sent before the close, which OkHttp queues after it.
+        val told = connections[name]?.send(message("device.forget")) == true
+        connections.remove(name)?.close()
+        failures.remove(name)
+        hosts.remove(name)
+        Keys.deleteDeviceKey(host.keyAlias)
+        paired.removeAll { it.name == name }
+        status.remove(name)
+        said.remove(name)
+        val ids = conversations.filter { it.host == name }.map { it.id }.toSet()
+        val attached = ids.flatMap { lines[it].orEmpty() }.flatMap { it.attachments }
+        ids.forEach {
+            typing.remove(it)
+            awaiting.remove(it)
+            steps.remove(it)
+            lastRead.remove(it)
+        }
+        reads.edit { ids.forEach { remove(it) } }
+        attached.forEach {
+            fetching.remove(it.id)
+            files.remove(it.id)
+        }
+        // The files, off the main thread, after what is queued.
+        saving.execute { attached.forEach { folderOf(it).deleteRecursively() } }
+        forget(name)
+        return told
+    }
+
+    /**
+     * Clears what this phone keeps (conversations, messages, agents,
+     * downloaded files) and syncs everything again from each bridge.
+     * Pairings stay, and so does how far each conversation was read.
+     */
+    fun clearCache() {
+        conversations.clear()
+        lines.clear()
+        agents.clear()
+        kept.clear()
+        steps.clear()
+        fetching.clear()
+        asked.clear()
+        files.clear()
+        save { clear() }
+        saving.execute { java.io.File(getApplication<Application>().cacheDir, "attachments").deleteRecursively() }
+        // Each connection again, its sync from the start.
+        if (foreground && ready) paired.forEach { connect(it) }
+    }
+
     fun reconnect(name: String) {
         failures.remove(name)
         reopen(name)
