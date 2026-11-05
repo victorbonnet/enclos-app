@@ -32,7 +32,7 @@ The pairing screen has three steps, always in this order: code read, device key 
 
 ## 4. Screens
 
-Three destinations, Inbox, Agents and Status, and two full screens over them, a conversation and pairing. A destination starts with its title, with no bar above it, so its content starts high; its one action, if any, sits on the title's line.
+Three destinations, Inbox, Agents and Status, and two full screens over them, a conversation and pairing. A destination starts with its title, with no bar above it, so its content starts high; its one action, if any, sits on the title's line. The app is in portrait only, for now, the QR scanner included.
 
 ### Inbox
 
@@ -115,6 +115,7 @@ Light or dark: the system's setting by default. Once the person chooses (System 
 | Core | `core-ffi` through UniFFI's Kotlin bindings (JNA) | the same crate through UniFFI's Swift bindings |
 | Destinations | bottom navigation bar; the active tab inside the logo's corners | `TabView`, the same framed active tab |
 | Destination title | title at the top, no bar above (28 sp); its action on the same line | large navigation title (34 pt), its action in the navigation bar |
+| Portrait only | `screenOrientation="portrait"` (Android 16+ ignores it on large screens) | supported orientations: portrait (`Info.plist`) |
 | New conversation | extended FAB | compose button in the navigation bar |
 | Back | arrow; predictive back gesture follows the finger | chevron with the previous title; the interactive swipe from the edge |
 | Pairing | full screen | sheet with Cancel |
@@ -128,7 +129,7 @@ Light or dark: the system's setting by default. Once the person chooses (System 
 
 ## Not built yet
 
-Push notifications (the bridge encrypts a preview for the device; the app decrypts it and fetches the message over the tailnet; two actions only, Reply and Mark read), search, sharing (ADR 0043), an app lock, conversation titles, the notification card of the design.
+Push notifications (the bridge encrypts a preview for the device; the app decrypts it and fetches the message over the tailnet; two actions only, Reply and Mark read), search, sharing (ADR 0043), an app lock, conversation titles, landscape, the notification card of the design.
 
 ## To verify
 
