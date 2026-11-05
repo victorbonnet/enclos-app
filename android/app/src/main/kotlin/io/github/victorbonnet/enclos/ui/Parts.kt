@@ -5,8 +5,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.indication
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,10 +24,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ripple
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -184,18 +180,14 @@ fun NavBar(selected: Tab, onSelect: (Tab) -> Unit) {
         Row(Modifier.fillMaxWidth().height(80.dp).padding(top = 12.dp)) {
             Tab.entries.forEach { tab ->
                 val on = tab == selected
-                // The whole column takes the tap; the press shows only on the
-                // indicator, rounded, as Material's own bar does, not as a box
-                // filling the column's invisible bounds. The ripple has its own
-                // clipped layer, under the corners, which stay whole.
-                val press = remember { MutableInteractionSource() }
+                // The whole column takes the tap, with no press shown: the
+                // corners closing in on the tab chosen are its answer.
                 Column(
-                    Modifier.weight(1f).clickable(interactionSource = press, indication = null, role = Role.Tab) { onSelect(tab) },
+                    Modifier.weight(1f).clickable(interactionSource = null, indication = null, role = Role.Tab) { onSelect(tab) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Box(Modifier.width(56.dp).height(32.dp), contentAlignment = Alignment.Center) {
-                        Box(Modifier.matchParentSize().clip(Shapes.control).indication(press, ripple()))
                         if (on) Corners(palette.accent, Modifier.width(56.dp).height(32.dp), stroke = 2.5.dp, arm = 0.21f)
                         val icon = when (tab) {
                             Tab.Inbox -> Glyphs.inbox
