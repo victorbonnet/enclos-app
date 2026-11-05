@@ -21,9 +21,13 @@
         android:theme="@style/Theme.Enclos"
         tools:targetApi="33">
         <!-- adjustResize: the screen follows the keyboard as it slides,
-             frame by frame, instead of jumping once it is up -->
+             frame by frame, instead of jumping once it is up.
+             configChanges uiMode: switching light and dark, by the system
+             or in the app, crossfades the screen instead of recreating it -->
+
         <activity
             android:name=".MainActivity"
+            android:configChanges="uiMode"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

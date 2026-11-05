@@ -12,6 +12,10 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.draw.clip
+import io.github.victorbonnet.enclos.ui.ThemeChoice
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -97,6 +101,51 @@ private fun channel(agent: Agent): Pair<String, Boolean>? = when {
     else -> "request/reply" to false
 }
 
+// ---------- Theme ----------
+
+/** One tap from light to dark or back; from then on the app keeps the person's choice. */
+@Composable
+private fun ThemeToggle(model: AppModel) {
+    val dark = model.theme.value.dark(isSystemInDarkTheme())
+    IconButton(Glyphs.theme, if (dark) "Switch to light" else "Switch to dark", {
+        model.chooseTheme(if (dark) ThemeChoice.Light else ThemeChoice.Dark)
+    })
+}
+
+/** The theme in Status: following the system, or light or dark as chosen, and a way back to the system's. */
+@Composable
+private fun ThemeSetting(model: AppModel) {
+    val p = palette
+    val choice = model.theme.value
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Text("Theme", style = Type.name, color = p.text)
+        Gap(8.dp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ThemeChoice.entries.forEach { option ->
+                val on = option == choice
+                val edge by animateColorAsState(if (on) p.accent else p.lineStrong, Motion.change(), label = "edge")
+                val label by animateColorAsState(if (on) p.accent else p.textMuted, Motion.change(), label = "label")
+                Box(
+                    Modifier.height(44.dp).border(1.dp, edge, Shapes.control)
+                        .clip(Shapes.control)
+                        .selectable(selected = on, role = Role.RadioButton, onClick = { model.chooseTheme(option) })
+                        .padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.Center,
+                ) { Text(option.name, style = Type.label, color = label) }
+            }
+        }
+        Gap(8.dp)
+        Text(
+            when (choice) {
+                ThemeChoice.System -> "Follows the system's light or dark setting."
+                else -> "${choice.name} on this phone, whatever the system's setting."
+            },
+            style = Type.small,
+            color = p.textMuted,
+        )
+    }
+}
+
 // ---------- Inbox ----------
 
 /** Every conversation with every agent, on every host, newest first. */
@@ -106,7 +155,10 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
     val sorted = model.conversations.sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: Long.MAX_VALUE }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            AppBar { Spacer(Modifier.weight(1f)) }
+            AppBar {
+                Spacer(Modifier.weight(1f))
+                ThemeToggle(model)
+            }
             LargeTitle("Inbox")
             when {
                 model.paired.isEmpty() -> Empty(
@@ -210,6 +262,7 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, pair: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         AppBar {
             Spacer(Modifier.weight(1f))
+            ThemeToggle(model)
             IconButton(Glyphs.qr, "Pair a host", pair)
         }
         LargeTitle("Agents")
@@ -287,7 +340,10 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, pair: () -> Unit) {
 fun StatusScreen(model: AppModel, pair: () -> Unit) {
     val p = palette
     Column(Modifier.fillMaxSize()) {
-        AppBar { Spacer(Modifier.weight(1f)) }
+        AppBar {
+                Spacer(Modifier.weight(1f))
+                ThemeToggle(model)
+            }
         LargeTitle("Status")
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             Hairline()
@@ -306,6 +362,8 @@ fun StatusScreen(model: AppModel, pair: () -> Unit) {
                 }
                 Hairline()
             }
+            ThemeSetting(model)
+            Hairline()
             Column(Modifier.padding(horizontal = 16.dp)) {
                 TextLink("Pair a host →", pair)
                 Text("core ${coreVersion()}", style = Type.code, color = p.textFaint)

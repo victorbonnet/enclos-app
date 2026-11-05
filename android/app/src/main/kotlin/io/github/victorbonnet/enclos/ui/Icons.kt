@@ -47,4 +47,6 @@ object Glyphs {
     val compose = glyph("compose", strokes = listOf("M12 4H4v16h16v-8", "M10 14v-3l9-9 3 3-9 9z"))
     val check = glyph("check", stroke = 2.4f, strokes = listOf("M4 12l5 5L20 6"))
     val clock = glyph("clock", strokes = listOf(rect(4f, 4f, 16f, 16f), "M12 8v4h4"))
+    /** Light or dark: a square, half of it filled. An addition to the design's set. */
+    val theme = glyph("theme", strokes = listOf(rect(4f, 4f, 16f, 16f)), fills = listOf(rect(12f, 4f, 8f, 16f)))
 }

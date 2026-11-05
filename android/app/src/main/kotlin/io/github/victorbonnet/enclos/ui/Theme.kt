@@ -1,5 +1,9 @@
 package io.github.victorbonnet.enclos.ui
 
+import android.app.UiModeManager
+import android.content.Context
+import android.os.Build
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -120,10 +124,64 @@ val LocalPalette = staticCompositionLocalOf { LightPalette }
 val palette: Palette
     @Composable get() = LocalPalette.current
 
-/** The enclos theme: light or dark as the system is set, Material components tinted with the tokens. */
+/** Light or dark: the system's (the default) or the person's choice, kept on the device. */
+enum class ThemeChoice {
+    System, Light, Dark;
+
+    /** Whether this choice is dark, the system being [systemDark]. */
+    fun dark(systemDark: Boolean) = when (this) {
+        System -> systemDark
+        Light -> false
+        Dark -> true
+    }
+
+    companion object {
+        fun read(saved: String?): ThemeChoice = entries.firstOrNull { it.name == saved } ?: System
+    }
+}
+
+/**
+ * Tells Android the app's choice (Android 12 and later), which keeps it:
+ * the window the app opens in and the system bars then match it before
+ * the first frame is drawn. Earlier releases have the choice in the app only.
+ */
+fun applyTheme(context: Context, choice: ThemeChoice) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+    val mode = when (choice) {
+        ThemeChoice.System -> UiModeManager.MODE_NIGHT_AUTO
+        ThemeChoice.Light -> UiModeManager.MODE_NIGHT_NO
+        ThemeChoice.Dark -> UiModeManager.MODE_NIGHT_YES
+    }
+    context.getSystemService(UiModeManager::class.java).setApplicationNightMode(mode)
+}
+
+/** [target]'s colours, each moving to its new value when the theme changes: the theme crossfades. */
+@Composable
+private fun animated(target: Palette): Palette {
+    @Composable
+    fun Color.moving(label: String): Color = animateColorAsState(this, Motion.change(Motion.MEDIUM), label = label).value
+    return Palette(
+        bg = target.bg.moving("bg"),
+        surface = target.surface.moving("surface"),
+        text = target.text.moving("text"),
+        textMuted = target.textMuted.moving("textMuted"),
+        textFaint = target.textFaint.moving("textFaint"),
+        line = target.line.moving("line"),
+        lineStrong = target.lineStrong.moving("lineStrong"),
+        accent = target.accent.moving("accent"),
+        panelDeep = target.panelDeep.moving("panelDeep"),
+        panelText = target.panelText.moving("panelText"),
+        panelMuted = target.panelMuted.moving("panelMuted"),
+        lime = target.lime.moving("lime"),
+        buttonBg = target.buttonBg.moving("buttonBg"),
+        buttonText = target.buttonText.moving("buttonText"),
+    )
+}
+
+/** The enclos theme: light or dark, Material components tinted with the tokens. */
 @Composable
 fun EnclosTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val p = if (dark) DarkPalette else LightPalette
+    val p = animated(if (dark) DarkPalette else LightPalette)
     val scheme = (if (dark) darkColorScheme() else lightColorScheme()).copy(
         primary = p.buttonBg,
         onPrimary = p.buttonText,
