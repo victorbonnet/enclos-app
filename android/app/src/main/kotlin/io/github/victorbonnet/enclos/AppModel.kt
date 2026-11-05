@@ -551,13 +551,23 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Starts a conversation with [agent]; returns its id. */
+    /**
+     * Conversations started on this phone with no message sent yet: drafts,
+     * which the bridge learns of with their first message, so a conversation
+     * opened and left leaves nothing behind.
+     */
+    private val drafts = mutableSetOf<String>()
+
+    /** Starts a conversation with [agent], a draft until its first message; returns its id. */
     fun newConversation(agent: Agent): String {
         val id = UUID.randomUUID().toString()
         conversations.add(Conversation(agent.host, agent.name, id))
-        connections[agent.host]?.send(message("conversation.new", "conversation" to id, "agent" to agent.name))
+        drafts += id
         return id
     }
+
+    /** Whether the inbox lists [conversation]: once something was said in it. */
+    fun listed(conversation: Conversation) = !lines[conversation.id].isNullOrEmpty()
 
     /**
      * Names [conversation] (an empty [title] clears its name, and the agent
@@ -635,7 +645,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     fun send(conversation: Conversation, text: String) {
         said.remove(conversation.host)
-        val sent = connections[conversation.host]?.send(
+        val connection = connections[conversation.host]
+        // A draft becomes a conversation on the bridge with its first message.
+        if (conversation.id in drafts) {
+            val started = connection?.send(
+                message("conversation.new", "conversation" to conversation.id, "agent" to conversation.agent),
+            ) == true
+            if (!started) return
+            drafts -= conversation.id
+        }
+        val sent = connection?.send(
             message("message.send", "conversation" to conversation.id, "text" to text),
         ) == true
         if (sent) awaiting[conversation.id] = true
