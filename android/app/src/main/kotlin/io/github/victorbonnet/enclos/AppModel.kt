@@ -200,6 +200,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         applyTheme(getApplication(), choice)
     }
 
+    /** Whether the inbox groups conversations by agent: the person's choice, kept on this device. */
+    val grouped = mutableStateOf(settings.getBoolean("inbox.grouped", false))
+    /** The agents (`host/sandbox/agent`) whose group the inbox shows folded, while the app runs. */
+    val folded = mutableStateListOf<String>()
+
+    fun group(on: Boolean) {
+        grouped.value = on
+        settings.edit(commit = true) { putBoolean("inbox.grouped", on) }
+    }
+
     private fun ui(block: () -> Unit) = main.post(block)
 
     /** Whether [host] is connected and authenticated. */

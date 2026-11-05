@@ -48,6 +48,32 @@ fun search(
     }
 }
 
+/** An agent's conversations in the inbox, grouped: its address `host/sandbox/agent`, and what was found of them. */
+data class Group(val address: String, val found: List<Found>)
+
+/**
+ * [found] by agent: each agent once, where its first conversation was (so
+ * the agent with the newest conversation first), its conversations in the
+ * order they were.
+ */
+fun byAgent(found: List<Found>): List<Group> =
+    found.groupBy { "${it.conversation.host}/${it.conversation.agent}" }.map { (address, its) -> Group(address, its) }
+
+/**
+ * A short label for each agent address `host/sandbox/agent`: its name, or
+ * `sandbox/agent` when another agent has the same name, or the whole
+ * address when another host has the same sandbox and agent too.
+ */
+fun agentLabels(addresses: List<String>): Map<String, String> = addresses.associateWith { a ->
+    val name = a.substringAfterLast('/')
+    val inSandbox = a.substringAfter('/')
+    when {
+        addresses.count { it.substringAfterLast('/') == name } == 1 -> name
+        addresses.count { it.substringAfter('/') == inSandbox } == 1 -> inSandbox
+        else -> a
+    }
+}
+
 /** A message's words: the agent's without the marks of its markdown; a file alone, by what it is. */
 fun words(line: Line): String {
     val text = if (line.from == "agent") Markdown.plain(line.text) else line.text
