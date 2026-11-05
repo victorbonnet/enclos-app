@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window behind the Compose screens: the theme's bg, so the app
+         opens without a flash of the other theme -->
+    <style name="Theme.Enclos" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+    </style>
+</resources>

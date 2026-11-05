@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The design system's tokens the window and the icon need before Compose
+     draws; the screens take theirs from ui/Theme.kt. -->
+<resources>
+    <!-- Brand colour Forest: the app icon's ground -->
+    <color name="forest">#173C31</color>
+    <!-- bg, light theme -->
+    <color name="bg">#FAFAF8</color>
+</resources>

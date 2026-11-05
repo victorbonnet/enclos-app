@@ -1,0 +1,334 @@
+package io.github.victorbonnet.enclos.ui
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+/** A line of `line`: lists and bars are separated by hairlines, never shadows. */
+@Composable
+fun Hairline(modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth().height(1.dp).background(palette.line))
+}
+
+/** One of the design system's glyphs, tinted. */
+@Composable
+fun Glyph(icon: ImageVector, tint: Color, modifier: Modifier = Modifier, size: Dp = 24.dp) {
+    Icon(icon, contentDescription = null, tint = tint, modifier = modifier.size(size))
+}
+
+/** A 48dp tap target around a glyph. */
+@Composable
+fun IconButton(icon: ImageVector, label: String, onClick: () -> Unit, tint: Color = palette.text) {
+    Box(
+        Modifier.size(48.dp).clickable(onClickLabel = label, role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) { Glyph(icon, tint) }
+}
+
+/**
+ * The Home base mark's four open corners, stretched over the whole box:
+ * each arm a [arm] fraction of the side, drawn with a square end.
+ */
+@Composable
+fun Corners(color: Color, modifier: Modifier = Modifier, stroke: Dp = 2.dp, arm: Float = 0.3f) {
+    Canvas(modifier) {
+        val s = stroke.toPx()
+        val h = s / 2
+        val ax = size.width * arm
+        val ay = size.height * arm
+        val r = size.width - h
+        val b = size.height - h
+        val path = Path().apply {
+            moveTo(ax, h); lineTo(h, h); lineTo(h, ay)
+            moveTo(r - (ax - h), h); lineTo(r, h); lineTo(r, ay)
+            moveTo(h, b - (ay - h)); lineTo(h, b); lineTo(ax, b)
+            moveTo(r, b - (ay - h)); lineTo(r, b); lineTo(r - (ax - h), b)
+        }
+        drawPath(path, color, style = Stroke(width = s))
+    }
+}
+
+/**
+ * An agent: the first letter of its name inside the mark's corners, in
+ * `accent` while its host is connected, `line-strong` otherwise.
+ */
+@Composable
+fun AgentAvatar(name: String, live: Boolean, small: Boolean = false) {
+    val side = if (small) 32.dp else 44.dp
+    Box(Modifier.size(side), contentAlignment = Alignment.Center) {
+        Corners(if (live) palette.accent else palette.lineStrong, Modifier.size(side), stroke = if (small) 2.dp else 2.5.dp)
+        Text(
+            name.take(1).lowercase(),
+            style = Type.code.copy(fontSize = if (small) 12.sp else 15.sp, fontWeight = FontWeight.SemiBold),
+            color = palette.text,
+        )
+    }
+}
+
+/** An unread count: a pill in `accent`. */
+@Composable
+fun UnreadBadge(count: Int) {
+    Box(
+        Modifier.defaultMinSize(minWidth = 22.dp).height(22.dp).clip(Shapes.pill).background(palette.accent)
+            .padding(horizontal = 6.dp)
+            .semantics { contentDescription = "$count unread" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("$count", style = Type.code.copy(fontWeight = FontWeight.SemiBold), color = palette.bg)
+    }
+}
+
+/** What a runtime's channel can do, in its own words: `full channel` outlined in `accent`. */
+@Composable
+fun CapabilityChip(text: String, full: Boolean) {
+    val color = if (full) palette.accent else palette.textMuted
+    Box(
+        Modifier.height(22.dp).border(1.dp, if (full) palette.accent else palette.lineStrong).padding(horizontal = 7.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(text, style = Type.meta, color = color, maxLines = 1) }
+}
+
+/** A host's connection: a filled square while connected, an outline otherwise. */
+@Composable
+fun ConnectionDot(on: Boolean) {
+    val m = Modifier.size(8.dp)
+    Box(if (on) m.background(palette.accent) else m.border(1.5.dp, palette.textFaint))
+}
+
+/** A top app bar: 64dp, the screen's actions at its ends. */
+@Composable
+fun AppBar(content: @Composable RowScope.() -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().height(64.dp).padding(start = 4.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        content = content,
+    )
+}
+
+/** The screen title under the app bar (`title-large`). */
+@Composable
+fun LargeTitle(text: String) {
+    Text(text, style = Type.titleLarge, color = palette.text, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp))
+}
+
+/** The extended floating action button: the screen's one primary action. */
+@Composable
+fun Fab(text: String, icon: ImageVector, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier.height(56.dp).clip(Shapes.bubble).background(palette.buttonBg)
+            .clickable(role = Role.Button, onClick = onClick).padding(start = 16.dp, end = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Glyph(icon, palette.buttonText)
+        Text(text, style = Type.label, color = palette.buttonText)
+    }
+}
+
+/** The three destinations of the navigation bar. */
+enum class Tab(val label: String) { Inbox("Inbox"), Agents("Agents"), Status("Status") }
+
+/**
+ * The navigation bar: the active destination is enclosed, its icon inside
+ * the logo's four open corners in `accent`, in place of Material's pill.
+ */
+@Composable
+fun NavBar(selected: Tab, onSelect: (Tab) -> Unit) {
+    Column(Modifier.fillMaxWidth().background(palette.surface).windowInsetsPadding(WindowInsets.navigationBars)) {
+        Hairline()
+        Row(Modifier.fillMaxWidth().height(80.dp).padding(top = 12.dp)) {
+            Tab.entries.forEach { tab ->
+                val on = tab == selected
+                Column(
+                    Modifier.weight(1f).clickable(role = Role.Tab, onClick = { onSelect(tab) }),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Box(Modifier.width(56.dp).height(32.dp), contentAlignment = Alignment.Center) {
+                        if (on) Corners(palette.accent, Modifier.width(56.dp).height(32.dp), stroke = 2.5.dp, arm = 0.21f)
+                        val icon = when (tab) {
+                            Tab.Inbox -> Glyphs.inbox
+                            Tab.Agents -> Glyphs.agents
+                            Tab.Status -> Glyphs.status
+                        }
+                        Glyph(icon, if (on) palette.accent else palette.textMuted)
+                    }
+                    Text(tab.label, style = Type.label.copy(fontSize = 12.sp), color = if (on) palette.text else palette.textMuted)
+                }
+            }
+        }
+    }
+}
+
+/** A day between messages, in lowercase mono: `today`, `yesterday`, `mon 3 nov`. */
+@Composable
+fun DaySeparator(text: String) {
+    Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp), contentAlignment = Alignment.Center) {
+        Text(text, style = Type.meta, color = palette.textFaint)
+    }
+}
+
+/**
+ * A message: the person's on `button-bg` at the right, the agent's on
+ * `surface` with a hairline at the left; 16dp corners but the speaker's
+ * bottom one, which stays square, the logo's corner. A message the agent
+ * sent on its own (a cron job's, say) carries [header] above its text.
+ */
+@Composable
+fun Bubble(text: String, time: String, outgoing: Boolean, header: String? = null) {
+    val p = palette
+    Box(Modifier.fillMaxWidth(), contentAlignment = if (outgoing) Alignment.CenterEnd else Alignment.CenterStart) {
+        val shape = if (outgoing) Shapes.bubbleOut else Shapes.bubbleIn
+        val base = Modifier.widthIn(max = 300.dp).clip(shape)
+        val look = if (outgoing) base.background(p.buttonBg) else base.background(p.surface).border(BorderStroke(1.dp, p.line), shape)
+        Column(look.padding(horizontal = 12.dp, vertical = 9.dp)) {
+            if (header != null) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(bottom = 4.dp)) {
+                    Glyph(Glyphs.clock, p.accent, size = 14.dp)
+                    Text(header, style = Type.meta, color = p.accent)
+                }
+            }
+            Text(text, style = Type.message, color = if (outgoing) p.buttonText else p.text)
+            Text(
+                time,
+                style = Type.meta,
+                color = if (outgoing) p.buttonText.copy(alpha = 0.8f) else p.textFaint,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+/** The agent is writing: three squares in a bubble of the agent's shape. */
+@Composable
+fun TypingBubble(agent: String) {
+    Row(
+        Modifier.clip(Shapes.bubbleIn).background(palette.surface).border(BorderStroke(1.dp, palette.line), Shapes.bubbleIn)
+            .padding(12.dp).semantics { contentDescription = "$agent is typing" },
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) { repeat(3) { Box(Modifier.size(6.dp).background(palette.textFaint)) } }
+}
+
+/** A line about the conversation that is not a message, such as why the host is not connected. */
+@Composable
+fun SystemLine(text: String, modifier: Modifier = Modifier) {
+    Box(Modifier.fillMaxWidth().then(modifier), contentAlignment = Alignment.Center) {
+        Text(
+            text,
+            style = Type.meta.copy(fontSize = 11.5.sp, lineHeight = 17.sp),
+            color = palette.textMuted,
+            modifier = Modifier.widthIn(max = 320.dp).clip(Shapes.control)
+                .border(1.dp, palette.lineStrong, Shapes.control).padding(horizontal = 10.dp, vertical = 6.dp),
+        )
+    }
+}
+
+/** The message field and its send button. */
+@Composable
+fun Composer(value: String, onValue: (String) -> Unit, placeholder: String, onSend: () -> Unit) {
+    val p = palette
+    Column(Modifier.fillMaxWidth().background(p.bg)) {
+        Hairline()
+        Row(
+            Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValue,
+                textStyle = Type.message.copy(color = p.text),
+                cursorBrush = SolidColor(p.accent),
+                maxLines = 5,
+                modifier = Modifier.weight(1f),
+                decorationBox = { field ->
+                    Box(
+                        Modifier.defaultMinSize(minHeight = 44.dp).clip(Shapes.control).background(p.bg)
+                            .border(1.dp, p.lineStrong, Shapes.control).padding(horizontal = 12.dp, vertical = 10.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (value.isEmpty()) Text(placeholder, style = Type.message, color = p.textFaint)
+                        field()
+                    }
+                },
+            )
+            val enabled = value.isNotBlank()
+            Box(
+                Modifier.size(44.dp).clip(Shapes.control).background(if (enabled) p.buttonBg else p.surface)
+                    .clickable(enabled = enabled, onClickLabel = "Send", role = Role.Button, onClick = onSend)
+                    .semantics { contentDescription = "Send" },
+                contentAlignment = Alignment.Center,
+            ) { Glyph(Glyphs.send, if (enabled) p.buttonText else p.textFaint) }
+        }
+    }
+}
+
+/** A text link in `accent`, with its arrow. */
+@Composable
+fun TextLink(text: String, onClick: () -> Unit) {
+    Text(
+        text,
+        style = Type.label,
+        color = palette.accent,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.defaultMinSize(minHeight = 44.dp).clickable(role = Role.Button, onClick = onClick)
+            .padding(vertical = 12.dp),
+    )
+}
+
+/** A full-width primary button on `button-bg`. */
+@Composable
+fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(12.dp))
+            .background(if (enabled) palette.buttonBg else palette.surface)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Text(text, style = Type.label, color = if (enabled) palette.buttonText else palette.textFaint) }
+}
+
+/** Vertical space. */
+@Composable
+fun Gap(height: Dp) = Spacer(Modifier.height(height))

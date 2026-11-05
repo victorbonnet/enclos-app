@@ -1,12 +1,14 @@
 package io.github.victorbonnet.enclos
 
 import android.app.Application
+import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import io.github.victorbonnet.enclos.core.decodeBytes
 import io.github.victorbonnet.enclos.core.encodeBytes
@@ -16,18 +18,37 @@ import io.github.victorbonnet.enclos.core.parsePairLink
 import org.json.JSONObject
 import java.util.UUID
 
-/** An agent of a host, as its bridge lists it. */
-data class Agent(val host: String, val name: String, val runtime: String)
+/** An agent of a host, as its bridge lists it: `name` is `<sandbox>/<agent>`. */
+data class Agent(val host: String, val name: String, val runtime: String, val capabilities: List<String>) {
+    val sandbox: String get() = name.substringBefore('/')
+    val agent: String get() = name.substringAfter('/')
+    /** `host/sandbox/agent`, as the app writes an agent's address. */
+    val address: String get() = "$host/$name"
+}
 
-/** A message of a conversation. */
-data class Line(val seq: Long, val from: String, val text: String, val kind: String)
+/** A message of a conversation; [time] in seconds since the Unix epoch. */
+data class Line(val seq: Long, val from: String, val text: String, val kind: String, val time: Long)
 
-/** A conversation: its host, agent and id. */
+/** A conversation: its host, agent (`<sandbox>/<agent>`) and id. */
 data class Conversation(val host: String, val agent: String, val id: String)
+
+/** The pairing in progress: what the link said, and how far it went. */
+data class Pairing(
+    val host: String,
+    /** The bridge's address on the tailnet, without its scheme. */
+    val address: String,
+    /** When the link stops working, in seconds since the Unix epoch. */
+    val expires: Long,
+    val keyMade: Boolean = false,
+    val paired: Boolean = false,
+    /** Why it stopped before being paired: refused on the host, or the connection ended. */
+    val stopped: String? = null,
+)
 
 /** What the screens show, kept across the screens and updated on the main thread. */
 class AppModel(application: Application) : AndroidViewModel(application) {
     private val hosts = Hosts(application)
+    private val reads = application.getSharedPreferences("reads", Context.MODE_PRIVATE)
     private val main = Handler(Looper.getMainLooper())
     /** By host: its connection while it is open or opening, none once it ended. */
     private val connections = mutableMapOf<String, BridgeConnection>()
@@ -39,25 +60,54 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val paired = mutableStateListOf<Host>().apply { addAll(hosts.all()) }
     /** By host: connected, the reason it is not, or connecting. */
     val status = mutableStateMapOf<String, String>()
+    /** By host: the last error its bridge sent, such as an agent it could not reach. */
+    val said = mutableStateMapOf<String, String>()
     val agents = mutableStateListOf<Agent>()
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
-    val pairing = mutableStateOf<String?>(null)
+    /** By conversation: whether the agent is writing. */
+    val typing = mutableStateMapOf<String, Boolean>()
+    /** By conversation: the last message read on this device, kept across launches. */
+    private val lastRead = mutableStateMapOf<String, Long>().apply {
+        reads.all.forEach { (id, seq) -> if (seq is Long) put(id, seq) }
+    }
+    val pairing = mutableStateOf<Pairing?>(null)
+    /** Why the last link scanned or typed is not a pairing link. */
+    val pairLinkError = mutableStateOf<String?>(null)
 
     private fun ui(block: () -> Unit) = main.post(block)
+
+    /** Whether [host] is connected and authenticated. */
+    fun connected(host: String) = status[host]?.startsWith("connected") == true
+
+    /** The agent's messages in [conversation] not read on this device yet. */
+    fun unread(conversation: String): Int {
+        val read = lastRead[conversation] ?: 0
+        return lines[conversation].orEmpty().count { it.from == "agent" && it.seq > read }
+    }
+
+    /** Marks every message of [conversation] read. */
+    fun markRead(conversation: String) {
+        val last = lines[conversation]?.lastOrNull()?.seq ?: return
+        if ((lastRead[conversation] ?: 0) >= last) return
+        lastRead[conversation] = last
+        reads.edit { putLong(conversation, last) }
+    }
 
     /** Pairs with the host whose link was scanned or typed. */
     fun pair(link: String) {
         val parsed = try {
             parsePairLink(link)
         } catch (e: Exception) {
-            pairing.value = "Not an enclos pairing link: ${e.message}"
+            pairLinkError.value = "Not an enclos pairing link: ${e.message}"
             return
         }
-        pairing.value = "Pairing with ${parsed.host}… confirm it in the host's terminal."
+        pairLinkError.value = null
+        pairing.value = Pairing(parsed.host, parsed.url.removePrefix("https://"), parsed.expires.toLong())
         val noise = generateNoiseKeypair()
         val alias = "enclos-device-${parsed.host}-${UUID.randomUUID()}"
         Keys.newDeviceKey(alias)
+        pairing.value = pairing.value?.copy(keyMade = true)
         lateinit var connection: BridgeConnection
         connection = BridgeConnection(
             url = parsed.url,
@@ -87,21 +137,32 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                         ui {
                             paired.removeAll { it.name == host.name }
                             paired.add(host)
-                            pairing.value = "Paired with ${host.name}."
+                            pairing.value = pairing.value?.copy(paired = true)
                         }
                         connection.close()
                         ui { connect(host) }
                     }
                     "pair.refused" -> {
                         Keys.deleteDeviceKey(alias)
-                        ui { pairing.value = "Refused: ${m.optString("reason")}" }
+                        ui { pairing.value = pairing.value?.copy(stopped = "Refused on ${parsed.host}: ${m.optString("reason")}") }
                         connection.close()
                     }
                 }
             },
-            onClosed = { why -> ui { if (pairing.value?.startsWith("Pairing") == true) pairing.value = "Not paired: $why" } },
+            onClosed = { why ->
+                ui {
+                    val now = pairing.value
+                    if (now != null && !now.paired && now.stopped == null) pairing.value = now.copy(stopped = "Not paired: $why")
+                }
+            },
         )
         connection.open()
+    }
+
+    /** Forgets the pairing shown, to scan another code. */
+    fun clearPairing() {
+        pairing.value = null
+        pairLinkError.value = null
     }
 
     /**
@@ -140,6 +201,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
         status[host.name] = why
+        typing.keys.filter { id -> conversations.any { it.id == id && it.host == host.name } }.forEach { typing.remove(it) }
         if (!foreground) return
         val n = failures.getOrDefault(host.name, 0)
         failures[host.name] = n + 1
@@ -175,7 +237,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val list = m.getJSONArray("agents")
                 for (i in 0 until list.length()) {
                     val a = list.getJSONObject(i)
-                    agents.add(Agent(host.name, a.getString("agent"), a.optString("runtime")))
+                    val capabilities = a.optJSONArray("capabilities")
+                    agents.add(
+                        Agent(
+                            host.name,
+                            a.getString("agent"),
+                            a.optString("runtime"),
+                            (0 until (capabilities?.length() ?: 0)).map { capabilities!!.getString(it) },
+                        ),
+                    )
                 }
             }
             "message" -> {
@@ -183,11 +253,24 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 if (conversations.none { it.id == id }) {
                     conversations.add(Conversation(host.name, m.getString("agent"), id))
                 }
-                val line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"))
+                val line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"))
+                if (line.from == "agent") {
+                    typing.remove(id)
+                    // The bridge learns what an agent's channel can do once it
+                    // reached it, which an agent's message shows: ask again.
+                    val agent = m.getString("agent")
+                    if (agents.any { it.host == host.name && it.name == agent && it.capabilities.isEmpty() }) {
+                        connections[host.name]?.send(message("agents"))
+                    }
+                }
                 val now = lines[id].orEmpty()
                 if (now.none { it.seq == line.seq }) lines[id] = (now + line).sortedBy { it.seq }
             }
-            "error" -> status[host.name] = "the bridge said: ${m.optString("message")}"
+            "typing" -> {
+                val id = m.getString("conversation")
+                if (m.optBoolean("on")) typing[id] = true else typing.remove(id)
+            }
+            "error" -> said[host.name] = m.optString("message")
         }
     }
 
@@ -200,6 +283,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun send(conversation: Conversation, text: String) {
+        said.remove(conversation.host)
         connections[conversation.host]?.send(
             message("message.send", "conversation" to conversation.id, "text" to text),
         )

@@ -8,8 +8,10 @@
     <!-- No backup: the app will hold device keys and conversations -->
     <application
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="enclos"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/Theme.Enclos">
         <activity
             android:name=".MainActivity"
             android:exported="true">
