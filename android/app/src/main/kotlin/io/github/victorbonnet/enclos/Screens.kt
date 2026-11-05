@@ -862,7 +862,7 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                                     Modifier.fillMaxWidth().border(1.dp, p.lineStrong, Shapes.control).padding(12.dp)
                                         .semantics { contentDescription = "Pairing link" },
                                 ) {
-                                    if (link.isEmpty()) Text("enclos://pair?…", style = Type.code.copy(fontSize = 13.sp), color = p.textFaint)
+                                    if (link.isEmpty()) Text("https://…/pair#… or enclos://pair?…", style = Type.code.copy(fontSize = 13.sp), color = p.textFaint)
                                     field()
                                 }
                             },
