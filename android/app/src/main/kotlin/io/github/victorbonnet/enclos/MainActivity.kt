@@ -1,7 +1,9 @@
 package io.github.victorbonnet.enclos
 
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
@@ -20,6 +22,8 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -42,6 +46,7 @@ import io.github.victorbonnet.enclos.ui.EnclosTheme
 import io.github.victorbonnet.enclos.ui.Motion
 import io.github.victorbonnet.enclos.ui.NavBar
 import io.github.victorbonnet.enclos.ui.Tab
+import io.github.victorbonnet.enclos.ui.applyTheme
 import io.github.victorbonnet.enclos.ui.palette
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -83,8 +88,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent { EnclosTheme { Screens(model) } }
+        applyTheme(this, model.theme.value)
+        setContent {
+            // The system's light or dark until the person chooses; then theirs.
+            val dark = model.theme.value.dark(isSystemInDarkTheme())
+            // The status and navigation bars' icons, readable on the theme shown.
+            LaunchedEffect(dark) {
+                val bars = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark }
+                enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
+            }
+            EnclosTheme(dark) { Screens(model) }
+        }
     }
 }
 
