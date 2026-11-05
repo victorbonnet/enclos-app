@@ -23,6 +23,27 @@ android {
         versionName = "0.1.1"
     }
 
+    // Debug builds, on a laptop and in CI, are signed with the project's one
+    // debug key, kept out of git (docs/adr/0004), so each installs over the
+    // last: the keystore at ENCLOS_DEBUG_KEYSTORE, else
+    // ~/.android/enclos-debug.keystore. Without either, the machine's own
+    // debug key, which no other build shares.
+    signingConfigs {
+        getByName("debug") {
+            val named = System.getenv("ENCLOS_DEBUG_KEYSTORE")
+            val shared = file(named ?: "${System.getProperty("user.home")}/.android/enclos-debug.keystore")
+            if (shared.isFile) {
+                storeFile = shared
+                // Android's debug keystore defaults: the file is what is kept out of git.
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            } else if (named != null) {
+                throw GradleException("ENCLOS_DEBUG_KEYSTORE is set, but $shared is not a file")
+            }
+        }
+    }
+
     buildFeatures {
         compose = true
     }
