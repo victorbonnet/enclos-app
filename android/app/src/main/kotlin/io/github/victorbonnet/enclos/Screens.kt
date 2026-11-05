@@ -55,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -95,6 +96,7 @@ import io.github.victorbonnet.enclos.ui.TextLink
 import io.github.victorbonnet.enclos.ui.Type
 import io.github.victorbonnet.enclos.ui.Motion
 import io.github.victorbonnet.enclos.ui.UnreadBadge
+import io.github.victorbonnet.enclos.ui.ToolSteps
 import io.github.victorbonnet.enclos.ui.WorkingBubble
 import io.github.victorbonnet.enclos.ui.palette
 import kotlinx.coroutines.delay
@@ -489,6 +491,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         if (list.firstVisibleItemIndex <= 1) list.animateScrollToItem(0)
     }
     var renaming by remember { mutableStateOf(false) }
+    // Which answers' steps are open.
+    val opened = remember { mutableStateMapOf<Long, Boolean>() }
     if (renaming) {
         RenameDialog(conversation.title, onDismiss = { renaming = false }) {
             model.rename(conversation, it)
@@ -531,6 +535,9 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             model.said[conversation.host]?.let { item(key = "said") { Arriving { SystemLine("The bridge said: $it") } } }
             if (!live) item(key = "status") { Arriving { SystemLine(model.status[conversation.host] ?: "not connected") } }
             if (working) item(key = "working") { Arriving { WorkingBubble(agent) } }
+            // The tools it runs now, above the working bubble.
+            val running = model.steps[id].orEmpty()
+            if (running.isNotEmpty()) item(key = "steps-live") { Arriving { ToolSteps(running, live = true, expanded = true) {} } }
             for (i in lines.indices.reversed()) {
                 val line = lines[i]
                 item(key = line.seq) {
@@ -541,6 +548,16 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             outgoing = line.from != "agent",
                             header = if (line.kind == "notify") ON_ITS_OWN else null,
                         )
+                    }
+                }
+                // The steps that led to an answer, folded above it.
+                model.stepsOf[line.seq]?.let { done ->
+                    item(key = "steps-${line.seq}") {
+                        Arriving {
+                            ToolSteps(done, live = false, expanded = opened[line.seq] == true) {
+                                opened[line.seq] = opened[line.seq] != true
+                            }
+                        }
                     }
                 }
                 val day = Times.day(line.time)
