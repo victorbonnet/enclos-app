@@ -1,15 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The Home base mark, copied from enclos's assets/enclos-icon-dark.svg
-     (64 x 64), centred on the adaptive icon's 108 x 108 canvas: it spans
-     29.5 to 78.5, inside the 66dp safe zone. -->
+     (64 x 64), at three quarters and centred on the adaptive icon's
+     108 x 108 canvas: 30 + 0.75 x (7.5 to 56.5) spans 35.6 to 72.4, its
+     corners about 26dp from the centre. A round mask (radius 36) leaves
+     them room; any mask keeps them inside the 66dp safe zone. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:translateX="22"
-        android:translateY="22">
+        android:scaleX="0.75"
+        android:scaleY="0.75"
+        android:translateX="30"
+        android:translateY="30">
         <path
             android:pathData="M24,10H10v14m30,-14h14v14M10,40v14h14m30,-14v14H40"
             android:strokeWidth="5"
