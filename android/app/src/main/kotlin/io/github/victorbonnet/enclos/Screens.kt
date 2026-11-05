@@ -12,7 +12,6 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyItemScope
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.ui.draw.clip
 import io.github.victorbonnet.enclos.ui.ThemeChoice
@@ -103,16 +102,11 @@ private fun channel(agent: Agent): Pair<String, Boolean>? = when {
 
 // ---------- Theme ----------
 
-/** One tap from light to dark or back; from then on the app keeps the person's choice. */
-@Composable
-private fun ThemeToggle(model: AppModel) {
-    val dark = model.theme.value.dark(isSystemInDarkTheme())
-    IconButton(Glyphs.theme, if (dark) "Switch to light" else "Switch to dark", {
-        model.chooseTheme(if (dark) ThemeChoice.Light else ThemeChoice.Dark)
-    })
-}
-
-/** The theme in Status: following the system, or light or dark as chosen, and a way back to the system's. */
+/**
+ * The theme, in Status: the system's light or dark (the default), or the
+ * one the person chose, which the app then keeps; and the way back to the
+ * system's.
+ */
 @Composable
 private fun ThemeSetting(model: AppModel) {
     val p = palette
@@ -155,10 +149,6 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
     val sorted = model.conversations.sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: Long.MAX_VALUE }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            AppBar {
-                Spacer(Modifier.weight(1f))
-                ThemeToggle(model)
-            }
             LargeTitle("Inbox")
             when {
                 model.paired.isEmpty() -> Empty(
@@ -260,12 +250,8 @@ private fun ConversationRow(model: AppModel, c: Conversation, onClick: () -> Uni
 fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, pair: () -> Unit) {
     val p = palette
     Column(Modifier.fillMaxSize()) {
-        AppBar {
-            Spacer(Modifier.weight(1f))
-            ThemeToggle(model)
-            IconButton(Glyphs.qr, "Pair a host", pair)
-        }
-        LargeTitle("Agents")
+        // Pairing another host sits on the title's line: no bar above it.
+        LargeTitle("Agents") { IconButton(Glyphs.qr, "Pair a host", pair) }
         if (model.paired.isEmpty()) {
             Empty("No host yet.", "On a host, run enclos app serve, then enclos app pair, and scan its code.", "Pair a host →", pair)
             return
@@ -340,10 +326,6 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, pair: () -> Unit) {
 fun StatusScreen(model: AppModel, pair: () -> Unit) {
     val p = palette
     Column(Modifier.fillMaxSize()) {
-        AppBar {
-                Spacer(Modifier.weight(1f))
-                ThemeToggle(model)
-            }
         LargeTitle("Status")
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             Hairline()

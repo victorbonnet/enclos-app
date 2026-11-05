@@ -85,7 +85,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     fun chooseTheme(choice: ThemeChoice) {
         theme.value = choice
-        settings.edit { if (choice == ThemeChoice.System) remove("theme") else putString("theme", choice.name) }
+        // Written at once (commit), not later: a choice must survive the app being stopped right after.
+        settings.edit(commit = true) { if (choice == ThemeChoice.System) remove("theme") else putString("theme", choice.name) }
         applyTheme(getApplication(), choice)
     }
 
