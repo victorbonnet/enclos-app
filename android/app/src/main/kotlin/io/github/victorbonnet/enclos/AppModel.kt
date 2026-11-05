@@ -107,7 +107,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun connect(host: Host) {
         connections.remove(host.name)?.close()
         status[host.name] = "connecting"
-        val connection = BridgeConnection(
+        lateinit var connection: BridgeConnection
+        connection = BridgeConnection(
             url = host.url,
             bridgeKey = host.bridgeKey,
             noisePrivate = Keys.unwrap(host.noiseKeyWrapped),
@@ -119,7 +120,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 )
             },
             onMessage = { m -> ui { received(host, m) } },
-            onClosed = { why -> ui { status[host.name] = why } },
+            // A connection [connect] replaced says nothing of the new one.
+            onClosed = { why -> ui { if (connections[host.name] === connection) status[host.name] = why } },
         )
         connections[host.name] = connection
         connection.open()
