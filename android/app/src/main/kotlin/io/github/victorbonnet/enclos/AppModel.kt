@@ -19,6 +19,7 @@ import io.github.victorbonnet.enclos.ui.ThemeChoice
 import io.github.victorbonnet.enclos.ui.applyTheme
 import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.Executors
 
 /** An agent of a host, as its bridge lists it: `name` is `<sandbox>/<agent>`. */
 data class Agent(val host: String, val name: String, val runtime: String, val capabilities: List<String>) {
@@ -49,6 +50,8 @@ data class Line(
     val kind: String,
     val time: Long,
     val attachments: List<Attachment> = emptyList(),
+    /** The tools the agent ran for this answer, which the bridge does not keep: this phone does. */
+    val steps: List<Step> = emptyList(),
 )
 
 /** A file of a message, fetched from the bridge when it is shown. */
@@ -91,6 +94,10 @@ data class Pairing(
 /** What the screens show, kept across the screens and updated on the main thread. */
 class AppModel(application: Application) : AndroidViewModel(application) {
     private val hosts = Hosts(application)
+    /** What the bridges sent, kept on the phone: shown at once when the app starts. */
+    private val store = Store(application)
+    /** Writes to [store], in order, off the main thread. */
+    private val saving = Executors.newSingleThreadExecutor()
     private val reads = application.getSharedPreferences("reads", Context.MODE_PRIVATE)
     private val main = Handler(Looper.getMainLooper())
     /** By host: its connection while it is open or opening, none once it ended. */
@@ -108,17 +115,29 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val agents = mutableStateListOf<Agent>()
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
+
+    init {
+        // Read before the first frame, so the app never opens empty and fills in.
+        val saved = store.load()
+        agents.addAll(saved.agents)
+        conversations.addAll(saved.conversations)
+        lines.putAll(saved.lines)
+    }
+
+    /** Keeps something on the phone; a failed write leaves it to the next sync from the bridge. */
+    private fun save(write: Store.() -> Unit) = saving.execute {
+        try {
+            store.write()
+        } catch (e: android.database.SQLException) {
+            android.util.Log.w("enclos", "not kept on the phone", e)
+        }
+    }
     /** By conversation: whether the agent said it is writing (`typing`). */
     val typing = mutableStateMapOf<String, Boolean>()
     /** By conversation: a message was sent and the agent has not answered yet. */
     private val awaiting = mutableStateMapOf<String, Boolean>()
     /** By conversation: the tools the agent runs now, live from the bridge. */
     val steps = mutableStateMapOf<String, List<Step>>()
-    /**
-     * By the `seq` of the agent's message they led to: the steps of that
-     * answer. In memory only: the bridge does not keep steps.
-     */
-    val stepsOf = mutableStateMapOf<Long, List<Step>>()
     /** By conversation: the last message read on this device, kept across launches. */
     private val lastRead = mutableStateMapOf<String, Long>().apply {
         reads.all.forEach { (id, seq) -> if (seq is Long) put(id, seq) }
@@ -206,6 +225,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                         )
                         hosts.add(host)
                         ui {
+                            // Paired again, as another device: what the host sent before is forgotten.
+                            forget(host.name)
                             paired.removeAll { it.name == host.name }
                             paired.add(host)
                             pairing.value = pairing.value?.copy(paired = true)
@@ -238,7 +259,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Opens the connection to [host]: `auth`, then its agents and every
-     * message since the start. [foreground] opens it, and [ended] again.
+     * message after the newest kept. [foreground] opens it, and [ended] again.
      */
     fun connect(host: Host) {
         connections.remove(host.name)?.close()
@@ -310,7 +331,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 failures.remove(host.name)
                 status[host.name] = "connected as ${m.optString("person")}"
                 connections[host.name]?.send(message("agents"))
-                connections[host.name]?.send(message("sync", "since" to 0))
+                // What is on the phone is kept: only what is newer comes.
+                connections[host.name]?.send(message("sync", "since" to since(host.name)))
             }
             "agents.list" -> {
                 agents.removeAll { it.host == host.name }
@@ -327,6 +349,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                         ),
                     )
                 }
+                val listed = agents.filter { it.host == host.name }
+                save { agents(host.name, listed) }
             }
             // A conversation and its name: at each sync (so an empty one is
             // known too), when one starts, and when its name changes.
@@ -340,24 +364,29 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     m.optString("titled_by").ifBlank { null },
                 )
                 val at = conversations.indexOfFirst { it.id == id }
-                if (at < 0) conversations.add(known) else if (conversations[at] != known) conversations[at] = known
+                if (at < 0 || conversations[at] != known) {
+                    if (at < 0) conversations.add(known) else conversations[at] = known
+                    save { conversation(known) }
+                }
             }
             "message" -> {
                 val id = m.getString("conversation")
                 if (conversations.none { it.id == id }) {
-                    conversations.add(Conversation(host.name, m.getString("agent"), id))
+                    val started = Conversation(host.name, m.getString("agent"), id)
+                    conversations.add(started)
+                    save { conversation(started) }
                 }
                 val files = m.optJSONArray("attachments")
                 val attached = (0 until (files?.length() ?: 0)).map {
                     val a = files!!.getJSONObject(it)
                     Attachment(a.getString("id"), a.optString("mime"), a.optString("name"), a.optLong("size"))
                 }
-                val line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached)
+                var line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached)
                 if (line.from == "agent") {
                     typing.remove(id)
                     awaiting.remove(id)
                     // The steps that led to this message go with it.
-                    steps.remove(id)?.takeIf { it.isNotEmpty() }?.let { stepsOf[line.seq] = it }
+                    steps.remove(id)?.let { line = line.copy(steps = it) }
                     // The bridge learns what an agent's channel can do once it
                     // reached it, which an agent's message shows: ask again.
                     val agent = m.getString("agent")
@@ -366,7 +395,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 val now = lines[id].orEmpty()
-                if (now.none { it.seq == line.seq }) lines[id] = (now + line).sortedBy { it.seq }
+                if (now.none { it.seq == line.seq }) {
+                    lines[id] = (now + line).sortedBy { it.seq }
+                    val kept = line
+                    save { message(host.name, id, kept) }
+                }
             }
             "typing" -> {
                 val id = m.getString("conversation")
@@ -508,7 +541,24 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         reopen(name)
     }
 
+    /** The newest message from [host] on the phone, which `sync` starts after. */
+    private fun since(host: String): Long {
+        val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
+        return ids.maxOfOrNull { lines[it]?.lastOrNull()?.seq ?: 0 } ?: 0
+    }
+
+    /** Forgets what [host] sent, on screen and on the phone. */
+    private fun forget(host: String) {
+        val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
+        conversations.removeAll { it.host == host }
+        ids.forEach { lines.remove(it) }
+        agents.removeAll { it.host == host }
+        save { forget(host) }
+    }
+
     override fun onCleared() {
         connections.values.forEach { it.close() }
+        // What is queued is still written.
+        saving.shutdown()
     }
 }

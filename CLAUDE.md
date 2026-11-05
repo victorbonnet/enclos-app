@@ -39,7 +39,7 @@ Use the terms of enclos's [`GLOSSARY.md`](https://github.com/victorbonnet/enclos
 
 ## Security
 
-The app holds device keys and, later, conversations. Never describe security behavior as tested or enforced until code and tests show it. Keys stay in the Android Keystore; nothing secret goes into logs, backups or notifications in clear text.
+The app holds device keys and conversations. Never describe security behavior as tested or enforced until code and tests show it. Keys stay in the Android Keystore; nothing secret goes into logs, backups or notifications in clear text.
 
 ## Pull requests
 

@@ -1,0 +1,180 @@
+package io.github.victorbonnet.enclos
+
+import android.content.ContentValues
+import android.content.Context
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteOpenHelper
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** What the phone kept of each host: its agents, conversations and their messages. */
+class Saved(
+    val agents: List<Agent>,
+    val conversations: List<Conversation>,
+    /** By conversation, in `seq` order. */
+    val lines: Map<String, List<Line>>,
+)
+
+/**
+ * The phone's copy of what each host's bridge sent: its agents, the
+ * conversations, their messages and the tool steps that led to an answer,
+ * in the app's private database (never backed up, ADR 0003). The bridge
+ * stays the source: the copy is shown at once when the app starts, and a
+ * `sync` brings what is newer than its last message.
+ */
+class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", null, 1) {
+    override fun onCreate(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE conversations (id TEXT PRIMARY KEY, host TEXT NOT NULL, agent TEXT NOT NULL, title TEXT, titled_by TEXT)",
+        )
+        // `seq` is the bridge's, increasing per host.
+        db.execSQL(
+            "CREATE TABLE messages (host TEXT NOT NULL, seq INTEGER NOT NULL, conversation TEXT NOT NULL, sender TEXT NOT NULL, " +
+                "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, PRIMARY KEY (host, seq))",
+        )
+        db.execSQL("CREATE INDEX messages_of ON messages (conversation, seq)")
+        db.execSQL(
+            "CREATE TABLE agents (host TEXT NOT NULL, name TEXT NOT NULL, runtime TEXT NOT NULL, capabilities TEXT NOT NULL, PRIMARY KEY (host, name))",
+        )
+    }
+
+    // The first version: a later one migrates here, step by step, never by dropping what was kept.
+    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) = Unit
+
+    /** Everything kept, as the app shows it. */
+    fun load(): Saved {
+        val db = readableDatabase
+        val agents = db.rawQuery("SELECT host, name, runtime, capabilities FROM agents ORDER BY rowid", null).use { c ->
+            generateSequence { if (c.moveToNext()) c else null }.map {
+                Agent(it.getString(0), it.getString(1), it.getString(2), strings(it.getString(3)))
+            }.toList()
+        }
+        val conversations = db.rawQuery("SELECT host, agent, id, title, titled_by FROM conversations ORDER BY rowid", null).use { c ->
+            generateSequence { if (c.moveToNext()) c else null }.map {
+                Conversation(it.getString(0), it.getString(1), it.getString(2), it.getStringOrNull(3), it.getStringOrNull(4))
+            }.toList()
+        }
+        val lines = mutableMapOf<String, MutableList<Line>>()
+        db.rawQuery(
+            "SELECT conversation, seq, sender, text, kind, time, attachments, steps FROM messages ORDER BY conversation, seq",
+            null,
+        ).use { c ->
+            while (c.moveToNext()) {
+                lines.getOrPut(c.getString(0)) { mutableListOf() } += Line(
+                    seq = c.getLong(1),
+                    from = c.getString(2),
+                    text = c.getString(3),
+                    kind = c.getString(4),
+                    time = c.getLong(5),
+                    attachments = attachments(c.getStringOrNull(6)),
+                    steps = steps(c.getStringOrNull(7)),
+                )
+            }
+        }
+        return Saved(agents, conversations, lines)
+    }
+
+    /** A conversation the bridge sent, new or renamed. */
+    fun conversation(c: Conversation) {
+        val values = ContentValues().apply {
+            put("host", c.host)
+            put("agent", c.agent)
+            put("title", c.title)
+            put("titled_by", c.titledBy)
+        }
+        // An update, else an insert: Android 9 and 10's SQLite has no upsert.
+        val db = writableDatabase
+        if (db.update("conversations", values, "id = ?", arrayOf(c.id)) == 0) {
+            db.insert("conversations", null, values.apply { put("id", c.id) })
+        }
+    }
+
+    /** A message of [conversation] on [host]; one already kept stays as it was. */
+    fun message(host: String, conversation: String, line: Line) {
+        val values = ContentValues().apply {
+            put("host", host)
+            put("seq", line.seq)
+            put("conversation", conversation)
+            put("sender", line.from)
+            put("text", line.text)
+            put("kind", line.kind)
+            put("time", line.time)
+            if (line.attachments.isNotEmpty()) put("attachments", attachments(line.attachments))
+            if (line.steps.isNotEmpty()) put("steps", steps(line.steps))
+        }
+        writableDatabase.insertWithOnConflict("messages", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+    }
+
+    /** [host]'s agents, as its bridge listed them last. */
+    fun agents(host: String, agents: List<Agent>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("agents", "host = ?", arrayOf(host))
+            agents.forEach { a ->
+                db.insert(
+                    "agents",
+                    null,
+                    ContentValues().apply {
+                        put("host", host)
+                        put("name", a.name)
+                        put("runtime", a.runtime)
+                        put("capabilities", JSONArray(a.capabilities).toString())
+                    },
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** Forgets all that [host] sent: it was paired again, as another device. */
+    fun forget(host: String) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            listOf("messages", "conversations", "agents").forEach { db.delete(it, "host = ?", arrayOf(host)) }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    private fun android.database.Cursor.getStringOrNull(i: Int) = if (isNull(i)) null else getString(i)
+
+    private fun strings(json: String) = JSONArray(json).let { a -> (0 until a.length()).map { a.getString(it) } }
+
+    private fun attachments(list: List<Attachment>) = JSONArray(
+        list.map { JSONObject().put("id", it.id).put("mime", it.mime).put("name", it.name).put("size", it.size) },
+    ).toString()
+
+    private fun attachments(json: String?): List<Attachment> {
+        val a = JSONArray(json ?: return emptyList())
+        return (0 until a.length()).map { a.getJSONObject(it) }.map {
+            Attachment(it.getString("id"), it.getString("mime"), it.getString("name"), it.getLong("size"))
+        }
+    }
+
+    // Kept once the answer came: every step is done.
+    private fun steps(list: List<Step>) = JSONArray(
+        list.map { s ->
+            JSONObject().put("call", s.call).put("name", s.name).put("label", s.label).put("ok", s.ok)
+                .apply { s.durationMs?.let { put("duration_ms", it) } }
+        },
+    ).toString()
+
+    private fun steps(json: String?): List<Step> {
+        val a = JSONArray(json ?: return emptyList())
+        return (0 until a.length()).map { a.getJSONObject(it) }.map {
+            Step(
+                call = it.getString("call"),
+                name = it.getString("name"),
+                label = it.optString("label").ifBlank { null },
+                done = true,
+                ok = it.optBoolean("ok", true),
+                durationMs = if (it.has("duration_ms")) it.getLong("duration_ms") else null,
+            )
+        }
+    }
+}

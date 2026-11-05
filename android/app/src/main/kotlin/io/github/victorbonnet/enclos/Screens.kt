@@ -555,7 +555,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                     }
                 }
                 // The steps that led to an answer, folded above it.
-                model.stepsOf[line.seq]?.let { done ->
+                line.steps.takeIf { it.isNotEmpty() }?.let { done ->
                     item(key = "steps-${line.seq}") {
                         Arriving {
                             ToolSteps(done, live = false, expanded = opened[line.seq] == true) {
