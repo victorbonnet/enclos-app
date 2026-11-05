@@ -16,7 +16,7 @@ Words are enclos's ([GLOSSARY.md](https://github.com/victorbonnet/enclos/blob/ma
 ## 2. Pairing
 
 1. On the host, `enclos app pair` shows a QR code and a link (`enclos://pair?…`) that works once, for 5 minutes, while `enclos app serve` runs.
-2. The person scans the code (or types the link). The app reads the host's name, its bridge's address and the link's expiry, and shows them with a countdown.
+2. The person scans the code, types the link, or taps it wherever it is (a chat, a note, a browser): the app opens on any `enclos://pair` link. The app reads the host's name, its bridge's address and the link's expiry, and shows them with a countdown. A tapped link pairs only once the person confirms ("Pair with <host>?", Pair or Not now), since any page or message can hold one; a link opened while a pairing goes on is ignored, and so is one opened before (the system hands it again when it restarts the app, after an update): such a link can still be typed.
 3. The app makes the device's signing key in the platform's key store (StrongBox where the phone has it) and a Noise key pair, wrapped by the key store.
 4. It connects, sends a pairing request (its model name, its public key, a proof from the link's code), and shows the terminal's question: `<model> (tailscale login: <your login>) wants to pair. Accept? [y/N]`. The person answers in the terminal; the app shows Paired or why not (refused, or the connection ended).
 
@@ -133,6 +133,7 @@ Light or dark: the system's setting by default. Once the person chooses (System 
 | Back | arrow; predictive back gesture follows the finger | chevron with the previous title; the interactive swipe from the edge |
 | Pairing | full screen | sheet with Cancel |
 | QR scanning | ZXing's scanner activity | the system camera (VisionKit's data scanner) |
+| Pairing links | `VIEW` intent filter on `enclos://pair`, `BROWSABLE`; `singleTask`, the link through `onNewIntent` while running | `enclos` URL scheme (`CFBundleURLTypes`); `onOpenURL` |
 | Keys | Android Keystore, StrongBox where available | Keychain and Secure Enclave, `ThisDeviceOnly` |
 | Nothing leaves the phone | `allowBackup="false"`, data extraction rules exclude every domain from cloud backup and device transfer | Keychain items `ThisDeviceOnly`; files excluded from backup |
 | Markdown | commonmark-java (+ GFM tables, strikethrough, autolink), drawn in Compose | Apple's swift-markdown (cmark-gfm), drawn in SwiftUI |

@@ -76,6 +76,7 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.google.zxing.client.android.Intents
 import io.github.victorbonnet.enclos.core.coreVersion
+import io.github.victorbonnet.enclos.core.parsePairLink
 import io.github.victorbonnet.enclos.ui.AgentAvatar
 import io.github.victorbonnet.enclos.ui.AppBar
 import io.github.victorbonnet.enclos.ui.Bubble
@@ -764,8 +765,10 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
         )
     }
     var now by remember { mutableLongStateOf(System.currentTimeMillis() / 1000) }
-    LaunchedEffect(pairing) {
-        while (pairing != null && !pairing.paired && pairing.stopped == null) {
+    // The countdown ticks while a pairing goes on, and while an opened link waits.
+    val waiting = model.openedLink.value != null
+    LaunchedEffect(pairing, waiting) {
+        while ((pairing != null && !pairing.paired && pairing.stopped == null) || (pairing == null && waiting)) {
             now = System.currentTimeMillis() / 1000
             delay(1000)
         }
@@ -795,6 +798,12 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
             }
             Column(Modifier.padding(horizontal = 16.dp)) {
                 Gap(16.dp)
+                // Opened from a link: what it names, and nothing done until the person says so.
+                val opened = model.openedLink.value
+                if (pairing == null && opened != null) {
+                    OpenedLink(opened, now, pair = { model.pair(opened) }, dismiss = { model.clearPairing() })
+                    Gap(8.dp)
+                }
                 val host = pairing?.host ?: "the host"
                 Step(
                     1,
@@ -866,6 +875,45 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                 Gap(24.dp)
             }
         }
+    }
+}
+
+/**
+ * A pairing link the app was opened with: the host and address it names and
+ * when it expires, then Pair or Not now. Any page or message can hold such
+ * a link, so nothing connects before Pair.
+ */
+@Composable
+private fun OpenedLink(link: String, now: Long, pair: () -> Unit, dismiss: () -> Unit) {
+    val p = palette
+    val read = remember(link) { runCatching { parsePairLink(link) } }
+    Column(Modifier.fillMaxWidth().border(1.dp, p.lineStrong, Shapes.control).padding(14.dp)) {
+        val parsed = read.getOrNull()
+        if (parsed == null) {
+            Text("Not an enclos pairing link", style = Type.name, color = p.text)
+            // The core's reason, without what the title already says.
+            val why = read.exceptionOrNull()?.message.orEmpty().removePrefix("reason=").removePrefix("not an enclos pairing link: ")
+            Text(why, style = Type.small, color = p.textMuted)
+            TextLink("Dismiss", dismiss)
+            return@Column
+        }
+        val left = (parsed.expires.toLong() - now).coerceAtLeast(0)
+        Text("Pair with ${parsed.host}?", style = Type.name, color = p.text)
+        Gap(2.dp)
+        Text(
+            parsed.url.removePrefix("https://") + " · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired",
+            style = Type.code,
+            color = p.textFaint,
+        )
+        Gap(8.dp)
+        Text(
+            "From a link you opened. Pair only with a host of yours: its agents will reach this phone. The host asks you to accept in its terminal too.",
+            style = Type.small,
+            color = p.textMuted,
+        )
+        Gap(12.dp)
+        PrimaryButton("Pair", enabled = left > 0, onClick = pair)
+        TextLink("Not now", dismiss)
     }
 }
 

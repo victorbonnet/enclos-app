@@ -1,5 +1,6 @@
 package io.github.victorbonnet.enclos
 
+import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -86,9 +87,23 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
+    /** An `enclos://pair` link the system opened the app with: shown on the pairing screen, which asks first. */
+    private fun open(intent: Intent?) {
+        val link = intent?.data?.takeIf { intent.action == Intent.ACTION_VIEW && it.scheme == "enclos" } ?: return
+        model.opened(link.toString())
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        open(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         applyTheme(this, model.theme.value)
+        // Not again when the activity is recreated: the link was handled.
+        if (savedInstanceState == null) open(intent)
         // The launch screen stays until what the phone kept for the first
         // screens is read, off the main thread, so the app does not open
         // empty and fill in; at most a second, should the read be slow.
@@ -150,6 +165,10 @@ private fun Screens(model: AppModel) {
             routes.animateTo(routes.currentState)
         }
     }
+    // A pairing link opened the app: to the pairing screen, which asks.
+    val opened = model.openedLink.value
+    LaunchedEffect(opened) { if (opened != null) go(Route.Pair) }
+
     // Back from another tab: to the inbox.
     BackHandler(enabled = !onFullScreen && tab != Tab.Inbox) { tab = Tab.Inbox }
 

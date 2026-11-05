@@ -239,6 +239,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Pairs with the host whose link was scanned or typed. */
     fun pair(link: String) {
+        openedLink.value = null
         val parsed = try {
             parsePairLink(link)
         } catch (e: Exception) {
@@ -304,10 +305,38 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connection.open()
     }
 
+    /**
+     * A pairing link the system opened the app with (tapped in a browser, a
+     * chat): shown on the pairing screen, which pairs only once the person
+     * says so, since any page can hold such a link.
+     */
+    val openedLink = mutableStateOf<String?>(null)
+
+    /**
+     * The system opened the app with [link]; ignored while a pairing is under
+     * way, and when it was handled before: the system hands a link again
+     * when it restarts the app's task (after an update, from recents). The
+     * links' hashes are kept, not the links and their one-time codes; the
+     * last 20, as a link works for 5 minutes only.
+     */
+    fun opened(link: String) {
+        val now = pairing.value
+        if (now != null && !now.paired && now.stopped == null) return
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(link.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        val handled = settings.getString("pair.links.handled", "").orEmpty().split(' ').filter { it.isNotEmpty() }
+        if (hash in handled) return
+        settings.edit(commit = true) { putString("pair.links.handled", (handled.takeLast(19) + hash).joinToString(" ")) }
+        pairing.value = null
+        pairLinkError.value = null
+        openedLink.value = link
+    }
+
     /** Forgets the pairing shown, to scan another code. */
     fun clearPairing() {
         pairing.value = null
         pairLinkError.value = null
+        openedLink.value = null
     }
 
     /**
