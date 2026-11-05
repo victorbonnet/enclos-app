@@ -92,6 +92,8 @@ Nothing in a message is fetched or run:
 
 The person's own messages are not markdown: they show as typed. Previews (inbox, and later notifications) are the words without the marks.
 
+**Files.** An agent's message may carry files: an image it made, a chart, a document (enclos `docs/protocol.md`, Files). The app fetches each from the bridge over the conversation's connection, in parts, when the message is first shown, and keeps it in its cache (never backed up). An image shows in the bubble, above the words, decoded at the screen's size; tapped, it opens full screen on `panel-deep`, with its name, Back and Share. Another file shows as a line with its name and size; tapped, it is shared. Share hands that one file to another app through the system's share sheet. A file that did not come says why and is fetched again when tapped; a fetch the connection broke goes on from where it was. A message with files and no words previews as "Image", or the file's name.
+
 The runtime's plugin tells the agent what the app draws, so that it formats when it helps (Hermes: the plugin's `platform_hint`, in enclos).
 
 ## 6. Motion
@@ -132,6 +134,7 @@ Light or dark: the system's setting by default. Once the person chooses (System 
 | Markdown | commonmark-java (+ GFM tables, strikethrough, autolink), drawn in Compose | Apple's swift-markdown (cmark-gfm), drawn in SwiftUI |
 | Theme kept | app preferences; `UiModeManager.setApplicationNightMode` on Android 12+ | `UserDefaults`; `preferredColorScheme` |
 | Animations off | Remove animations (animator duration scale 0) | Reduce Motion |
+| Files | cache `attachments/<id>/<name>`; shared through a `FileProvider` and `ACTION_SEND` | Caches directory; shared through `ShareLink` / `UIActivityViewController` |
 | Push (not built) | FCM, one notification channel per agent | FCM through APNs, the conversation as thread identifier |
 
 ## Not built yet

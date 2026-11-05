@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the app can hand to another app (the share sheet): the files of
+     messages it fetched into its cache, and nothing else of its data. -->
+<paths>
+    <cache-path name="attachments" path="attachments/" />
+</paths>

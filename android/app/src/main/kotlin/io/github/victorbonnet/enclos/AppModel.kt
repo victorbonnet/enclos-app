@@ -42,7 +42,27 @@ data class Step(
 )
 
 /** A message of a conversation; [time] in seconds since the Unix epoch. */
-data class Line(val seq: Long, val from: String, val text: String, val kind: String, val time: Long)
+data class Line(
+    val seq: Long,
+    val from: String,
+    val text: String,
+    val kind: String,
+    val time: Long,
+    val attachments: List<Attachment> = emptyList(),
+)
+
+/** A file of a message, fetched from the bridge when it is shown. */
+data class Attachment(val id: String, val mime: String, val name: String, val size: Long) {
+    val image: Boolean get() = mime.startsWith("image/")
+}
+
+/** Where a file stands on this phone. */
+sealed interface FileState {
+    /** Being fetched: [done] of its bytes. */
+    data class Loading(val done: Long, val size: Long) : FileState
+    data class Ready(val file: java.io.File) : FileState
+    data class Failed(val why: String) : FileState
+}
 
 /** A conversation: its host, agent (`<sandbox>/<agent>`) and id. */
 data class Conversation(
@@ -257,6 +277,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         typing.keys.filter { it in ids }.forEach { typing.remove(it) }
         awaiting.keys.filter { it in ids }.forEach { awaiting.remove(it) }
         steps.keys.filter { it in ids }.forEach { steps.remove(it) }
+        // Files being fetched from it stop; asked again, they go on from where they were.
+        fetching.filterValues { it.first == host.name }.keys.forEach {
+            fetching.remove(it)
+            files[it] = FileState.Failed("the connection ended")
+        }
         if (!foreground) return
         val n = failures.getOrDefault(host.name, 0)
         failures[host.name] = n + 1
@@ -322,7 +347,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 if (conversations.none { it.id == id }) {
                     conversations.add(Conversation(host.name, m.getString("agent"), id))
                 }
-                val line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"))
+                val files = m.optJSONArray("attachments")
+                val attached = (0 until (files?.length() ?: 0)).map {
+                    val a = files!!.getJSONObject(it)
+                    Attachment(a.getString("id"), a.optString("mime"), a.optString("name"), a.optLong("size"))
+                }
+                val line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached)
                 if (line.from == "agent") {
                     typing.remove(id)
                     awaiting.remove(id)
@@ -347,6 +377,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     awaiting.remove(id)
                 }
             }
+            // A part of a file: written where it goes, then the next asked for.
+            "attachment.data" -> received(host, m.getString("attachment"), m.getLong("offset"), m.getLong("size"), m.getString("data"))
             // A tool the agent starts, or ends: added, or marked done.
             "tool" -> {
                 val id = m.getString("conversation")
@@ -368,7 +400,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     now
                 }
             }
-            "error" -> said[host.name] = m.optString("message")
+            "error" -> {
+                // An error about a file asked for fails that file; else it is the bridge's word.
+                val file = asked.remove(m.optString("of"))
+                if (file != null) {
+                    fetching.remove(file)
+                    files[file] = FileState.Failed(m.optString("message"))
+                } else {
+                    said[host.name] = m.optString("message")
+                }
+            }
         }
     }
 
@@ -384,6 +425,62 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Names [conversation] (an empty [title] clears its name, and the agent
      * may name it again); shown at once, and confirmed by the bridge.
      */
+    // Files. Fetched from the bridge over the conversation's connection, a
+    // part at a time, into the app's cache (never backed up), one folder per
+    // attachment under the file's own name, which sharing shows.
+
+    /** By attachment id: on the phone, being fetched, or failed; none until it is asked for. */
+    val files = mutableStateMapOf<String, FileState>()
+    /** By attachment id: the host and the file being fetched. */
+    private val fetching = mutableMapOf<String, Pair<String, Attachment>>()
+    /** By the id of an `attachment.get` sent: its attachment. */
+    private val asked = mutableMapOf<String, String>()
+
+    private fun folderOf(a: Attachment) = java.io.File(java.io.File(getApplication<Application>().cacheDir, "attachments"), a.id)
+    private fun fileOf(a: Attachment) =
+        java.io.File(folderOf(a), a.name.replace(Regex("[^A-Za-z0-9._ -]"), "_").trimStart('.').take(80).ifBlank { "file" })
+    private fun partOf(a: Attachment) = java.io.File(folderOf(a), ".part")
+
+    /** Fetches [a] from [host]'s bridge, or finds it on the phone; again after a failure. */
+    fun fetch(host: String, a: Attachment) {
+        val done = fileOf(a)
+        if (done.isFile) {
+            files[a.id] = FileState.Ready(done)
+            return
+        }
+        if (a.id in fetching) return
+        folderOf(a).mkdirs()
+        // What a broken fetch left is kept: it goes on from there.
+        val have = partOf(a).length()
+        files[a.id] = FileState.Loading(have, a.size)
+        fetching[a.id] = host to a
+        ask(host, a.id, have)
+    }
+
+    private fun ask(host: String, id: String, offset: Long) {
+        val get = message("attachment.get", "attachment" to id, "offset" to offset)
+        asked[get.getString("id")] = id
+        if (connections[host]?.send(get) != true) {
+            fetching.remove(id)
+            files[id] = FileState.Failed("not connected")
+        }
+    }
+
+    private fun received(host: Host, id: String, offset: Long, size: Long, data: String) {
+        val (_, a) = fetching[id] ?: return
+        val part = partOf(a)
+        if (offset != part.length()) return
+        part.appendBytes(decodeBytes(data))
+        val now = part.length()
+        if (now >= size) {
+            fetching.remove(id)
+            files[id] = if (part.renameTo(fileOf(a))) FileState.Ready(fileOf(a)) else FileState.Failed("cannot keep the file")
+        } else {
+            files[id] = FileState.Loading(now, size)
+            ask(host.name, id, now)
+        }
+    }
+
     fun rename(conversation: Conversation, title: String) {
         val name = title.trim()
         val at = conversations.indexOfFirst { it.id == conversation.id }
