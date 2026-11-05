@@ -241,7 +241,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun pair(link: String) {
         openedLink.value = null
         val parsed = try {
-            parsePairLink(link)
+            // The enclos:// link, also from the https link to a bridge's pairing page.
+            parsePairLink(pairLink(link))
         } catch (e: Exception) {
             pairLinkError.value = "Not an enclos pairing link: ${e.message}"
             return
