@@ -116,12 +116,55 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
 
+    /**
+     * Whether what the phone kept for the first screens is read. Until then
+     * the launch screen stays up (so the app never opens empty and fills
+     * in) and no connection opens (so `sync` knows where the phone stopped).
+     */
+    var ready = false
+        private set
+    /** By host: the newest `seq` kept on the phone, which `sync` starts after. */
+    private val kept = mutableMapOf<String, Long>()
+
     init {
-        // Read before the first frame, so the app never opens empty and fills in.
-        val saved = store.load()
-        agents.addAll(saved.agents)
-        conversations.addAll(saved.conversations)
-        lines.putAll(saved.lines)
+        // Off the main thread, on the writes' own, before any write: first
+        // what the first screens show, then every message, merged in.
+        saving.execute {
+            val recent = read { recent() }
+            // The connections open next: their HTTP client is built here, not on the main thread.
+            BridgeConnection.prepare()
+            ui {
+                if (recent != null) {
+                    agents.addAll(recent.agents)
+                    conversations.addAll(recent.conversations)
+                    lines.putAll(recent.lines)
+                    kept.putAll(recent.kept)
+                }
+                ready = true
+                if (foreground) foreground()
+            }
+            val all = read { lines() } ?: return@execute
+            ui {
+                val known = conversations.mapTo(HashSet()) { it.id }
+                all.forEach { (id, older) ->
+                    // What is shown is the newest of [older], then what came
+                    // since, which is newer than all of it: older first, then that.
+                    if (id !in known) return@forEach
+                    val now = lines[id].orEmpty()
+                    if (now.size >= older.size && now.firstOrNull()?.seq == older.first().seq) return@forEach
+                    val last = older.last().seq
+                    lines[id] = older + now.filter { it.seq > last }
+                }
+            }
+        }
+    }
+
+    /** Reads what the phone kept; on a failure, the bridge's sync still brings what it has. */
+    private fun <T> read(query: Store.() -> T): T? = try {
+        store.query()
+    } catch (e: android.database.SQLException) {
+        android.util.Log.w("enclos", "could not read what the phone kept", e)
+        null
     }
 
     /** Keeps something on the phone; a failed write leaves it to the next sync from the bridge. */
@@ -202,7 +245,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connection = BridgeConnection(
             url = parsed.url,
             bridgeKey = parsed.key,
-            noisePrivate = noise.privateKey,
+            noisePrivate = { noise.privateKey },
             first = { session ->
                 message(
                     "pair.request",
@@ -269,7 +312,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connection = BridgeConnection(
             url = host.url,
             bridgeKey = host.bridgeKey,
-            noisePrivate = Keys.unwrap(host.noiseKeyWrapped),
+            noisePrivate = { Keys.unwrap(host.noiseKeyWrapped) },
             first = { session ->
                 message(
                     "auth",
@@ -310,10 +353,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         main.postDelayed({ if (foreground && host.name !in connections) reopen(host.name) }, wait)
     }
 
-    /** The app came to the foreground: opens the connection of every host that has none. */
+    /**
+     * The app came to the foreground: opens the connection of every host
+     * that has none, once what the phone kept is read ([ready]).
+     */
     fun foreground() {
         foreground = true
-        paired.filter { it.name !in connections }.forEach { connect(it) }
+        if (ready) paired.filter { it.name !in connections }.forEach { connect(it) }
     }
 
     /** The app left the foreground: its connections stay up while the phone lets them. */
@@ -544,7 +590,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** The newest message from [host] on the phone, which `sync` starts after. */
     private fun since(host: String): Long {
         val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
-        return ids.maxOfOrNull { lines[it]?.lastOrNull()?.seq ?: 0 } ?: 0
+        val shown = ids.maxOfOrNull { lines[it]?.lastOrNull()?.seq ?: 0 } ?: 0
+        return maxOf(shown, kept[host] ?: 0)
     }
 
     /** Forgets what [host] sent, on screen and on the phone. */
@@ -553,6 +600,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         conversations.removeAll { it.host == host }
         ids.forEach { lines.remove(it) }
         agents.removeAll { it.host == host }
+        kept.remove(host)
         save { forget(host) }
     }
 

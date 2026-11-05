@@ -89,6 +89,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         applyTheme(this, model.theme.value)
+        // The launch screen stays until what the phone kept for the first
+        // screens is read, off the main thread, so the app does not open
+        // empty and fill in; at most a second, should the read be slow.
+        val content = findViewById<android.view.View>(android.R.id.content)
+        val since = android.os.SystemClock.uptimeMillis()
+        content.viewTreeObserver.addOnPreDrawListener(
+            object : android.view.ViewTreeObserver.OnPreDrawListener {
+                override fun onPreDraw(): Boolean {
+                    if (!model.ready && android.os.SystemClock.uptimeMillis() - since < 1_000) return false
+                    content.viewTreeObserver.removeOnPreDrawListener(this)
+                    return true
+                }
+            },
+        )
         setContent {
             // The system's light or dark until the person chooses; then theirs.
             val dark = model.theme.value.dark(isSystemInDarkTheme())

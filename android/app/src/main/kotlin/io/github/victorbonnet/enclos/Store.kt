@@ -7,12 +7,17 @@ import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** What the phone kept of each host: its agents, conversations and their messages. */
+/**
+ * What the phone kept of each host, first read: its agents, its
+ * conversations, and the newest messages of the most recent ones.
+ */
 class Saved(
     val agents: List<Agent>,
     val conversations: List<Conversation>,
-    /** By conversation, in `seq` order. */
+    /** By conversation, in `seq` order: the newest messages only. */
     val lines: Map<String, List<Line>>,
+    /** By host: the newest `seq` kept, which `sync` starts after. */
+    val kept: Map<String, Long>,
 )
 
 /**
@@ -21,6 +26,9 @@ class Saved(
  * in the app's private database (never backed up, ADR 0003). The bridge
  * stays the source: the copy is shown at once when the app starts, and a
  * `sync` brings what is newer than its last message.
+ *
+ * Read off the main thread, in two passes: [recent], what the first screens
+ * show, then [lines], every message.
  */
 class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", null, 1) {
     override fun onCreate(db: SQLiteDatabase) {
@@ -41,8 +49,12 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
     // The first version: a later one migrates here, step by step, never by dropping what was kept.
     override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) = Unit
 
-    /** Everything kept, as the app shows it. */
-    fun load(): Saved {
+    /**
+     * What the first screens show: the agents, every conversation with its
+     * last message (the inbox), and the last [history] messages of the
+     * [open] most recent conversations, the ones likely opened first.
+     */
+    fun recent(open: Int = 10, history: Int = 40): Saved {
         val db = readableDatabase
         val agents = db.rawQuery("SELECT host, name, runtime, capabilities FROM agents ORDER BY rowid", null).use { c ->
             generateSequence { if (c.moveToNext()) c else null }.map {
@@ -54,25 +66,42 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
                 Conversation(it.getString(0), it.getString(1), it.getString(2), it.getStringOrNull(3), it.getStringOrNull(4))
             }.toList()
         }
-        val lines = mutableMapOf<String, MutableList<Line>>()
+        val lines = mutableMapOf<String, List<Line>>()
+        // Each conversation's last message, through the (conversation, seq) index.
         db.rawQuery(
-            "SELECT conversation, seq, sender, text, kind, time, attachments, steps FROM messages ORDER BY conversation, seq",
+            "SELECT $LINE FROM messages m WHERE seq = (SELECT MAX(seq) FROM messages WHERE conversation = m.conversation)",
             null,
-        ).use { c ->
-            while (c.moveToNext()) {
-                lines.getOrPut(c.getString(0)) { mutableListOf() } += Line(
-                    seq = c.getLong(1),
-                    from = c.getString(2),
-                    text = c.getString(3),
-                    kind = c.getString(4),
-                    time = c.getLong(5),
-                    attachments = attachments(c.getStringOrNull(6)),
-                    steps = steps(c.getStringOrNull(7)),
-                )
+        ).use { c -> while (c.moveToNext()) lines[c.getString(0)] = listOf(line(c)) }
+        lines.entries.sortedByDescending { it.value.last().time }.take(open).map { it.key }.forEach { id ->
+            db.rawQuery("SELECT $LINE FROM messages WHERE conversation = ? ORDER BY seq DESC LIMIT $history", arrayOf(id)).use { c ->
+                lines[id] = generateSequence { if (c.moveToNext()) c else null }.map { line(it) }.toList().reversed()
             }
         }
-        return Saved(agents, conversations, lines)
+        val kept = db.rawQuery("SELECT host, MAX(seq) FROM messages GROUP BY host", null).use { c ->
+            generateSequence { if (c.moveToNext()) c else null }.associate { it.getString(0) to it.getLong(1) }
+        }
+        return Saved(agents, conversations, lines, kept)
     }
+
+    /** Every message kept, by conversation, in `seq` order. */
+    fun lines(): Map<String, List<Line>> {
+        val lines = mutableMapOf<String, MutableList<Line>>()
+        readableDatabase.rawQuery("SELECT $LINE FROM messages ORDER BY conversation, seq", null).use { c ->
+            while (c.moveToNext()) lines.getOrPut(c.getString(0)) { mutableListOf() } += line(c)
+        }
+        return lines
+    }
+
+    /** A message, from a row of [LINE]'s columns. */
+    private fun line(c: android.database.Cursor) = Line(
+        seq = c.getLong(1),
+        from = c.getString(2),
+        text = c.getString(3),
+        kind = c.getString(4),
+        time = c.getLong(5),
+        attachments = attachments(c.getStringOrNull(6)),
+        steps = steps(c.getStringOrNull(7)),
+    )
 
     /** A conversation the bridge sent, new or renamed. */
     fun conversation(c: Conversation) {
@@ -139,6 +168,11 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         } finally {
             db.endTransaction()
         }
+    }
+
+    private companion object {
+        /** A message's columns, its conversation first, as [line] reads them. */
+        const val LINE = "conversation, seq, sender, text, kind, time, attachments, steps"
     }
 
     private fun android.database.Cursor.getStringOrNull(i: Int) = if (isNull(i)) null else getString(i)
