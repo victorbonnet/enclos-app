@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.google.zxing.client.android.Intents
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import io.github.victorbonnet.enclos.core.coreVersion
@@ -122,7 +123,10 @@ private fun ColumnScope.PairScreen(model: AppModel, done: () -> Unit) {
                 ScanOptions()
                     .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                     .setPrompt("The QR code of `enclos app pair`")
-                    .setBeepEnabled(false),
+                    .setBeepEnabled(false)
+                    // A terminal with a dark theme draws the code light on
+                    // dark: read it either way round.
+                    .addExtra(Intents.Scan.SCAN_TYPE, Intents.Scan.MIXED_SCAN),
             )
         },
         Modifier.fillMaxWidth(),
