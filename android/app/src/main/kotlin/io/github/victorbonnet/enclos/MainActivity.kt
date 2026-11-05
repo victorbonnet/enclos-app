@@ -124,6 +124,7 @@ private fun ColumnScope.PairScreen(model: AppModel, done: () -> Unit) {
                     .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                     .setPrompt("The QR code of `enclos app pair`")
                     .setBeepEnabled(false)
+                    .setOrientationLocked(false)
                     // A terminal with a dark theme draws the code light on
                     // dark: read it either way round.
                     .addExtra(Intents.Scan.SCAN_TYPE, Intents.Scan.MIXED_SCAN),
