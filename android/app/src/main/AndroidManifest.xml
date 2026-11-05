@@ -17,10 +17,15 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:label="enclos"
-        android:theme="@style/Theme.Enclos">
+        android:enableOnBackInvokedCallback="true"
+        android:theme="@style/Theme.Enclos"
+        tools:targetApi="33">
+        <!-- adjustResize: the screen follows the keyboard as it slides,
+             frame by frame, instead of jumping once it is up -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
