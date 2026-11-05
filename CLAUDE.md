@@ -2,11 +2,20 @@
 
 The enclos mobile app: Android first, then iOS. It talks to the agents of every enclos host over Tailscale, through each host's bridge. The plan, the architecture and the security model are in [victorbonnet/enclos#145](https://github.com/victorbonnet/enclos/issues/145) until enclos's design takes them in.
 
+## Behaviour, decisions and platforms
+
+- `docs/spec.md` says what the app does, for every platform, and how each platform renders it (its Platforms table). Read it before working on a feature. A pull request that adds or changes a behaviour updates it in the same pull request.
+- Android and iOS reach feature parity and each behaves natively: a behaviour is specified once, platform-neutrally, and built the platform's own way on each. When a behaviour is built on one platform only, the spec says so.
+- Propose an ADR (`docs/adr/NNNN-slug.md`, the next number) only for a decision that is hard to reverse, surprising without context and the result of a real trade-off. Keep it short: a title, the context, decision and reason in a few sentences; "Considered options" or "Consequences" only when they help. Every ADR starts with `status:` front matter: `proposed`, `accepted`, or `superseded by NNNN`. Don't contradict an ADR silently: propose one that supersedes it.
+- Keep three kinds of statement apart: decided (the spec's text, an accepted ADR), proposed (an ADR with `status: proposed`), and to verify (the spec's "To verify" list). When a test or a run on a phone settles an item, move it out of that list.
+- enclos's side (the bridge, the protocol, the runtimes' plugins) is in enclos's `docs/design.md` and ADRs; link to them rather than restating them.
+
 ## Layout
 
 - `core-ffi/`: the Rust core, exported to Kotlin (and later Swift) through UniFFI. It wraps `enclos-protocol` from the enclos repository, pinned to a commit (a git dependency, allowed for that repository alone in `deny.toml`) until the crate is on crates.io; it holds no logic of its own beyond that glue.
 - `tools/uniffi-bindgen/`: UniFFI's binding generator, a build tool that never ships in the app. It is a workspace of its own, with its own `Cargo.lock` and `deny.toml`, because it depends on an unmaintained crate the app must not (RUSTSEC-2026-0374). It must use the same `uniffi` release as `core-ffi`: `scripts/check-uniffi-versions.sh` checks it.
-- `android/`: the Android app (Kotlin, Compose).
+- `docs/`: the spec (`spec.md`) and the ADRs (`adr/`).
+- `android/`: the Android app (Kotlin, Compose). JVM unit tests in `android/app/src/test/`.
 - `scripts/build-core-android.sh`: builds the core for the app's ABIs and generates its Kotlin bindings into git-ignored folders of the app. Run it before Gradle (`just android` does both).
 
 ## Versions and dependencies
