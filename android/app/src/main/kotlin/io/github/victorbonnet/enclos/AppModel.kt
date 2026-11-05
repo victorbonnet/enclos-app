@@ -233,8 +233,17 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun markRead(conversation: String) {
         val last = lines[conversation]?.lastOrNull()?.seq ?: return
         if ((lastRead[conversation] ?: 0) >= last) return
-        lastRead[conversation] = last
-        reads.edit { putLong(conversation, last) }
+        read(conversation, last)
+        // The bridge keeps it for the person's other devices and the next
+        // sync; offline, it is sent when the bridge's is seen behind.
+        val host = conversations.firstOrNull { it.id == conversation }?.host ?: return
+        connections[host]?.send(message("conversation.read", "conversation" to conversation, "seq" to last))
+    }
+
+    /** [conversation] is read up to [seq] (here or on another device): kept on this one. */
+    private fun read(conversation: String, seq: Long) {
+        lastRead[conversation] = seq
+        reads.edit { putLong(conversation, seq) }
     }
 
     /** Pairs with the host whose link was scanned or typed. */
@@ -453,6 +462,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 if (at < 0 || conversations[at] != known) {
                     if (at < 0) conversations.add(known) else conversations[at] = known
                     save { conversation(known) }
+                }
+                // How far the person read it, on any of their devices: what
+                // is before is not unread here. Read further here (offline,
+                // say): the bridge is told.
+                val bridgeRead = if (m.has("read")) m.getLong("read") else 0L
+                val here = lastRead[id] ?: 0L
+                if (bridgeRead > here) {
+                    read(id, bridgeRead)
+                } else if (here > bridgeRead) {
+                    connections[host.name]?.send(message("conversation.read", "conversation" to id, "seq" to here))
                 }
             }
             "message" -> {
