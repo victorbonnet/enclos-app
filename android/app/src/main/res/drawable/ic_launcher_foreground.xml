@@ -1,25 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The Home base mark, copied from enclos's assets/enclos-icon-dark.svg
-     (64 x 64), at three quarters and centred on the adaptive icon's
-     108 x 108 canvas: 30 + 0.75 x (7.5 to 56.5) spans 35.6 to 72.4, its
-     corners about 26dp from the centre. A round mask (radius 36) leaves
-     them room; any mask keeps them inside the 66dp safe zone. -->
+<!-- The Home base mark, from enclos's assets/enclos-icon-dark.svg (64 x 64),
+     drawn bolder for the launcher, where icons beside it are weighty and
+     fill their circle: on the adaptive icon's 108 x 108 canvas the frame
+     spans 34 to 74 (40dp, scale 10/11 from 24.9), its strokes 6.5dp, the
+     centre square 13dp. Square corners, as the mark has them: each outer
+     corner is 33dp from the centre, inside a round mask's 36dp radius. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:scaleX="0.75"
-        android:scaleY="0.75"
-        android:translateX="30"
-        android:translateY="30">
+        android:scaleX="0.90909"
+        android:scaleY="0.90909"
+        android:translateX="24.909"
+        android:translateY="24.909">
         <path
             android:pathData="M24,10H10v14m30,-14h14v14M10,40v14h14m30,-14v14H40"
-            android:strokeWidth="5"
+            android:strokeWidth="7.15"
             android:strokeColor="#D5E6AF" />
         <path
             android:fillColor="#D5E6AF"
-            android:pathData="M26,26h12v12h-12z" />
+            android:pathData="M24.85,24.85h14.3v14.3h-14.3z" />
     </group>
 </vector>

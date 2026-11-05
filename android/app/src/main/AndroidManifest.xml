@@ -10,7 +10,7 @@
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:label="enclos"
+        android:label="Enclos"
         android:theme="@style/Theme.Enclos">
         <!-- Portrait only, for now: landscape comes later. Android 16 and
              later ignore the lock on large screens (tablets, foldables
