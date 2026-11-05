@@ -29,7 +29,12 @@ data class Conversation(val host: String, val agent: String, val id: String)
 class AppModel(application: Application) : AndroidViewModel(application) {
     private val hosts = Hosts(application)
     private val main = Handler(Looper.getMainLooper())
+    /** By host: its connection while it is open or opening, none once it ended. */
     private val connections = mutableMapOf<String, BridgeConnection>()
+    /** By host: failed attempts since it was last authenticated, for the backoff. */
+    private val failures = mutableMapOf<String, Int>()
+    /** Whether a screen of the app is visible: only then are ended connections retried. */
+    private var foreground = false
 
     val paired = mutableStateListOf<Host>().apply { addAll(hosts.all()) }
     /** By host: connected, the reason it is not, or connecting. */
@@ -38,10 +43,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
     val pairing = mutableStateOf<String?>(null)
-
-    init {
-        paired.forEach { connect(it) }
-    }
 
     private fun ui(block: () -> Unit) = main.post(block)
 
@@ -103,10 +104,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connection.open()
     }
 
-    /** Opens the connection to [host]: `auth`, then its agents and every message since the start. */
+    /**
+     * Opens the connection to [host]: `auth`, then its agents and every
+     * message since the start. [foreground] opens it, and [ended] again.
+     */
     fun connect(host: Host) {
         connections.remove(host.name)?.close()
-        status[host.name] = "connecting"
+        // While retrying, why the last attempt ended stays on screen.
+        if (status[host.name]?.startsWith("connected") != false) status[host.name] = "connecting"
         lateinit var connection: BridgeConnection
         connection = BridgeConnection(
             url = host.url,
@@ -121,15 +126,46 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             },
             onMessage = { m -> ui { received(host, m) } },
             // A connection [connect] replaced says nothing of the new one.
-            onClosed = { why -> ui { if (connections[host.name] === connection) status[host.name] = why } },
+            onClosed = { why -> ui { if (connections[host.name] === connection) ended(host, why) } },
         )
         connections[host.name] = connection
         connection.open()
     }
 
+    /**
+     * [host]'s connection ended: says why, and tries again while the app is
+     * in the foreground, waiting longer after each failure (2 s, 4 s, … 60 s).
+     * The phone ends connections on its own, such as when it locks.
+     */
+    private fun ended(host: Host, why: String) {
+        connections.remove(host.name)
+        status[host.name] = why
+        if (!foreground) return
+        val n = failures.getOrDefault(host.name, 0)
+        failures[host.name] = n + 1
+        val wait = minOf(60_000L, 2_000L shl minOf(n, 5))
+        main.postDelayed({ if (foreground && host.name !in connections) reopen(host.name) }, wait)
+    }
+
+    /** The app came to the foreground: opens the connection of every host that has none. */
+    fun foreground() {
+        foreground = true
+        paired.filter { it.name !in connections }.forEach { connect(it) }
+    }
+
+    /** The app left the foreground: its connections stay up while the phone lets them. */
+    fun background() {
+        foreground = false
+    }
+
+    private fun reopen(name: String) {
+        paired.firstOrNull { it.name == name }?.let { connect(it) }
+    }
+
     private fun received(host: Host, m: JSONObject) {
         when (m.optString("type")) {
             "authenticated" -> {
+                failures.remove(host.name)
                 status[host.name] = "connected as ${m.optString("person")}"
                 connections[host.name]?.send(message("agents"))
                 connections[host.name]?.send(message("sync", "since" to 0))
@@ -170,7 +206,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun reconnect(name: String) {
-        paired.firstOrNull { it.name == name }?.let { connect(it) }
+        failures.remove(name)
+        reopen(name)
     }
 
     override fun onCleared() {

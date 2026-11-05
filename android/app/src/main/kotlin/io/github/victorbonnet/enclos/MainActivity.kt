@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -35,7 +36,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.zxing.client.android.Intents
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -48,12 +48,23 @@ private sealed interface Screen {
 }
 
 class MainActivity : ComponentActivity() {
+    private val model: AppModel by viewModels()
+
+    override fun onStart() {
+        super.onStart()
+        model.foreground()
+    }
+
+    override fun onStop() {
+        model.background()
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             MaterialTheme {
-                val model: AppModel = viewModel()
                 var screen by remember { mutableStateOf<Screen>(Screen.Home) }
                 BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
                 Scaffold { padding ->
@@ -147,6 +158,15 @@ private fun ColumnScope.Chat(model: AppModel, id: String) {
     val list = rememberLazyListState()
     LaunchedEffect(lines.size) { if (lines.isNotEmpty()) list.animateScrollToItem(lines.size - 1) }
     Text("${conversation.agent} on ${conversation.host}", style = MaterialTheme.typography.titleMedium)
+    // Why messages are not going through, such as the bridge's error.
+    val status = model.status[conversation.host]
+    if (status?.startsWith("connected") != true) {
+        Text(
+            status ?: "not connected",
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
     LazyColumn(Modifier.weight(1f), state = list, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         items(lines, key = { it.seq }) { line ->
             val who = if (line.from == "agent") conversation.agent else "you"
