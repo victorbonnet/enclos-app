@@ -638,6 +638,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 titledBy = if (name.isEmpty()) null else "person",
             )
         }
+        // A draft's name stays here: the bridge does not know the
+        // conversation yet, and is given the name with its first message.
+        if (conversation.id in drafts) return
         connections[conversation.host]?.send(
             message("conversation.rename", "conversation" to conversation.id, "title" to name),
         )
@@ -646,13 +649,19 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun send(conversation: Conversation, text: String) {
         said.remove(conversation.host)
         val connection = connections[conversation.host]
-        // A draft becomes a conversation on the bridge with its first message.
+        // A draft becomes a conversation on the bridge with its first message,
+        // and with the name the person gave it meanwhile: right after the
+        // bridge's `conversation.new`, so its unnamed confirmation does not stay.
         if (conversation.id in drafts) {
             val started = connection?.send(
                 message("conversation.new", "conversation" to conversation.id, "agent" to conversation.agent),
             ) == true
             if (!started) return
             drafts -= conversation.id
+            val named = conversations.firstOrNull { it.id == conversation.id }
+            if (named?.titledBy == "person" && named.title != null) {
+                connection.send(message("conversation.rename", "conversation" to conversation.id, "title" to named.title))
+            }
         }
         val sent = connection?.send(
             message("message.send", "conversation" to conversation.id, "text" to text),
