@@ -742,7 +742,8 @@ private fun SandboxRow(sandbox: String, agents: List<Agent>, live: Boolean) {
 /**
  * An agent under its sandbox, starting where the sandbox's name does: its
  * initial, its name, and working (the wave, what it does) or when it last
- * sent a message (its address before its first). Tapping it opens its
+ * sent a message ("no message yet" before its first: its sandbox and host
+ * are just above). Tapping it opens its
  * Home; a small `+` before the chevron, its own target, [start]s a new
  * conversation.
  */
@@ -770,7 +771,7 @@ private fun AgentRow(model: AppModel, agent: Agent, working: Boolean, now: Long,
                     if (last != null) {
                         Text("active ${Times.ago(last, now)}", style = Type.small, color = p.textMuted)
                     } else {
-                        Text(agent.address, style = Type.code, color = p.textFaint)
+                        Text("no message yet", style = Type.small, color = p.textFaint)
                     }
                 }
             }
