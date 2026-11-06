@@ -32,7 +32,15 @@ data class Agent(val host: String, val name: String, val runtime: String, val ca
 data class Line(val seq: Long, val from: String, val text: String, val kind: String, val time: Long)
 
 /** A conversation: its host, agent (`<sandbox>/<agent>`) and id. */
-data class Conversation(val host: String, val agent: String, val id: String)
+data class Conversation(
+    val host: String,
+    val agent: String,
+    val id: String,
+    /** Its name: the agent's, from what was said, or the person's. */
+    val title: String? = null,
+    /** Who named it: `agent` or `person`. */
+    val titledBy: String? = null,
+)
 
 /** The pairing in progress: what the link said, and how far it went. */
 data class Pairing(
@@ -273,6 +281,20 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             }
+            // A conversation and its name: at each sync (so an empty one is
+            // known too), when one starts, and when its name changes.
+            "conversation" -> {
+                val id = m.getString("conversation")
+                val known = Conversation(
+                    host.name,
+                    m.getString("agent"),
+                    id,
+                    m.optString("title").ifBlank { null },
+                    m.optString("titled_by").ifBlank { null },
+                )
+                val at = conversations.indexOfFirst { it.id == id }
+                if (at < 0) conversations.add(known) else if (conversations[at] != known) conversations[at] = known
+            }
             "message" -> {
                 val id = m.getString("conversation")
                 if (conversations.none { it.id == id }) {
@@ -311,6 +333,24 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         conversations.add(Conversation(agent.host, agent.name, id))
         connections[agent.host]?.send(message("conversation.new", "conversation" to id, "agent" to agent.name))
         return id
+    }
+
+    /**
+     * Names [conversation] (an empty [title] clears its name, and the agent
+     * may name it again); shown at once, and confirmed by the bridge.
+     */
+    fun rename(conversation: Conversation, title: String) {
+        val name = title.trim()
+        val at = conversations.indexOfFirst { it.id == conversation.id }
+        if (at >= 0) {
+            conversations[at] = conversation.copy(
+                title = name.ifEmpty { null },
+                titledBy = if (name.isEmpty()) null else "person",
+            )
+        }
+        connections[conversation.host]?.send(
+            message("conversation.rename", "conversation" to conversation.id, "title" to name),
+        )
     }
 
     fun send(conversation: Conversation, text: String) {

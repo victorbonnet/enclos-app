@@ -41,7 +41,16 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -116,16 +125,7 @@ private fun ThemeSetting(model: AppModel) {
         Gap(8.dp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ThemeChoice.entries.forEach { option ->
-                val on = option == choice
-                val edge by animateColorAsState(if (on) p.accent else p.lineStrong, Motion.change(), label = "edge")
-                val label by animateColorAsState(if (on) p.accent else p.textMuted, Motion.change(), label = "label")
-                Box(
-                    Modifier.height(44.dp).border(1.dp, edge, Shapes.control)
-                        .clip(Shapes.control)
-                        .selectable(selected = on, role = Role.RadioButton, onClick = { model.chooseTheme(option) })
-                        .padding(horizontal = 14.dp),
-                    contentAlignment = Alignment.Center,
-                ) { Text(option.name, style = Type.label, color = label) }
+                Choice(option.name, option == choice) { model.chooseTheme(option) }
             }
         }
         Gap(8.dp)
@@ -147,6 +147,9 @@ private fun ThemeSetting(model: AppModel) {
 fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> Unit, pair: () -> Unit) {
     // A conversation with no message yet sorts first: it was just started.
     val sorted = model.conversations.sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: Long.MAX_VALUE }
+    var query by rememberSaveable { mutableStateOf("") }
+    var filter by remember { mutableStateOf<InboxFilter>(InboxFilter.All) }
+    val found = search(sorted, { model.lines[it].orEmpty() }, model::unread, query, filter)
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             LargeTitle("Inbox")
@@ -158,13 +161,27 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
                     pair,
                 )
                 sorted.isEmpty() -> Empty("No conversation yet.", "Start one with an agent.", "Agents →", newConversation)
-                else -> LazyColumn(Modifier.weight(1f)) {
-                    item { Hairline() }
-                    // A conversation that moves to the top slides there.
-                    items(sorted, key = { it.id }) { c ->
-                        Arriving { ConversationRow(model, c) { open(c.id) } }
+                else -> {
+                    SearchField(query, { query = it })
+                    Filters(sorted, filter) { filter = it }
+                    LazyColumn(Modifier.weight(1f)) {
+                        item { Hairline() }
+                        if (found.isEmpty()) {
+                            item {
+                                Text(
+                                    if (filter == InboxFilter.Unread && query.isBlank()) "Nothing unread." else "No conversation matches.",
+                                    style = Type.small,
+                                    color = palette.textMuted,
+                                    modifier = Modifier.padding(16.dp),
+                                )
+                            }
+                        }
+                        // A conversation that moves to the top slides there.
+                        items(found, key = { it.conversation.id }) { f ->
+                            Arriving { ConversationRow(model, f.conversation, f.match, query) { open(f.conversation.id) } }
+                        }
+                        item { Spacer(Modifier.height(88.dp)) }
                     }
-                    item { Spacer(Modifier.height(88.dp)) }
                 }
             }
         }
@@ -186,9 +203,87 @@ private fun ColumnScope.Empty(title: String, text: String, action: String, onAct
     }
 }
 
-/** A conversation in the inbox: the agent, its address, the time, the last message and the unread count. */
+/** The inbox's search: agents, names and what was said. */
 @Composable
-private fun ConversationRow(model: AppModel, c: Conversation, onClick: () -> Unit) {
+private fun SearchField(query: String, onQuery: (String) -> Unit) {
+    val p = palette
+    BasicTextField(
+        value = query,
+        onValueChange = onQuery,
+        singleLine = true,
+        textStyle = Type.message.copy(color = p.text),
+        cursorBrush = SolidColor(p.accent),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp)
+            .semantics { contentDescription = "Search conversations" },
+        decorationBox = { field ->
+            Row(
+                Modifier.fillMaxWidth().height(44.dp).clip(Shapes.control).background(p.surface).padding(start = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Glyph(Glyphs.search, p.textFaint, size = 20.dp)
+                Box(Modifier.weight(1f)) {
+                    if (query.isEmpty()) Text("Search conversations", style = Type.message, color = p.textFaint)
+                    field()
+                }
+                AnimatedVisibility(query.isNotEmpty(), enter = fadeIn(Motion.enter(Motion.SHORT)), exit = fadeOut(Motion.exit())) {
+                    IconButton(Glyphs.clear, "Clear the search", { onQuery("") }, tint = p.textMuted)
+                }
+            }
+        },
+    )
+}
+
+/** All, Unread, and each agent when there are several: one at a time. */
+@Composable
+private fun Filters(conversations: List<Conversation>, chosen: InboxFilter, onChoose: (InboxFilter) -> Unit) {
+    val agents = conversations.map { "${it.host}/${it.agent}" }.distinct().sorted()
+    val names = agents.map { it.substringAfterLast('/') }
+    val options = buildList {
+        add(InboxFilter.All to "All")
+        add(InboxFilter.Unread to "Unread")
+        // An agent by its name, or by sandbox and name when two share one.
+        if (agents.size > 1) agents.forEachIndexed { i, a ->
+            add(InboxFilter.OfAgent(a) to if (names.count { it == names[i] } > 1) a.substringAfter('/') else names[i])
+        }
+    }
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        options.forEach { (option, label) -> Choice(label, option == chosen) { onChoose(option) } }
+    }
+}
+
+/** A choice among a few, outlined in `accent` when chosen (filters, the theme). */
+@Composable
+private fun Choice(label: String, on: Boolean, onClick: () -> Unit) {
+    val p = palette
+    val edge by animateColorAsState(if (on) p.accent else p.lineStrong, Motion.change(), label = "edge")
+    val text by animateColorAsState(if (on) p.accent else p.textMuted, Motion.change(), label = "text")
+    Box(
+        Modifier.height(44.dp).clip(Shapes.control).border(1.dp, edge, Shapes.control)
+            .selectable(selected = on, role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(label, style = Type.label, color = text, maxLines = 1) }
+}
+
+/** [text] with the words of [query] in `accent`, where search found them: its own rules (case, accents, spaces). */
+private fun highlighted(text: String, query: String, accent: Color): AnnotatedString = buildAnnotatedString {
+    append(text)
+    matches(text, query).forEach { range ->
+        addStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold), range.first, range.last + 1)
+    }
+}
+
+/**
+ * A conversation in the inbox: the agent, the conversation's name (or its
+ * address while it has none), the time, the last message or the one the
+ * search found, and the unread count.
+ */
+@Composable
+private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, query: String, onClick: () -> Unit) {
     val p = palette
     val last = model.lines[c.id]?.lastOrNull()
     val unread = model.unread(c.id)
@@ -199,14 +294,27 @@ private fun ConversationRow(model: AppModel, c: Conversation, onClick: () -> Uni
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(agent, style = Type.name, color = p.text, maxLines = 1)
-                    Text(
-                        "${c.host}/${c.agent}",
-                        style = Type.code,
-                        color = p.textFaint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(bottom = 2.dp),
-                    )
+                    // Its name, as the agent or the person gave it; the address until then.
+                    val title = c.title
+                    if (title != null) {
+                        Text(
+                            highlighted(title, query, p.accent),
+                            style = Type.small,
+                            color = p.textMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).padding(bottom = 1.dp),
+                        )
+                    } else {
+                        Text(
+                            "${c.host}/${c.agent}",
+                            style = Type.code,
+                            color = p.textFaint,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).padding(bottom = 2.dp),
+                        )
+                    }
                     if (last != null) {
                         Text(Times.inList(last.time), style = Type.code, color = if (unread > 0) p.accent else p.textFaint, modifier = Modifier.padding(bottom = 2.dp))
                     }
@@ -218,13 +326,15 @@ private fun ConversationRow(model: AppModel, c: Conversation, onClick: () -> Uni
                     }
                 }
                 Row(Modifier.padding(top = 3.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // The message the search found, else the last; the words, without markdown.
+                    val shown = match ?: last
+                    val words = when {
+                        shown == null -> "No message yet"
+                        shown.from == "agent" -> remember(shown.text) { words(shown) }
+                        else -> "You: ${shown.text}"
+                    }
                     Text(
-                        when {
-                            last == null -> "No message yet"
-                            // The words, without the markdown's marks.
-                            last.from == "agent" -> remember(last.text) { Markdown.plain(last.text) }
-                            else -> "You: ${last.text}"
-                        },
+                        if (match != null) highlighted(words, query, p.accent) else AnnotatedString(words),
                         style = Type.small,
                         color = if (unread > 0) p.text else p.textMuted,
                         maxLines = 2,
@@ -373,13 +483,33 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         // the person scrolled up to read.
         if (list.firstVisibleItemIndex <= 1) list.animateScrollToItem(0)
     }
+    var renaming by remember { mutableStateOf(false) }
+    if (renaming) {
+        RenameDialog(conversation.title, onDismiss = { renaming = false }) {
+            model.rename(conversation, it)
+            renaming = false
+        }
+    }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             AgentAvatar(agent, live, small = true)
-            Column(Modifier.weight(1f)) {
-                Text(agent, style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp), color = p.text, maxLines = 1)
-                Text("${conversation.host}/${conversation.agent}", style = Type.code, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // Its name, and the agent under it; tap to rename.
+            Column(Modifier.weight(1f).clickable(onClickLabel = "Rename the conversation") { renaming = true }) {
+                Text(
+                    conversation.title ?: agent,
+                    style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp),
+                    color = p.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    if (conversation.title != null) "$agent · ${conversation.host}/${conversation.agent}" else "${conversation.host}/${conversation.agent}",
+                    style = Type.code,
+                    color = p.textFaint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
         Hairline()
@@ -417,6 +547,64 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             draft = ""
         }
     }
+}
+
+/**
+ * Names the conversation: the person's name replaces the agent's, which
+ * then names it no more; clearing it lets the agent name it again.
+ */
+@Composable
+private fun RenameDialog(current: String?, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    val p = palette
+    var name by remember { mutableStateOf(current.orEmpty()) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = p.surface,
+        shape = Shapes.bubble,
+        title = { Text("Name the conversation", style = Type.heading, color = p.text) },
+        text = {
+            Column {
+                BasicTextField(
+                    value = name,
+                    onValueChange = { name = it.take(100) },
+                    singleLine = true,
+                    textStyle = Type.message.copy(color = p.text),
+                    cursorBrush = SolidColor(p.accent),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                    decorationBox = { field ->
+                        Box(
+                            Modifier.fillMaxWidth().height(44.dp).clip(Shapes.control).background(p.bg)
+                                .border(1.dp, p.lineStrong, Shapes.control).padding(horizontal = 12.dp),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            if (name.isEmpty()) Text("Weather in Lyon", style = Type.message, color = p.textFaint)
+                            field()
+                        }
+                    },
+                )
+                Gap(8.dp)
+                Text("The agent names a conversation until you do.", style = Type.small, color = p.textMuted)
+            }
+        },
+        confirmButton = { DialogButton("Save", enabled = name.isNotBlank()) { onSave(name) } },
+        dismissButton = {
+            Row {
+                if (current != null) DialogButton("Clear name") { onSave("") }
+                DialogButton("Cancel", onClick = onDismiss)
+            }
+        },
+    )
+}
+
+@Composable
+private fun DialogButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        Modifier.height(44.dp).clip(Shapes.control).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(text, style = Type.label, color = if (enabled) palette.accent else palette.textFaint) }
 }
 
 /**
