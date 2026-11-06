@@ -54,7 +54,9 @@ A conversation has a name: its agent's, from what was said in it (Hermes names e
 
 ### Agents
 
-Each paired host, with a filled square while connected (`connected · tailnet`) and an outline otherwise (why it is not); under it each sandbox, with its runtime and, once the bridge has reached the agent's plugin, what its channel does: `full channel` (messages both ways and messages on its own, the plugin announced `notify`) or `request/reply`. Under each sandbox its agents; tapping one opens a new conversation, a draft on this phone until its first message, which starts it on the bridge (`conversation.new`, then the message): a conversation opened and left leaves nothing behind. An action on the title's line pairs another host. A person sees only what is shared with them; the list never hints that more exists.
+First, while any agent works, **Working now** and their count: each agent at work, its avatar pulsing, where it works (the conversation's name, or `in 2 conversations`) and what it does (the tool it runs, as its label says, else `working`); tapping one opens that conversation, the one with the newest message if several. An agent works on a conversation from the person's message until its answer, while its runtime says it is writing, and while a tool it started has not ended; the phone knows only what comes over the bridge, so not, for instance, a cron job the runtime runs without saying so.
+
+Then each paired host, with a filled square while connected (`connected · tailnet`) and an outline otherwise (why it is not); under it each sandbox, with its runtime and, once the bridge has reached the agent's plugin, what its channel does: `full channel` (messages both ways and messages on its own, the plugin announced `notify`) or `request/reply`. Under each sandbox its agents, each `working` with the wave while it works, else when it last sent a message (`active 3 hours ago`, `active yesterday`, `active 2 days ago`, its runtime's notices aside), its address before its first one; tapping one opens a new conversation, a draft on this phone until its first message, which starts it on the bridge (`conversation.new`, then the message): a conversation opened and left leaves nothing behind. An action on the title's line pairs another host. A person sees only what is shared with them; the list never hints that more exists.
 
 ### Status
 
@@ -115,7 +117,8 @@ Short and functional, never decorative: something moves to show where it came fr
 - Tabs fade through each other (200 ms); the corners close in on the tab chosen.
 - A message fades in while the others slide up; a conversation that moves to the top of the inbox slides there.
 - Badges, chips, pairing steps, the send button and the theme change smoothly.
-- With the system's animations turned off, transitions end at once and the working wave stands still.
+- An agent at work: its avatar's corners swell out of it and fade, every 1.4 s; the working wave beside it.
+- With the system's animations turned off, transitions end at once, the working wave stands still and an avatar does not pulse.
 
 ## 7. Theme
 
