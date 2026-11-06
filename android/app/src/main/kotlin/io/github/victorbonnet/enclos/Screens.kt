@@ -46,6 +46,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
@@ -325,11 +326,21 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val working = model.working(id)
     var draft by remember { mutableStateOf("") }
     val list = rememberLazyListState()
+    // Whether the person is at the newest: the first item (the list is
+    // reversed) at its very end. Read when a scroll ends, theirs or the
+    // list's own, not when a message arrives, which shifts the first
+    // visible item; within a long message, the offset says they scrolled up.
+    var atNewest by remember { mutableStateOf(true) }
+    LaunchedEffect(list) {
+        snapshotFlow { list.isScrollInProgress }.collect { scrolling ->
+            if (!scrolling) atNewest = list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset <= 4
+        }
+    }
     LaunchedEffect(lines.size, working) {
         model.markRead(id)
         // The list is anchored at the newest: follow what arrives, unless
         // the person scrolled up to read.
-        if (list.firstVisibleItemIndex <= 1) list.animateScrollToItem(0)
+        if (atNewest) list.animateScrollToItem(0)
     }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
