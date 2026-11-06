@@ -190,6 +190,8 @@ private fun LockSetting(model: AppModel) {
         Text(
             said ?: if (on) {
                 "Asks for your fingerprint, face or the phone's screen lock when the app opens, and when it comes back after a minute away."
+            } else if (model.lockDropped.value) {
+                "Turned off: this phone no longer has a screen lock. Set one, then turn the lock on again."
             } else {
                 "Ask for your fingerprint, face or the phone's screen lock when the app opens."
             },

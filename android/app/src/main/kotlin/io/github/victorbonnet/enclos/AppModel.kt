@@ -228,6 +228,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Turns the app lock on or off; on only once the person proved it works ([AppLock], [Unlocker]). */
     fun setLock(on: Boolean) {
         lockOn.value = on
+        if (on) lockDropped.value = false
         settings.edit(commit = true) { putBoolean("lock", on) }
     }
 
@@ -236,8 +237,21 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         leftAt = now
     }
 
-    /** The app is back: locked again when the lock is on and it was away long enough. */
+    /** Whether the lock turned itself off because the phone no longer has a screen lock: said in Status. */
+    val lockDropped = mutableStateOf(false)
+
+    /**
+     * The app is back: locked again when the lock is on and it was away
+     * long enough. A phone whose screen lock was removed has nothing left
+     * to unlock the app with: the lock turns off, rather than lock the
+     * person out, and Status says so.
+     */
     fun returned(now: Long) {
+        if (lockOn.value && !AppLock.available(getApplication())) {
+            setLock(false)
+            locked.value = false
+            lockDropped.value = true
+        }
         if (AppLock.locksOnReturn(lockOn.value, leftAt, now)) {
             locked.value = true
             lockSaid.value = null
