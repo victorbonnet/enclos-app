@@ -65,8 +65,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val agents = mutableStateListOf<Agent>()
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
-    /** By conversation: whether the agent is writing. */
+    /** By conversation: whether the agent said it is writing (`typing`). */
     val typing = mutableStateMapOf<String, Boolean>()
+    /** By conversation: a message was sent and the agent has not answered yet. */
+    private val awaiting = mutableStateMapOf<String, Boolean>()
     /** By conversation: the last message read on this device, kept across launches. */
     private val lastRead = mutableStateMapOf<String, Long>().apply {
         reads.all.forEach { (id, seq) -> if (seq is Long) put(id, seq) }
@@ -79,6 +81,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Whether [host] is connected and authenticated. */
     fun connected(host: String) = status[host]?.startsWith("connected") == true
+
+    /**
+     * Whether the agent is working on [conversation]: from the person's
+     * message until the agent answers, and whenever its runtime says it is
+     * writing, so there is something to see before the first `typing`.
+     */
+    fun working(conversation: String) = typing[conversation] == true || awaiting[conversation] == true
 
     /** The agent's messages in [conversation] not read on this device yet. */
     fun unread(conversation: String): Int {
@@ -201,7 +210,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
         status[host.name] = why
-        typing.keys.filter { id -> conversations.any { it.id == id && it.host == host.name } }.forEach { typing.remove(it) }
+        // Nothing will come over a closed connection: stop showing the agent at work.
+        val ids = conversations.filter { it.host == host.name }.map { it.id }.toSet()
+        typing.keys.filter { it in ids }.forEach { typing.remove(it) }
+        awaiting.keys.filter { it in ids }.forEach { awaiting.remove(it) }
         if (!foreground) return
         val n = failures.getOrDefault(host.name, 0)
         failures[host.name] = n + 1
@@ -256,6 +268,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"))
                 if (line.from == "agent") {
                     typing.remove(id)
+                    awaiting.remove(id)
                     // The bridge learns what an agent's channel can do once it
                     // reached it, which an agent's message shows: ask again.
                     val agent = m.getString("agent")
@@ -268,7 +281,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "typing" -> {
                 val id = m.getString("conversation")
-                if (m.optBoolean("on")) typing[id] = true else typing.remove(id)
+                if (m.optBoolean("on")) {
+                    typing[id] = true
+                } else {
+                    typing.remove(id)
+                    awaiting.remove(id)
+                }
             }
             "error" -> said[host.name] = m.optString("message")
         }
@@ -284,9 +302,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     fun send(conversation: Conversation, text: String) {
         said.remove(conversation.host)
-        connections[conversation.host]?.send(
+        val sent = connections[conversation.host]?.send(
             message("message.send", "conversation" to conversation.id, "text" to text),
-        )
+        ) == true
+        if (sent) awaiting[conversation.id] = true
     }
 
     fun reconnect(name: String) {
