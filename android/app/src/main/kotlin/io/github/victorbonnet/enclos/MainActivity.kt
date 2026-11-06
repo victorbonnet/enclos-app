@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Asks the person to unlock the app. */
-    fun unlock() = unlocker.ask("Unlock enclos") { ok, why -> model.unlocked(ok, why) }
+    fun unlock() = unlocker.ask("Unlock Enclos") { ok, why -> model.unlocked(ok, why) }
 
     /** An `enclos://pair` link the system opened the app with: shown on the pairing screen, which asks first. */
     private fun open(intent: Intent?) {

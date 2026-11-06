@@ -222,7 +222,7 @@ fun LockScreen(model: AppModel, unlock: () -> Unit, leave: () -> Unit) {
                 Box(Modifier.size(14.dp).background(p.accent))
             }
             Gap(24.dp)
-            Text("enclos is locked", style = Type.heading, color = p.text)
+            Text("Enclos is locked", style = Type.heading, color = p.text)
             Gap(8.dp)
             Text(
                 model.lockSaid.value ?: "Unlock with your fingerprint, your face or the phone's screen lock.",
