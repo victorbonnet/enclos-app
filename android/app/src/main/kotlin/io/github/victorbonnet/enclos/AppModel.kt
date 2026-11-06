@@ -324,13 +324,21 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 }
                 val line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"))
                 if (line.from == "agent") {
-                    typing.remove(id)
-                    awaiting.remove(id)
-                    // The steps that led to this message go with it.
-                    steps.remove(id)?.takeIf { it.isNotEmpty() }?.let { stepsOf[line.seq] = it }
+                    val agent = m.getString("agent")
+                    if (line.kind != "notify") {
+                        // An answer ends the turn: the steps that led to it go with it.
+                        typing.remove(id)
+                        awaiting.remove(id)
+                        steps.remove(id)?.takeIf { it.isNotEmpty() }?.let { stepsOf[line.seq] = it }
+                    } else if (agents.none { it.host == host.name && it.name == agent && "typing" in it.capabilities }) {
+                        // A message on its own (a cron job's) while the agent
+                        // works keeps the turn's steps and its working state;
+                        // only a runtime that says nothing of its typing has
+                        // no other sign that a turn ended.
+                        awaiting.remove(id)
+                    }
                     // The bridge learns what an agent's channel can do once it
                     // reached it, which an agent's message shows: ask again.
-                    val agent = m.getString("agent")
                     if (agents.any { it.host == host.name && it.name == agent && it.capabilities.isEmpty() }) {
                         connections[host.name]?.send(message("agents"))
                     }
