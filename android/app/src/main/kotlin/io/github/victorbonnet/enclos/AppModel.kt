@@ -325,7 +325,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"))
                 if (line.from == "agent") {
                     val agent = m.getString("agent")
-                    if (line.kind != "notify") {
+                    // Only a reply answers the person; any other kind (notify,
+                    // and later ones) leaves the turn and its steps alone.
+                    if (line.kind == "reply") {
                         // An answer ends the turn: the steps that led to it go with it.
                         typing.remove(id)
                         awaiting.remove(id)
