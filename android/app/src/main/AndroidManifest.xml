@@ -5,9 +5,15 @@
     <!-- The bridge, over the tailnet -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- No backup: the app will hold device keys and conversations -->
+    <!-- No backup and no transfer to a new phone: the app holds device keys
+         and will hold conversations. allowBackup="false" and
+         fullBackupContent cover Android 11 and older; dataExtractionRules
+         covers 12 and later, where allowBackup no longer stops
+         device-to-device transfer. -->
     <application
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:label="Enclos"
