@@ -384,6 +384,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         Composer(draft, { draft = it }, "Message $agent") {
             model.send(conversation, draft.trim())
             draft = ""
+            // What the person just sent shows, wherever they had scrolled.
+            atNewest = true
         }
     }
 }
