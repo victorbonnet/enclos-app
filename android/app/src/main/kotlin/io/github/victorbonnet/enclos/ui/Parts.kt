@@ -1,6 +1,11 @@
 package io.github.victorbonnet.enclos.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -35,6 +40,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -393,12 +401,36 @@ fun SystemLine(text: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** The message field and its send button. */
+/**
+ * The message field and its send button. While it cannot send ([canSend]
+ * false, such as while the host is not connected), the field still takes
+ * text, the button stays off, and [notice] above them says why.
+ */
 @Composable
-fun Composer(value: String, onValue: (String) -> Unit, placeholder: String, onSend: () -> Unit) {
+fun Composer(
+    value: String,
+    onValue: (String) -> Unit,
+    placeholder: String,
+    canSend: Boolean = true,
+    notice: String? = null,
+    onSend: () -> Unit,
+) {
     val p = palette
     Column(Modifier.fillMaxWidth().background(p.bg)) {
         Hairline()
+        AnimatedVisibility(notice != null, enter = fadeIn(Motion.enter()) + expandVertically(Motion.enter()), exit = fadeOut(Motion.exit()) + shrinkVertically(Motion.exit())) {
+            // Kept while it leaves, so the text does not vanish before the line closes.
+            var shown by remember { mutableStateOf(notice.orEmpty()) }
+            if (notice != null) shown = notice
+            Row(
+                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ConnectionDot(false)
+                Text(shown, style = Type.small, color = p.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
         Row(
             Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -422,7 +454,7 @@ fun Composer(value: String, onValue: (String) -> Unit, placeholder: String, onSe
                     }
                 },
             )
-            val enabled = value.isNotBlank()
+            val enabled = value.isNotBlank() && canSend
             val ground by animateColorAsState(if (enabled) p.buttonBg else p.surface, Motion.change(), label = "send")
             val arrow by animateColorAsState(if (enabled) p.buttonText else p.textFaint, Motion.change(), label = "arrow")
             Box(
