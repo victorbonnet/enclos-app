@@ -174,12 +174,15 @@ private fun ColumnScope.Chat(model: AppModel, id: String) {
             Text("$who$note: ${line.text}")
         }
     }
+    // Why the last message did not go: the draft stays until it does.
+    var unsent by remember { mutableStateOf<String?>(null) }
+    unsent?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     Row(verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(draft, { draft = it }, Modifier.weight(1f))
         Button(
             onClick = {
-                model.send(conversation, draft.trim())
-                draft = ""
+                unsent = model.send(conversation, draft.trim())
+                if (unsent == null) draft = ""
             },
             enabled = draft.isNotBlank(),
         ) { Text("Send") }

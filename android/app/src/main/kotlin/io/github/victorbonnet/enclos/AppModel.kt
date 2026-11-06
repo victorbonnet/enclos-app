@@ -54,6 +54,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             pairing.value = "Not an enclos pairing link: ${e.message}"
             return
         }
+        // Its address must name a host to connect to: `https://` alone passes
+        // the link's own check, and makes no WebSocket address.
+        val address = runCatching { java.net.URI(parsed.url) }.getOrNull()
+        if (address?.scheme != "https" || address.host.isNullOrBlank()) {
+            pairing.value = "Not an enclos pairing link: its address, ${parsed.url}, names no host"
+            return
+        }
         pairing.value = "Pairing with ${parsed.host}… confirm it in the host's terminal."
         val noise = generateNoiseKeypair()
         val alias = "enclos-device-${parsed.host}-${UUID.randomUUID()}"
@@ -81,7 +88,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                             deviceId = m.getString("device"),
                             noiseKeyWrapped = Keys.wrap(noise.privateKey),
                             keyAlias = alias,
-                            pushKey = decodeBytes(m.getString("push_key")),
+                            pushKeyWrapped = Keys.wrap(decodeBytes(m.getString("push_key"))),
                         )
                         hosts.add(host)
                         ui {
@@ -199,10 +206,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         return id
     }
 
-    fun send(conversation: Conversation, text: String) {
-        connections[conversation.host]?.send(
-            message("message.send", "conversation" to conversation.id, "text" to text),
-        )
+    /** Sends [text] to [conversation]'s agent; why it was not sent, or `null` once it was. */
+    fun send(conversation: Conversation, text: String): String? {
+        val out = message("message.send", "conversation" to conversation.id, "text" to text)
+        if (!fits(out)) {
+            return "Too long to send: ${text.toByteArray(Charsets.UTF_8).size / 1000} KB, and at most about 63 KB go at once."
+        }
+        val sent = connections[conversation.host]?.send(out) == true
+        return if (sent) null else "Not sent: not connected to ${conversation.host}. Your message is still here."
     }
 
     fun reconnect(name: String) {

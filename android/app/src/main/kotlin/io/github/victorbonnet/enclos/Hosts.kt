@@ -19,7 +19,12 @@ data class Host(
     val noiseKeyWrapped: ByteArray,
     /** The alias of this device's signing key for that host. */
     val keyAlias: String,
-    val pushKey: ByteArray,
+    /**
+     * The key the bridge seals notification previews with, wrapped by the
+     * keystore as the Noise key is: a copy of the preferences opens no
+     * preview ([Keys.unwrap] when one is opened).
+     */
+    val pushKeyWrapped: ByteArray,
 )
 
 /** The paired hosts, in the app's private preferences. Nothing here is usable without the keystore. */
@@ -31,7 +36,8 @@ class Hosts(context: Context) {
 
     fun all(): List<Host> {
         val array = JSONArray(prefs.getString("hosts", "[]"))
-        return (0 until array.length()).map { i ->
+        var unwrapped = false
+        val hosts = (0 until array.length()).map { i ->
             val o = array.getJSONObject(i)
             Host(
                 name = o.getString("name"),
@@ -40,13 +46,24 @@ class Hosts(context: Context) {
                 deviceId = o.getString("deviceId"),
                 noiseKeyWrapped = unb64(o.getString("noiseKey")),
                 keyAlias = o.getString("keyAlias"),
-                pushKey = unb64(o.getString("pushKey")),
+                // An earlier version kept the push key as it came: wrapped now, and written back.
+                pushKeyWrapped = if (o.has("pushKeyWrapped")) {
+                    unb64(o.getString("pushKeyWrapped"))
+                } else {
+                    unwrapped = true
+                    Keys.wrap(unb64(o.getString("pushKey")))
+                },
             )
         }
+        if (unwrapped) save(hosts)
+        return hosts
     }
 
     fun add(host: Host) {
-        val hosts = all().filter { it.name != host.name } + host
+        save(all().filter { it.name != host.name } + host)
+    }
+
+    private fun save(hosts: List<Host>) {
         val array = JSONArray()
         hosts.forEach { h ->
             array.put(
@@ -57,15 +74,14 @@ class Hosts(context: Context) {
                     .put("deviceId", h.deviceId)
                     .put("noiseKey", b64(h.noiseKeyWrapped))
                     .put("keyAlias", h.keyAlias)
-                    .put("pushKey", b64(h.pushKey)),
+                    .put("pushKeyWrapped", b64(h.pushKeyWrapped)),
             )
         }
-        prefs.edit().putString("hosts", array.toString()).apply()
+        // Written at once: a key must not stay in the clear, or be lost, if the app stops right after.
+        prefs.edit().putString("hosts", array.toString()).commit()
     }
 
     fun remove(name: String) {
-        val kept = all().filter { it.name != name }
-        prefs.edit().putString("hosts", "[]").apply()
-        kept.forEach { add(it) }
+        save(all().filter { it.name != name })
     }
 }
