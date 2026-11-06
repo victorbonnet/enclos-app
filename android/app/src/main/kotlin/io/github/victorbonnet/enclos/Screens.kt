@@ -176,7 +176,7 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
             LargeTitle("Inbox", action = if (model.paired.isEmpty() || sorted.isEmpty()) null else {
                 {
                     IconButton(
-                        Glyphs.unread,
+                        if (unreadOnly) Glyphs.unreadOn else Glyphs.unreadOff,
                         if (unreadOnly) "Show all conversations" else "Show unread only",
                         { filter = if (unreadOnly) InboxFilter.All else InboxFilter.Unread },
                         tint = if (unreadOnly) palette.accent else palette.textMuted,

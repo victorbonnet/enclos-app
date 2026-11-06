@@ -53,12 +53,20 @@ object Glyphs {
     /** Clear a field: an addition to the design's set. */
     val clear = glyph("clear", strokes = listOf("M6 6l12 12M18 6L6 18"))
     /**
-     * Unread only: the inbox's bubble, open at its top right, where a
-     * filled square marks what is unread. An addition to the design's set.
+     * Unread only, off: the inbox's bubble in outline, open at its top
+     * right, where an outlined square stands for what is unread. An
+     * addition to the design's set.
      */
-    val unread = glyph(
-        "unread",
-        strokes = listOf("M13 5H4v12h3v3l4-3h9v-6"),
-        fills = listOf(rect(16f, 3f, 6f, 6f)),
+    val unreadOff = glyph(
+        "unread-off",
+        strokes = listOf("M13 5H4v12h3v3l4-3h9v-6", rect(17f, 4f, 4f, 4f)),
+    )
+    /**
+     * Unread only, on: the same bubble and square, filled; a notch keeps
+     * them apart. An addition to the design's set.
+     */
+    val unreadOn = glyph(
+        "unread-on",
+        fills = listOf("M3 4h11v8h7v6h-9.6L6 22v-4H3z", rect(16f, 3f, 6f, 6f)),
     )
 }
