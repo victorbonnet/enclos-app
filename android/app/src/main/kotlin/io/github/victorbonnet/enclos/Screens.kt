@@ -152,7 +152,12 @@ private fun ThemeSetting(model: AppModel) {
 
 // ---------- Inbox ----------
 
-/** Every conversation with every agent, on every host, newest first; one with no message yet is not listed. */
+/**
+ * Every agent of every host, the one with the newest conversation first:
+ * its row opens its Home; under it, its conversations with something
+ * unread, or all of them once unfolded, newest first. One with no message
+ * yet is not listed.
+ */
 @Composable
 fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> Unit, pair: () -> Unit) {
     val sorted = model.conversations.filter(model::listed)
@@ -160,22 +165,11 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
     var query by rememberSaveable { mutableStateOf("") }
     var filter by remember { mutableStateOf<InboxFilter>(InboxFilter.All) }
     val found = search(sorted, { model.lines[it].orEmpty() }, model::unread, query, filter)
-    // An agent's Home first, the rest newest first: pinned in the list and in its agent's group.
-    val homeFirst = { list: List<Found> -> list.sortedBy { !it.conversation.home } }
-    val grouped = model.grouped.value
+    val narrowed = query.isNotBlank() || filter != InboxFilter.All
+    val agents = byAgent(sorted, found, model.unfolded.toSet(), model::unread, narrowed)
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            // Grouping by agent sits on the title's line, in `accent` while on.
-            LargeTitle("Inbox", action = if (sorted.isEmpty()) null else {
-                {
-                    IconButton(
-                        Glyphs.group,
-                        if (grouped) "Show newest first" else "Group by agent",
-                        { model.group(!grouped) },
-                        tint = if (grouped) palette.accent else palette.textMuted,
-                    )
-                }
-            })
+            LargeTitle("Inbox")
             when {
                 model.paired.isEmpty() -> Empty(
                     "No host yet.",
@@ -199,27 +193,31 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
                                 )
                             }
                         }
-                        if (grouped) {
-                            // Each agent under its header, the most recently active first;
-                            // a header folds its conversations away.
-                            byAgent(found).forEach { group ->
-                                val shut = group.address in model.folded
-                                item(key = "agent:${group.address}") {
-                                    Arriving {
-                                        AgentHeader(model, group, shut) {
-                                            if (shut) model.folded.remove(group.address) else model.folded.add(group.address)
-                                        }
-                                    }
-                                }
-                                if (!shut) {
-                                    items(homeFirst(group.found), key = { it.conversation.id }) { f ->
-                                        Arriving { ConversationRow(model, f.conversation, f.match, query, grouped = true) { open(f.conversation.id) } }
-                                    }
+                        // An agent that moves to the top slides there, its conversations with it.
+                        agents.forEach { entry ->
+                            val unfolded = entry.address in model.unfolded
+                            item(key = "agent:${entry.address}") {
+                                Arriving {
+                                    AgentRow(
+                                        model,
+                                        entry,
+                                        query,
+                                        unfolded = unfolded,
+                                        // A search or filter shows everything it found: nothing to fold.
+                                        foldable = !narrowed && entry.others > 0,
+                                        onOpen = {
+                                            val home = entry.home
+                                            when {
+                                                home != null -> open(home.id)
+                                                unfolded -> model.unfolded.remove(entry.address)
+                                                else -> model.unfolded.add(entry.address)
+                                            }
+                                        },
+                                        onFold = { if (unfolded) model.unfolded.remove(entry.address) else model.unfolded.add(entry.address) },
+                                    )
                                 }
                             }
-                        } else {
-                            // A conversation that moves to the top slides there.
-                            items(homeFirst(found), key = { it.conversation.id }) { f ->
+                            items(entry.under, key = { it.conversation.id }) { f ->
                                 Arriving { ConversationRow(model, f.conversation, f.match, query) { open(f.conversation.id) } }
                             }
                         }
@@ -323,86 +321,47 @@ private fun highlighted(text: String, query: String, accent: Color): AnnotatedSt
 }
 
 /**
- * A conversation in the inbox: the agent, the conversation's name (or its
- * address while it has none), the time, the last message or the one the
- * search found, and the unread count.
+ * A conversation under its agent in the inbox, starting where the agent's
+ * name does: its name ("No name yet" while it has none), the time, the
+ * last message or the one the search found (or, while the agent works on
+ * it, the wave and what it does), and the unread count.
  */
 @Composable
-private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, query: String, grouped: Boolean = false, onClick: () -> Unit) {
+private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, query: String, onClick: () -> Unit) {
     val p = palette
     // The last message, not a status line (gateway online) when there is anything else.
     val all = model.lines[c.id].orEmpty()
     val last = all.lastOrNull { !it.status } ?: all.lastOrNull()
     val unread = model.unread(c.id)
-    val agent = c.agent.substringAfter('/')
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        // Under its agent's header, a row starts where the header's name does, without the avatar.
-        val start = if (grouped) 74.dp else 16.dp
-        Row(Modifier.fillMaxWidth().padding(start = start, end = 16.dp, top = 12.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            if (!grouped) AgentAvatar(agent, live = model.connected(c.host))
+        Row(Modifier.fillMaxWidth().padding(start = 74.dp, end = 16.dp, top = 12.dp, bottom = 12.dp)) {
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (grouped) {
-                        // The agent is in the header: the conversation's name leads.
-                        Text(
-                            c.title?.let { highlighted(it, query, p.accent) } ?: AnnotatedString("No name yet"),
-                            style = Type.name,
-                            color = if (c.title != null) p.text else p.textMuted,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                    } else {
-                        Text(agent, style = Type.name, color = p.text, maxLines = 1)
-                        // Its name, as the agent or the person gave it; the address until then.
-                        val title = c.title
-                        if (title != null) {
-                            Text(
-                                highlighted(title, query, p.accent),
-                                style = Type.small,
-                                color = p.textMuted,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f).padding(bottom = 1.dp),
-                            )
-                        } else {
-                            Text(
-                                "${c.host}/${c.agent}",
-                                style = Type.code,
-                                color = p.textFaint,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f).padding(bottom = 2.dp),
-                            )
-                        }
-                    }
+                    Text(
+                        c.title?.let { highlighted(it, query, p.accent) } ?: AnnotatedString("No name yet"),
+                        style = Type.name,
+                        color = if (c.title != null) p.text else p.textMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
                     if (last != null) {
                         Text(Times.inList(last.time), style = Type.code, color = if (unread > 0) p.accent else p.textFaint, modifier = Modifier.padding(bottom = 2.dp))
                     }
                 }
-                if (last?.kind == "notify") {
+                if (last?.kind == "notify" && match == null) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         Glyph(Glyphs.clock, p.accent, size = 14.dp)
                         Text(ON_ITS_OWN, style = Type.meta, color = p.accent)
                     }
                 }
                 Row(Modifier.padding(top = 3.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // The message the search found, else the last; the words, without markdown.
-                    val shown = match ?: last
-                    val words = when {
-                        shown == null && c.home -> "Cron jobs and the agent's notices come here."
-                        shown == null -> "No message yet"
-                        shown.from == "agent" -> remember(shown.text) { words(shown) }
-                        else -> "You: ${shown.text}"
+                    if (match == null && model.working(c.id)) {
+                        Doing(model.doing(c.id) ?: "working", Modifier.weight(1f))
+                    } else {
+                        // The message the search found, else the last; the words, without markdown.
+                        Preview(match ?: last, match != null, query, unread > 0, "No message yet", Modifier.weight(1f))
                     }
-                    Text(
-                        if (match != null) highlighted(words, query, p.accent) else AnnotatedString(words),
-                        style = Type.small,
-                        color = if (unread > 0) p.text else p.textMuted,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
                     AnimatedVisibility(
                         visible = unread > 0,
                         enter = fadeIn(Motion.enter(Motion.SHORT)) + scaleIn(Motion.enter(Motion.SHORT), initialScale = 0.6f),
@@ -415,47 +374,120 @@ private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, quer
     }
 }
 
+/** A message in a list: its words without markdown on two lines at most, the person's prefixed "You:"; [found] words in `accent`. */
+@Composable
+private fun Preview(shown: Line?, found: Boolean, query: String, unread: Boolean, none: String, modifier: Modifier) {
+    val p = palette
+    val words = when {
+        shown == null -> none
+        shown.from == "agent" -> remember(shown.text) { words(shown) }
+        else -> "You: ${shown.text}"
+    }
+    Text(
+        if (found) highlighted(words, query, p.accent) else AnnotatedString(words),
+        style = Type.small,
+        color = if (unread) p.text else p.textMuted,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier,
+    )
+}
+
+/** The agent at work, in a list: the wave, then what it does, in `accent`. */
+@Composable
+private fun Doing(text: String, modifier: Modifier = Modifier) {
+    Row(modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        WorkingWave(square = 4.dp, lift = 3.dp)
+        Text(text, style = Type.small, color = palette.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
 /**
- * An agent's header in the grouped inbox, on `surface`: its avatar, name and
- * address, how many of its conversations show, their unread total, and a
- * chevron, down while open; tapping it folds them away or opens them.
+ * An agent in the inbox: its avatar (pulsing while it works), its name,
+ * the time of its newest message, its Home's last message (or the one a
+ * search found) or, while it works, the wave and what it does and where,
+ * and its Home's unread count. Tapping it opens its Home. When [foldable],
+ * a chevron over the count of its other conversations, at its end,
+ * unfolds them or folds them away.
  */
 @Composable
-private fun AgentHeader(model: AppModel, group: Group, shut: Boolean, onToggle: () -> Unit) {
+private fun AgentRow(
+    model: AppModel,
+    entry: AgentEntry,
+    query: String,
+    unfolded: Boolean,
+    foldable: Boolean,
+    onOpen: () -> Unit,
+    onFold: () -> Unit,
+) {
     val p = palette
-    val host = group.address.substringBefore('/')
-    val name = group.address.substringAfterLast('/')
-    val unread = group.found.sumOf { model.unread(it.conversation.id) }
-    val turn by animateFloatAsState(if (shut) 0f else 90f, Motion.change(), label = "chevron")
-    val count = group.found.size
-    Column(
-        Modifier.fillMaxWidth().background(p.surface)
-            .clickable(onClickLabel = if (shut) "Show $name's conversations" else "Fold $name's conversations", onClick = onToggle)
-            .semantics { heading() },
-    ) {
+    val host = entry.address.substringBefore('/')
+    val name = entry.address.substringAfterLast('/')
+    val home = entry.home
+    val all = home?.let { model.lines[it.id] }.orEmpty()
+    val last = all.lastOrNull { !it.status } ?: all.lastOrNull()
+    val unread = home?.let { model.unread(it.id) } ?: 0
+    val working = model.workingOn(entry.address)
+    val newest = model.lastAt(entry.address)
+    val turn by animateFloatAsState(if (unfolded) 90f else 0f, Motion.change(), label = "chevron")
+    Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            Modifier.fillMaxWidth()
+                .clickable(onClickLabel = if (home != null) "Open $name's Home" else null, onClick = onOpen)
+                .padding(start = 16.dp, end = if (foldable) 0.dp else 16.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            AgentAvatar(name, live = model.connected(host))
+            AgentAvatar(name, live = model.connected(host), working = working.isNotEmpty())
             Column(Modifier.weight(1f)) {
-                Text(name, style = Type.name, color = p.text, maxLines = 1)
-                // The count first: a long address is what gets cut.
-                Text(
-                    "$count ${if (count == 1) "conversation" else "conversations"} · ${group.address}",
-                    style = Type.code,
-                    color = p.textFaint,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(name, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    if (newest != null) {
+                        Text(Times.inList(newest), style = Type.code, color = if (unread > 0) p.accent else p.textFaint, modifier = Modifier.padding(bottom = 2.dp))
+                    }
+                }
+                Row(Modifier.padding(top = 3.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val at = working.firstOrNull()
+                    if (at != null && entry.homeMatch == null) {
+                        val where = when {
+                            working.size > 1 -> " · in ${working.size} conversations"
+                            at.home -> ""
+                            else -> " · in ${at.title ?: "a new conversation"}"
+                        }
+                        Doing((model.doing(at.id) ?: "working") + where, Modifier.weight(1f))
+                    } else {
+                        Preview(
+                            entry.homeMatch ?: last,
+                            entry.homeMatch != null,
+                            query,
+                            unread > 0,
+                            if (home != null) "Cron jobs and the agent's notices come here." else "${entry.others} conversations",
+                            Modifier.weight(1f),
+                        )
+                    }
+                    AnimatedVisibility(
+                        visible = unread > 0,
+                        enter = fadeIn(Motion.enter(Motion.SHORT)) + scaleIn(Motion.enter(Motion.SHORT), initialScale = 0.6f),
+                        exit = fadeOut(Motion.exit()) + scaleOut(Motion.exit(), targetScale = 0.6f),
+                    ) { UnreadBadge(unread.coerceAtLeast(1)) }
+                }
             }
-            AnimatedVisibility(
-                visible = unread > 0,
-                enter = fadeIn(Motion.enter(Motion.SHORT)) + scaleIn(Motion.enter(Motion.SHORT), initialScale = 0.6f),
-                exit = fadeOut(Motion.exit()) + scaleOut(Motion.exit(), targetScale = 0.6f),
-            ) { UnreadBadge(unread.coerceAtLeast(1)) }
-            Box(Modifier.rotate(turn)) { Glyph(Glyphs.chevron, p.textMuted, size = 20.dp) }
+            if (foldable) {
+                // Its own target: the row opens Home, this folds.
+                Column(
+                    Modifier.size(width = 48.dp, height = 56.dp)
+                        .clickable(
+                            onClickLabel = if (unfolded) "Fold $name's conversations" else "Show $name's ${entry.others} conversations",
+                            role = Role.Button,
+                            onClick = onFold,
+                        ),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Box(Modifier.rotate(turn)) { Glyph(Glyphs.chevron, p.textMuted, size = 20.dp) }
+                    Text("${entry.others}", style = Type.meta, color = p.textFaint)
+                }
+            }
         }
         Hairline()
     }

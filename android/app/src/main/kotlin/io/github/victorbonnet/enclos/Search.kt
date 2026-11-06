@@ -48,16 +48,53 @@ fun search(
     }
 }
 
-/** An agent's conversations in the inbox, grouped: its address `host/sandbox/agent`, and what was found of them. */
-data class Group(val address: String, val found: List<Found>)
+/**
+ * An agent in the inbox, by its address `host/sandbox/agent`: its [home]
+ * (which its row opens) and the message of it a search found, the
+ * conversations listed [under] it, and how many [others] it has besides
+ * its Home, folded or not.
+ */
+data class AgentEntry(
+    val address: String,
+    val home: Conversation?,
+    val homeMatch: Line?,
+    val under: List<Found>,
+    val others: Int,
+)
+
+private val Conversation.address get() = "$host/$agent"
 
 /**
- * [found] by agent: each agent once, where its first conversation was (so
- * the agent with the newest conversation first), its conversations in the
- * order they were.
+ * The inbox by agent. [sorted] is every listed conversation, the newest
+ * first; [found] what the search and filter let through, in that order.
+ * Each agent once, the one with the newest conversation first. Under it,
+ * newest first, its conversations other than Home: every one while it is
+ * in [unfolded], else only those with something [unread]. While [narrowed]
+ * (a search or a filter), an agent shows only if something of it was
+ * found, and everything found shows, folded or not.
  */
-fun byAgent(found: List<Found>): List<Group> =
-    found.groupBy { "${it.conversation.host}/${it.conversation.agent}" }.map { (address, its) -> Group(address, its) }
+fun byAgent(
+    sorted: List<Conversation>,
+    found: List<Found>,
+    unfolded: Set<String>,
+    unread: (String) -> Int,
+    narrowed: Boolean,
+): List<AgentEntry> {
+    val all = sorted.groupBy { it.address }
+    val shown = (if (narrowed) found.map { it.conversation } else sorted).map { it.address }.distinct()
+    return shown.map { address ->
+        val its = all[address].orEmpty()
+        val home = its.firstOrNull { it.home }
+        val others = its.filter { !it.home }
+        val under = if (narrowed) {
+            found.filter { it.conversation.address == address && !it.conversation.home }
+        } else {
+            others.filter { address in unfolded || unread(it.id) > 0 }.map { Found(it, null) }
+        }
+        val homeMatch = found.firstOrNull { it.conversation.id == home?.id }?.match
+        AgentEntry(address, home, homeMatch, under, others.size)
+    }
+}
 
 /**
  * A short label for each agent address `host/sandbox/agent`: its name, or
