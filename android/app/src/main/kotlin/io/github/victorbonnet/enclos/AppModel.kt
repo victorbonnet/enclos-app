@@ -76,7 +76,16 @@ data class Conversation(
     val title: String? = null,
     /** Who named it: `agent` or `person`. */
     val titledBy: String? = null,
+    /**
+     * The agent's Home, which its bridge keeps: where what has no
+     * conversation of its own goes (cron jobs, the runtime's notices). Shown
+     * first, never hidden as empty.
+     */
+    val home: Boolean = false,
 )
+
+/** A message the runtime sends about itself (gateway online, shutting down): a quiet line, never unread. */
+val Line.status: Boolean get() = kind == "status"
 
 /** The pairing in progress: what the link said, and how far it went. */
 data class Pairing(
@@ -226,7 +235,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** The agent's messages in [conversation] not read on this device yet. */
     fun unread(conversation: String): Int {
         val read = lastRead[conversation] ?: 0
-        return lines[conversation].orEmpty().count { it.from == "agent" && it.seq > read }
+        return lines[conversation].orEmpty().count { it.from == "agent" && !it.status && it.seq > read }
     }
 
     /** Marks every message of [conversation] read. */
@@ -457,6 +466,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     id,
                     m.optString("title").ifBlank { null },
                     m.optString("titled_by").ifBlank { null },
+                    home = m.optBoolean("home"),
                 )
                 val at = conversations.indexOfFirst { it.id == id }
                 if (at < 0 || conversations[at] != known) {
@@ -566,8 +576,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         return id
     }
 
-    /** Whether the inbox lists [conversation]: once something was said in it. */
-    fun listed(conversation: Conversation) = !lines[conversation.id].isNullOrEmpty()
+    /** Whether the inbox lists [conversation]: once something was said in it, and an agent's Home always. */
+    fun listed(conversation: Conversation) = conversation.home || !lines[conversation.id].isNullOrEmpty()
 
     /**
      * Names [conversation] (an empty [title] clears its name, and the agent
