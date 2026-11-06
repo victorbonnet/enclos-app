@@ -39,7 +39,11 @@ object Glyphs {
         strokes = listOf("M9 4H4v5M15 4h5v5M4 15v5h5M20 15v5h-5"),
         fills = listOf(rect(10f, 10f, 4f, 4f)),
     )
-    val status = glyph("status", strokes = listOf(rect(3f, 4f, 18f, 12f), "M8 20h8M12 16v4"))
+    /** Settings: two sliders, each with a square knob. An addition to the design's set. */
+    val settings = glyph(
+        "settings",
+        strokes = listOf("M4 7h9M17 7h3M4 17h3M11 17h9", rect(13f, 5f, 4f, 4f), rect(7f, 15f, 4f, 4f)),
+    )
     val qr = glyph(
         "qr",
         strokes = listOf(rect(4f, 4f, 6f, 6f), rect(14f, 4f, 6f, 6f), rect(4f, 14f, 6f, 6f), "M14 14h2v2h-2zM18 18h2v2h-2zM18 14h2M14 18v2"),
