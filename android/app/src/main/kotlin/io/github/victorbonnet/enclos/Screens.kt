@@ -198,27 +198,24 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
                             val unfolded = entry.address in model.unfolded
                             item(key = "agent:${entry.address}") {
                                 Arriving {
-                                    AgentRow(
-                                        model,
-                                        entry,
-                                        query,
-                                        unfolded = unfolded,
-                                        // A search or filter shows everything it found: nothing to fold.
-                                        foldable = !narrowed && entry.others > 0,
-                                        onOpen = {
-                                            val home = entry.home
-                                            when {
-                                                home != null -> open(home.id)
-                                                unfolded -> model.unfolded.remove(entry.address)
-                                                else -> model.unfolded.add(entry.address)
-                                            }
-                                        },
-                                        onFold = { if (unfolded) model.unfolded.remove(entry.address) else model.unfolded.add(entry.address) },
-                                    )
+                                    val fold = { if (unfolded) model.unfolded.remove(entry.address) else model.unfolded.add(entry.address) }
+                                    // Its Home; with none, its conversations.
+                                    AgentRow(model, entry, query) { entry.home?.let { open(it.id) } ?: fold() }
                                 }
                             }
                             items(entry.under, key = { it.conversation.id }) { f ->
                                 Arriving { ConversationRow(model, f.conversation, f.match, query) { open(f.conversation.id) } }
+                            }
+                            // A search or filter shows everything it found: nothing to fold.
+                            val hidden = entry.others - entry.under.size
+                            if (!narrowed && (unfolded || hidden > 0)) {
+                                item(key = "more:${entry.address}") {
+                                    Arriving {
+                                        MoreRow(entry.address.substringAfterLast('/'), hidden, entry.under.size, unfolded) {
+                                            if (unfolded) model.unfolded.remove(entry.address) else model.unfolded.add(entry.address)
+                                        }
+                                    }
+                                }
                             }
                         }
                         item { Spacer(Modifier.height(88.dp)) }
@@ -400,20 +397,11 @@ private fun Doing(text: String, modifier: Modifier = Modifier) {
  * An agent in the inbox: its avatar (pulsing while it works), its name,
  * the time of its newest message, its Home's last message (or the one a
  * search found) or, while it works, the wave and what it does and where,
- * and its Home's unread count. Tapping it opens its Home. When [foldable],
- * a chevron over the count of its other conversations, at its end,
- * unfolds them or folds them away.
+ * and its Home's unread count. Tapping it opens its Home; its other
+ * conversations unfold from the [MoreRow] that ends its group.
  */
 @Composable
-private fun AgentRow(
-    model: AppModel,
-    entry: AgentEntry,
-    query: String,
-    unfolded: Boolean,
-    foldable: Boolean,
-    onOpen: () -> Unit,
-    onFold: () -> Unit,
-) {
+private fun AgentRow(model: AppModel, entry: AgentEntry, query: String, onOpen: () -> Unit) {
     val p = palette
     val host = entry.address.substringBefore('/')
     val name = entry.address.substringAfterLast('/')
@@ -423,12 +411,11 @@ private fun AgentRow(
     val unread = home?.let { model.unread(it.id) } ?: 0
     val working = model.workingOn(entry.address)
     val newest = model.lastAt(entry.address)
-    val turn by animateFloatAsState(if (unfolded) 90f else 0f, Motion.change(), label = "chevron")
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth()
                 .clickable(onClickLabel = if (home != null) "Open $name's Home" else null, onClick = onOpen)
-                .padding(start = 16.dp, end = if (foldable) 0.dp else 16.dp, top = 12.dp, bottom = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -466,22 +453,41 @@ private fun AgentRow(
                     ) { UnreadBadge(unread.coerceAtLeast(1)) }
                 }
             }
-            if (foldable) {
-                // Its own target: the row opens Home, this folds.
-                Column(
-                    Modifier.size(width = 48.dp, height = 56.dp)
-                        .clickable(
-                            onClickLabel = if (unfolded) "Fold $name's conversations" else "Show $name's ${entry.others} conversations",
-                            role = Role.Button,
-                            onClick = onFold,
-                        ),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Box(Modifier.rotate(turn)) { Glyph(Glyphs.chevron, p.textMuted, size = 20.dp) }
-                    Text("${entry.others}", style = Type.meta, color = p.textFaint)
-                }
-            }
+        }
+        Hairline()
+    }
+}
+
+/**
+ * The end of an agent's group, starting where its conversations do, in
+ * `accent`: what is folded away and a chevron pointing down (`17
+ * conversations`, `15 more conversations` when some show already), or
+ * `Show less` and the chevron pointing up once unfolded. Tapping it unfolds
+ * or folds them.
+ */
+@Composable
+private fun MoreRow(name: String, hidden: Int, shown: Int, unfolded: Boolean, onClick: () -> Unit) {
+    val p = palette
+    val turn by animateFloatAsState(if (unfolded) -90f else 90f, Motion.change(), label = "chevron")
+    val text = when {
+        unfolded -> "Show less"
+        shown > 0 -> "$hidden more ${if (hidden == 1) "conversation" else "conversations"}"
+        else -> "$hidden ${if (hidden == 1) "conversation" else "conversations"}"
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth()
+                .clickable(
+                    onClickLabel = if (unfolded) "Fold $name's conversations" else "Show $name's conversations",
+                    role = Role.Button,
+                    onClick = onClick,
+                )
+                .padding(start = 74.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(text, style = Type.label, color = p.accent)
+            Box(Modifier.rotate(turn)) { Glyph(Glyphs.chevron, p.accent, size = 18.dp) }
         }
         Hairline()
     }
