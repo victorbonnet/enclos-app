@@ -158,7 +158,19 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         }
     }
 
-    /** Forgets all that [host] sent: it was paired again, as another device. */
+    /** Forgets all that every host sent: the cache was cleared; each syncs again. */
+    fun clear() {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            listOf("messages", "conversations", "agents").forEach { db.delete(it, null, null) }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** Forgets all that [host] sent: it was paired again as another device, or forgotten. */
     fun forget(host: String) {
         val db = writableDatabase
         db.beginTransaction()

@@ -531,10 +531,42 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, pair: () -> Unit) {
 
 // ---------- Status ----------
 
-/** A read-only view of the paired hosts and their connections. Nothing here acts on sandboxes. */
+/**
+ * The paired hosts and their connections, and what the phone keeps: forget a
+ * host, clear the cache. Nothing here acts on a sandbox.
+ */
 @Composable
 fun StatusScreen(model: AppModel, pair: () -> Unit) {
     val p = palette
+    var forgetting by remember { mutableStateOf<String?>(null) }
+    var clearing by remember { mutableStateOf(false) }
+    forgetting?.let { name ->
+        val live = model.connected(name)
+        ConfirmDialog(
+            title = "Forget $name?",
+            text = if (live) {
+                "This phone is unpaired on $name, and its conversations and files here are deleted. They stay on the host. To use it again, pair again."
+            } else {
+                "Its conversations and files here are deleted. Not connected: $name keeps this phone listed until you run enclos app unpair there. To use it again, pair again."
+            },
+            confirm = "Forget",
+            onDismiss = { forgetting = null },
+        ) {
+            model.forgetHost(name)
+            forgetting = null
+        }
+    }
+    if (clearing) {
+        ConfirmDialog(
+            title = "Clear the cache?",
+            text = "The conversations and files kept on this phone are deleted, then synced again from each host. Pairings stay.",
+            confirm = "Clear",
+            onDismiss = { clearing = false },
+        ) {
+            model.clearCache()
+            clearing = false
+        }
+    }
     Column(Modifier.fillMaxSize()) {
         LargeTitle("Status")
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
@@ -551,10 +583,24 @@ fun StatusScreen(model: AppModel, pair: () -> Unit) {
                     model.said[host.name]?.let { Text("The bridge said: $it", style = Type.small, color = p.textMuted) }
                     Text(host.url.removePrefix("https://"), style = Type.code, color = p.textFaint)
                     if (!live) TextLink("Reconnect →") { model.reconnect(host.name) }
+                    TextLink("Forget this host") { forgetting = host.name }
                 }
                 Hairline()
             }
             ThemeSetting(model)
+            Hairline()
+            // What the phone keeps: synced again from the hosts when cleared.
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text("On this phone", style = Type.label, color = p.text)
+                Gap(4.dp)
+                val count = model.conversations.size
+                Text(
+                    "$count ${if (count == 1) "conversation" else "conversations"} and the files shown in them, kept to open at once.",
+                    style = Type.small,
+                    color = p.textMuted,
+                )
+                TextLink("Clear cache") { clearing = true }
+            }
             Hairline()
             Column(Modifier.padding(horizontal = 16.dp)) {
                 TextLink("Pair a host →", pair)
@@ -713,6 +759,21 @@ private fun RenameDialog(current: String?, onDismiss: () -> Unit, onSave: (Strin
                 DialogButton("Cancel", onClick = onDismiss)
             }
         },
+    )
+}
+
+/** A question before something that cannot be undone: [confirm] does it, Cancel does not. */
+@Composable
+private fun ConfirmDialog(title: String, text: String, confirm: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    val p = palette
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = p.surface,
+        shape = Shapes.bubble,
+        title = { Text(title, style = Type.heading, color = p.text) },
+        text = { Text(text, style = Type.small, color = p.textMuted) },
+        confirmButton = { DialogButton(confirm, onClick = onConfirm) },
+        dismissButton = { DialogButton("Cancel", onClick = onDismiss) },
     )
 }
 

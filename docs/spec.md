@@ -52,7 +52,10 @@ Each paired host, with a filled square while connected (`connected · tailnet`) 
 
 ### Status
 
-Read-only: each paired host, its connection (who it is connected as, or why not), the bridge's last error, its address, and Reconnect when it is not connected; the [theme](#7-theme); Pair a host; the core's version. Nothing here acts on a sandbox.
+Each paired host, its connection (who it is connected as, or why not), the bridge's last error, its address, Reconnect when it is not connected, and Forget this host; the [theme](#7-theme); what is kept on this phone, and Clear cache; Pair a host; the core's version. Nothing here acts on a sandbox.
+
+- **Forget this host**, after a confirmation: connected, the app asks the bridge to unpair this phone (enclos `docs/protocol.md`, `device.forget`); not connected, the host keeps it listed until `enclos app unpair` there, which the confirmation says. Either way the phone deletes its device key and Noise key for that host, and everything it kept from it: agents, conversations, messages, files, how far they were read. The conversations stay on the host. Using it again means pairing again.
+- **Clear cache**, after a confirmation: deletes the conversations, messages, agents and files kept on this phone, then syncs everything again from each connected host. Pairings stay, and how far each conversation was read comes back from the bridges.
 
 ### Conversation
 
