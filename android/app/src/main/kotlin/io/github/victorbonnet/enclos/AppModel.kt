@@ -232,6 +232,25 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun working(conversation: String) =
         typing[conversation] == true || awaiting[conversation] == true || steps[conversation].orEmpty().any { !it.done }
 
+    private fun conversationsOf(agent: Agent) = conversations.filter { it.host == agent.host && it.agent == agent.name }
+
+    /** The conversations [agent] is working on now, the one with the newest message first. */
+    fun workingOn(agent: Agent): List<Conversation> =
+        conversationsOf(agent).filter { working(it.id) }.sortedByDescending { lines[it.id]?.lastOrNull()?.time ?: 0L }
+
+    /** What the agent is doing in [conversation] now: the tool it runs, if it said which. */
+    fun doing(conversation: String): String? =
+        steps[conversation].orEmpty().lastOrNull { !it.done }?.let { it.label ?: it.name }
+
+    /**
+     * When [agent] last sent a message in any of its conversations (the
+     * runtime's notices aside), in seconds since the Unix epoch; null before
+     * its first one this phone knows of.
+     */
+    fun lastActive(agent: Agent): Long? = conversationsOf(agent)
+        .mapNotNull { c -> lines[c.id]?.lastOrNull { it.from == "agent" && !it.status }?.time?.takeIf { it > 0 } }
+        .maxOrNull()
+
     /** The agent's messages in [conversation] not read on this device yet. */
     fun unread(conversation: String): Int {
         val read = lastRead[conversation] ?: 0
