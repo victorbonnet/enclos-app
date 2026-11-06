@@ -58,7 +58,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -436,9 +438,15 @@ fun Composer(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // Its own cursor: text put in from outside (a command picked) leaves it at the end.
+            var field by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+            if (field.text != value) field = TextFieldValue(value, TextRange(value.length))
             BasicTextField(
-                value = value,
-                onValueChange = onValue,
+                value = field,
+                onValueChange = {
+                    field = it
+                    if (it.text != value) onValue(it.text)
+                },
                 textStyle = Type.message.copy(color = p.text),
                 cursorBrush = SolidColor(p.accent),
                 maxLines = 5,

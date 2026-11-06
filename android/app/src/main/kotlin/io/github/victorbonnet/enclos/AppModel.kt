@@ -190,6 +190,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private val awaiting = mutableStateMapOf<String, Boolean>()
     /** By conversation: the tools the agent runs now, live from the bridge. */
     val steps = mutableStateMapOf<String, List<Step>>()
+    /**
+     * By agent (`host/sandbox/agent`): the commands the person may type to
+     * its runtime, as its bridge last sent them; kept while the app runs.
+     */
+    val commands = mutableStateMapOf<String, List<AgentCommand>>()
     /** By conversation: the last message read on this device, kept across launches. */
     private val lastRead = mutableStateMapOf<String, Long>().apply {
         reads.all.forEach { (id, seq) -> if (seq is Long) put(id, seq) }
@@ -553,6 +558,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             // A part of a file: written where it goes, then the next asked for.
             "attachment.data" -> received(host, m.getString("attachment"), m.getLong("offset"), m.getLong("size"), m.getString("data"))
+            // An agent's commands, the whole list: replaces the one before.
+            "commands" -> {
+                val list = m.optJSONArray("commands")
+                commands["${host.name}/${m.getString("agent")}"] = (0 until (list?.length() ?: 0)).mapNotNull { i ->
+                    val c = list!!.optJSONObject(i) ?: return@mapNotNull null
+                    val name = c.optString("name").ifBlank { return@mapNotNull null }
+                    AgentCommand(name, c.optString("description"), c.optString("args").ifBlank { null })
+                }
+            }
             // A tool the agent starts, or ends: added, or marked done.
             "tool" -> {
                 val id = m.getString("conversation")
@@ -727,6 +741,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         paired.removeAll { it.name == name }
         status.remove(name)
         said.remove(name)
+        commands.keys.filter { it.startsWith("$name/") }.forEach { commands.remove(it) }
         val ids = conversations.filter { it.host == name }.map { it.id }.toSet()
         val attached = ids.flatMap { lines[it].orEmpty() }.flatMap { it.attachments }
         ids.forEach {
