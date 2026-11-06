@@ -674,7 +674,7 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, open: (String) -> Unit
                                     .filter { !it.home && it.host == agent.host && it.agent == agent.name && model.listed(it) }
                                     .sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: 0L }
                                 val unfolded = agent.address in shown
-                                AgentConversations(model, others, unfolded, open, start = { start(agent) }) {
+                                AgentConversations(model, others, unfolded, now, open, start = { start(agent) }) {
                                     if (unfolded) shown.remove(agent.address) else shown.add(agent.address)
                                 }
                             }
@@ -789,6 +789,7 @@ private fun AgentConversations(
     model: AppModel,
     others: List<Conversation>,
     unfolded: Boolean,
+    now: Long,
     open: (String) -> Unit,
     start: () -> Unit,
     onFold: () -> Unit,
@@ -826,7 +827,8 @@ private fun AgentConversations(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    if (last != null) Text(Times.inList(last.time), style = Type.code, color = if (unread > 0) p.accent else p.textFaint)
+                    // How long ago, as the agent's own activity says it.
+                    if (last != null) Text(Times.ago(last.time, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint)
                     if (unread > 0) UnreadBadge(unread)
                 }
             }
