@@ -87,6 +87,10 @@ object Markdown {
             is Code -> append(node.literal)
             is FencedCodeBlock -> append(node.literal).append(' ')
             is IndentedCodeBlock -> append(node.literal).append(' ')
+            // Shown as its literal text, so previewed and searched as it too:
+            // HTML keeps its text in `literal`, with no children.
+            is HtmlBlock -> append(node.literal).append(' ')
+            is HtmlInline -> append(node.literal)
             is SoftLineBreak, is HardLineBreak -> append(' ')
             else -> {
                 var child = node.firstChild
