@@ -663,7 +663,7 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, open: (String) -> Unit
                             Arriving {
                                 // Its Home opens; with none (an older bridge), a new conversation.
                                 val home = model.conversations.firstOrNull { it.home && it.host == agent.host && it.agent == agent.name }
-                                AgentRow(model, agent, working = busy.any { it.first == agent }, now = now) {
+                                AgentRow(model, agent, working = busy.any { it.first == agent }, now = now, start = { start(agent) }) {
                                     if (home != null) open(home.id) else start(agent)
                                 }
                             }
@@ -674,7 +674,7 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, open: (String) -> Unit
                                     .filter { !it.home && it.host == agent.host && it.agent == agent.name && model.listed(it) }
                                     .sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: 0L }
                                 val unfolded = agent.address in shown
-                                AgentConversations(model, others, unfolded, now, open, start = { start(agent) }, lastInSandbox = i == agents.lastIndex) {
+                                AgentConversations(model, others, unfolded, now, open, lastInSandbox = i == agents.lastIndex) {
                                     if (unfolded) shown.remove(agent.address) else shown.add(agent.address)
                                 }
                             }
@@ -742,14 +742,16 @@ private fun SandboxRow(sandbox: String, agents: List<Agent>, live: Boolean) {
 /**
  * An agent under its sandbox, starting where the sandbox's name does: its
  * initial, its name, and working (the wave, what it does) or when it last
- * sent a message (its address before its first). Tapping it opens its Home.
+ * sent a message (its address before its first). Tapping it opens its
+ * Home; a small `+` before the chevron, its own target, [start]s a new
+ * conversation.
  */
 @Composable
-private fun AgentRow(model: AppModel, agent: Agent, working: Boolean, now: Long, open: () -> Unit) {
+private fun AgentRow(model: AppModel, agent: Agent, working: Boolean, now: Long, start: () -> Unit, open: () -> Unit) {
     val p = palette
     Row(
         Modifier.fillMaxWidth().clickable(onClickLabel = "Open ${agent.agent}'s Home", onClick = open)
-            .padding(start = 62.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+            .padding(start = 62.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -773,16 +775,22 @@ private fun AgentRow(model: AppModel, agent: Agent, working: Boolean, now: Long,
                 }
             }
         }
-        Glyph(Glyphs.chevron, p.textFaint, size = 18.dp)
+        // A 44dp target around a small glyph, just before the chevron.
+        Box(
+            Modifier.size(44.dp).clickable(onClickLabel = "New conversation with ${agent.agent}", role = Role.Button, onClick = start)
+                .semantics { contentDescription = "New conversation with ${agent.agent}" },
+            contentAlignment = Alignment.Center,
+        ) { Glyph(Glyphs.plus, p.accent, size = 18.dp) }
+        Glyph(Glyphs.chevron, p.textFaint, size = 18.dp, modifier = Modifier.padding(start = 0.dp))
     }
 }
 
 /**
  * Under an agent, starting where its name does: folded, how many other
- * conversations it has with a chevron down (or, with none, New
- * conversation); unfolded, New conversation, then each one (its name, the
- * time of its last message, its unread count), newest first, then Show
- * less. A hairline ends it, as it ends the agent.
+ * conversations it has, with a chevron down (nothing when it has none);
+ * unfolded, each one (its name, how long ago its last message was, its
+ * unread count), newest first, then Show less. A hairline ends it, as it
+ * ends the agent.
  */
 @Composable
 private fun AgentConversations(
@@ -791,7 +799,6 @@ private fun AgentConversations(
     unfolded: Boolean,
     now: Long,
     open: (String) -> Unit,
-    start: () -> Unit,
     lastInSandbox: Boolean,
     onFold: () -> Unit,
 ) {
@@ -810,7 +817,6 @@ private fun AgentConversations(
         }
     }
     Column(Modifier.fillMaxWidth()) {
-        if (unfolded || others.isEmpty()) line("New conversation", null, "Start a new conversation", start)
         if (unfolded) {
             others.forEach { c ->
                 val unread = model.unread(c.id)
