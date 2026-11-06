@@ -7,8 +7,6 @@ import java.text.Normalizer
 sealed interface InboxFilter {
     data object All : InboxFilter
     data object Unread : InboxFilter
-    /** One agent's, by its address `host/sandbox/agent`. */
-    data class OfAgent(val address: String) : InboxFilter
 }
 
 /** A conversation the inbox shows, and the message that matched, when only a message did. */
@@ -33,7 +31,6 @@ fun search(
         when (filter) {
             InboxFilter.All -> Unit
             InboxFilter.Unread -> if (unread(c.id) == 0) return@mapNotNull null
-            is InboxFilter.OfAgent -> if ("${c.host}/${c.agent}" != filter.address) return@mapNotNull null
         }
         if (words.isEmpty()) return@mapNotNull Found(c, null)
         val about = fold("${c.title.orEmpty()} ${c.host}/${c.agent}")
@@ -93,21 +90,6 @@ fun byAgent(
         }
         val homeMatch = found.firstOrNull { it.conversation.id == home?.id }?.match
         AgentEntry(address, home, homeMatch, under, others.size)
-    }
-}
-
-/**
- * A short label for each agent address `host/sandbox/agent`: its name, or
- * `sandbox/agent` when another agent has the same name, or the whole
- * address when another host has the same sandbox and agent too.
- */
-fun agentLabels(addresses: List<String>): Map<String, String> = addresses.associateWith { a ->
-    val name = a.substringAfterLast('/')
-    val inSandbox = a.substringAfter('/')
-    when {
-        addresses.count { it.substringAfterLast('/') == name } == 1 -> name
-        addresses.count { it.substringAfter('/') == inSandbox } == 1 -> inSandbox
-        else -> a
     }
 }
 

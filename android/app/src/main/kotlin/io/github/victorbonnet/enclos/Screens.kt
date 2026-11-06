@@ -180,7 +180,7 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
                 sorted.isEmpty() -> Empty("No conversation yet.", "Start one with an agent.", "Agents →", newConversation)
                 else -> {
                     SearchField(query, { query = it })
-                    Filters(sorted, filter) { filter = it }
+                    Filters(filter) { filter = it }
                     LazyColumn(Modifier.weight(1f)) {
                         item { Hairline() }
                         if (found.isEmpty()) {
@@ -275,16 +275,10 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
     )
 }
 
-/** All, Unread, and each agent when there are several: one at a time. */
+/** All or Unread: one at a time. The inbox is by agent already, so there is no filter by agent. */
 @Composable
-private fun Filters(conversations: List<Conversation>, chosen: InboxFilter, onChoose: (InboxFilter) -> Unit) {
-    val agents = conversations.map { "${it.host}/${it.agent}" }.distinct().sorted()
-    val labels = agentLabels(agents)
-    val options = buildList {
-        add(InboxFilter.All to "All")
-        add(InboxFilter.Unread to "Unread")
-        if (agents.size > 1) agents.forEach { a -> add(InboxFilter.OfAgent(a) to labels.getValue(a)) }
-    }
+private fun Filters(chosen: InboxFilter, onChoose: (InboxFilter) -> Unit) {
+    val options = listOf(InboxFilter.All to "All", InboxFilter.Unread to "Unread")
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
