@@ -95,6 +95,7 @@ import io.github.victorbonnet.enclos.ui.LargeTitle
 import io.github.victorbonnet.enclos.ui.Markdown
 import io.github.victorbonnet.enclos.ui.PrimaryButton
 import io.github.victorbonnet.enclos.ui.Shapes
+import io.github.victorbonnet.enclos.ui.StatusLine
 import io.github.victorbonnet.enclos.ui.SystemLine
 import io.github.victorbonnet.enclos.ui.TextLink
 import io.github.victorbonnet.enclos.ui.Type
@@ -157,6 +158,8 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
     var query by rememberSaveable { mutableStateOf("") }
     var filter by remember { mutableStateOf<InboxFilter>(InboxFilter.All) }
     val found = search(sorted, { model.lines[it].orEmpty() }, model::unread, query, filter)
+    // An agent's Home first, the rest newest first: pinned in the list and in its agent's group.
+    val homeFirst = { list: List<Found> -> list.sortedBy { !it.conversation.home } }
     val grouped = model.grouped.value
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -207,14 +210,14 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
                                     }
                                 }
                                 if (!shut) {
-                                    items(group.found, key = { it.conversation.id }) { f ->
+                                    items(homeFirst(group.found), key = { it.conversation.id }) { f ->
                                         Arriving { ConversationRow(model, f.conversation, f.match, query, grouped = true) { open(f.conversation.id) } }
                                     }
                                 }
                             }
                         } else {
                             // A conversation that moves to the top slides there.
-                            items(found, key = { it.conversation.id }) { f ->
+                            items(homeFirst(found), key = { it.conversation.id }) { f ->
                                 Arriving { ConversationRow(model, f.conversation, f.match, query) { open(f.conversation.id) } }
                             }
                         }
@@ -325,7 +328,9 @@ private fun highlighted(text: String, query: String, accent: Color): AnnotatedSt
 @Composable
 private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, query: String, grouped: Boolean = false, onClick: () -> Unit) {
     val p = palette
-    val last = model.lines[c.id]?.lastOrNull()
+    // The last message, not a status line (gateway online) when there is anything else.
+    val all = model.lines[c.id].orEmpty()
+    val last = all.lastOrNull { !it.status } ?: all.lastOrNull()
     val unread = model.unread(c.id)
     val agent = c.agent.substringAfter('/')
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
@@ -383,6 +388,7 @@ private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, quer
                     // The message the search found, else the last; the words, without markdown.
                     val shown = match ?: last
                     val words = when {
+                        shown == null && c.home -> "Cron jobs and the agent's notices come here."
                         shown == null -> "No message yet"
                         shown.from == "agent" -> remember(shown.text) { words(shown) }
                         else -> "You: ${shown.text}"
@@ -680,6 +686,11 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             for (i in lines.indices.reversed()) {
                 val line = lines[i]
                 item(key = line.seq) {
+                    // The runtime about itself: a quiet line, not a bubble.
+                    if (line.status) {
+                        Arriving { StatusLine(line.text, Times.clock(line.time)) }
+                        return@item
+                    }
                     Arriving {
                         Bubble(
                             text = line.text,
