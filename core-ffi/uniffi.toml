@@ -1,2 +1,6 @@
 [bindings.kotlin]
 package_name = "io.github.victorbonnet.enclos.core"
+# The Android cleaner: android.system.SystemCleaner behind an API level check
+# (JNA's below it), where the JVM one calls java.lang.ref.Cleaner, which
+# Android has only from API 33 and its lint refuses under our minSdk of 28.
+android = true

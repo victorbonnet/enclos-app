@@ -48,3 +48,6 @@ wildcards = "deny"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# enclos-protocol, pinned to a commit of the enclos repository until it is
+# published on crates.io (see CLAUDE.md)
+allow-git = ["https://github.com/victorbonnet/enclos"]
