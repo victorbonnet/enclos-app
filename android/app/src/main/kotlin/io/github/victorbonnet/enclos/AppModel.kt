@@ -679,21 +679,34 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    fun send(conversation: Conversation, text: String) {
+    /** By conversation: what the person wrote and has not sent yet, kept while the app runs. */
+    val unsent = mutableStateMapOf<String, String>()
+
+    /**
+     * Sends [text] in [conversation]; whether it went. It goes only while
+     * the host is connected: the screen does not offer it otherwise, and a
+     * connection that ended meanwhile leaves the text with the person.
+     */
+    fun send(conversation: Conversation, text: String): Boolean {
         said.remove(conversation.host)
-        val connection = connections[conversation.host]
+        if (!connected(conversation.host)) return false
+        val connection = connections[conversation.host] ?: return false
         // A draft becomes a conversation on the bridge with its first message.
         if (conversation.id in drafts) {
-            val started = connection?.send(
+            val started = connection.send(
                 message("conversation.new", "conversation" to conversation.id, "agent" to conversation.agent),
-            ) == true
-            if (!started) return
+            )
+            if (!started) return false
             drafts -= conversation.id
         }
-        val sent = connection?.send(
+        val sent = connection.send(
             message("message.send", "conversation" to conversation.id, "text" to text),
-        ) == true
-        if (sent) awaiting[conversation.id] = true
+        )
+        if (sent) {
+            awaiting[conversation.id] = true
+            unsent.remove(conversation.id)
+        }
+        return sent
     }
 
     /**

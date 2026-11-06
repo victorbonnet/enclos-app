@@ -761,7 +761,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val agent = conversation.agent.substringAfter('/')
     val live = model.connected(conversation.host)
     val working = model.working(id)
-    var draft by remember { mutableStateOf("") }
+    // What the person writes, kept when they leave and come back.
+    val draft = model.unsent[id].orEmpty()
     val list = rememberLazyListState()
     LaunchedEffect(lines.size, working) {
         model.markRead(id)
@@ -851,9 +852,16 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 if (i == 0 || Times.day(lines[i - 1].time) != day) item(key = "day-${line.seq}") { Arriving { DaySeparator(day) } }
             }
         }
-        Composer(draft, { draft = it }, "Message $agent") {
+        // Not connected: write, but nothing goes until the host is back.
+        Composer(
+            draft,
+            { if (it.isEmpty()) model.unsent.remove(id) else model.unsent[id] = it },
+            "Message $agent",
+            canSend = live,
+            notice = if (live) null else "Not connected to ${conversation.host}: send once it's back.",
+        ) {
+            // Cleared once it went; else it stays, to send again.
             model.send(conversation, draft.trim())
-            draft = ""
         }
     }
 }
