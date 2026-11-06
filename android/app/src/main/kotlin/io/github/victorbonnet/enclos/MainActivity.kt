@@ -41,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.ui.EnclosTheme
@@ -76,16 +77,33 @@ private sealed interface Route {
 
 class MainActivity : ComponentActivity() {
     private val model: AppModel by viewModels()
+    /** The unlock prompt: made with the activity, as the screen-lock page it may open requires. */
+    val unlocker = Unlocker(this)
 
     override fun onStart() {
         super.onStart()
+        model.returned(android.os.SystemClock.elapsedRealtime())
         model.foreground()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Locked: the prompt shows on its own, once; the lock screen's button asks again.
+        if (model.locked.value && model.promptDue) {
+            model.promptDue = false
+            unlock()
+        }
+    }
+
     override fun onStop() {
+        // The screen-lock page the prompt opened is not the person leaving.
+        if (!unlocker.asking) model.left(android.os.SystemClock.elapsedRealtime())
         model.background()
         super.onStop()
     }
+
+    /** Asks the person to unlock the app. */
+    fun unlock() = unlocker.ask("Unlock Enclos") { ok, why -> model.unlocked(ok, why) }
 
     /** An `enclos://pair` link the system opened the app with: shown on the pairing screen, which asks first. */
     private fun open(intent: Intent?) {
@@ -126,7 +144,20 @@ class MainActivity : ComponentActivity() {
                 val bars = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark }
                 enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
             }
-            EnclosTheme(dark) { Screens(model) }
+            // While the lock is on, the recent apps show no picture of the app (Android 13 and later).
+            val lockOn = model.lockOn.value
+            LaunchedEffect(lockOn) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) setRecentsScreenshotEnabled(!lockOn)
+            }
+            EnclosTheme(dark) {
+                val locked = model.locked.value
+                Box(Modifier.fillMaxSize()) {
+                    // Kept under the lock, so the screen the person was on is there once unlocked;
+                    // hidden from accessibility services meanwhile.
+                    Box(if (locked) Modifier.fillMaxSize().clearAndSetSemantics {} else Modifier.fillMaxSize()) { Screens(model) }
+                    if (locked) LockScreen(model, unlock = ::unlock, leave = { moveTaskToBack(true) })
+                }
+            }
         }
     }
 }

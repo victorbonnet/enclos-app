@@ -64,9 +64,10 @@ Then each paired host, with a filled square while connected (`connected · tailn
 
 ### Status
 
-Each paired host, its connection (who it is connected as, or why not), the bridge's last error, its address, Reconnect when it is not connected, and Forget this host; the [theme](#7-theme); what is kept on this phone, and Clear cache; Pair a host; the core's version. Nothing here acts on a sandbox.
+Each paired host, its connection (who it is connected as, or why not), the bridge's last error, its address, Reconnect when it is not connected, and Forget this host; the [theme](#7-theme); the [app lock](#app-lock); what is kept on this phone, and Clear cache; Pair a host; the core's version. Nothing here acts on a sandbox.
 
 - **Forget this host**, after a confirmation: connected, the app asks the bridge to unpair this phone (enclos `docs/protocol.md`, `device.forget`); not connected, the host keeps it listed until `enclos app unpair` there, which the confirmation says. Either way the phone deletes its device key and Noise key for that host, and everything it kept from it: agents, conversations, messages, files, how far they were read. The conversations stay on the host. Using it again means pairing again.
+- **App lock**, Off (the default) or On: see [App lock](#app-lock).
 - **Clear cache**, after a confirmation: deletes the conversations, messages, agents and files kept on this phone, then syncs everything again from each connected host. Pairings stay, and how far each conversation was read comes back from the bridges.
 
 ### Conversation
@@ -133,9 +134,15 @@ Light or dark: the system's setting by default. Once the person chooses (System 
 ## 8. On the phone
 
 - **Keys**: the device's signing key is made in, and never leaves, the platform's key store; the Noise key is wrapped by it.
-- **Stored**: the paired hosts (each bridge's address and key, the device's id there, the wrapped Noise key), the last message read per conversation, the theme.
+- **Stored**: the paired hosts (each bridge's address and key, the device's id there, the wrapped Noise key), the last message read per conversation, the theme, whether the app lock is on.
 - **Conversations are kept on the phone**: each host's agents, the conversations and their names, every message with its files' descriptions, and the steps of each answer. They show when the app opens, before any connection, and while a host is unreachable; a sync then brings only what is newer. The copy is read off the main thread, in two passes: first what the first screens show (every conversation with its last message, and the last 40 messages of the 10 most recent), with the launch screen kept until then (at most a second) and the connections opened after it; then every other message, merged in. Until that second pass ends, search and unread counts see only the first pass's messages. The bridge stays the source: what the phone keeps is what the bridge sent, and a conversation started on the phone is kept once the bridge confirms it. Pairing again with a host forgets what it sent before. The copy is in the app's private storage, readable by the app only, and not encrypted by the app itself: it is as safe at rest as the phone's own storage encryption makes it. Files stay in the cache, which the system may clear: they are fetched again when shown.
 - **Nothing leaves the phone** ([ADR 0003](adr/0003-nothing-of-the-app-leaves-the-phone.md)): no backup, no transfer to a new phone. A new phone pairs again.
+
+### App lock
+
+For a phone lost or left unlocked: with the app lock on, the app asks the person to prove it is them, with a biometric the phone has (fingerprint, face) or else the phone's own screen lock (PIN, pattern, password), when it opens and when it comes back after a minute or more in the background. Until then a lock screen covers the app (the mark, "Enclos is locked", and Unlock): it takes every touch, accessibility services do not read what is under it, and Back leaves the app. The prompt shows on its own once per lock; after a cancel, Unlock asks again, and the lock screen says what the system said (cancelled, too many attempts). While the lock is on, the recent apps show no picture of the app.
+
+It is off until the person turns it on in Status, which needs a screen lock on the phone (else Status says to set one) and asks to unlock once, so a lock that cannot be opened is never set; off again needs nothing more, since whoever turns it off is already in. A phone whose screen lock is removed has nothing left to unlock the app with: the lock then turns itself off as the app opens or comes back, rather than lock the person out, and Status says so. It hides the app; it does not encrypt what the phone keeps, nor tie the keys to it: the conversations and keys are as safe at rest as the phone's own storage encryption and key store make them, and the connections stay open behind the lock, so messages keep arriving.
 
 ## Platforms
 
@@ -160,13 +167,15 @@ Light or dark: the system's setting by default. Once the person chooses (System 
 | Animations off | Remove animations (animator duration scale 0) | Reduce Motion |
 | Conversations kept | SQLite, the platform's (`SQLiteOpenHelper`), `conversations.db`, written off the main thread | SQLite, the platform's, in Application Support, excluded from backup |
 | Files | cache `attachments/<id>/<name>`; shared through a `FileProvider` and `ACTION_SEND` | Caches directory; shared through `ShareLink` / `UIActivityViewController` |
+| App lock | the platform's `BiometricPrompt` (Android 11+: a weak or strong biometric or the screen lock; 10: the same, `setDeviceCredentialAllowed`), the screen-lock page on Android 9; `setRecentsScreenshotEnabled(false)` on Android 13+ | LocalAuthentication, `deviceOwnerAuthentication` (Face ID, Touch ID or the passcode); the app's snapshot blurred while in the background |
 | Push (not built) | FCM, one notification channel per agent | FCM through APNs, the conversation as thread identifier |
 
 ## Not built yet
 
-Push notifications (the bridge encrypts a preview for the device; the app decrypts it and fetches the message over the tailnet; two actions only, Reply and Mark read), sharing (ADR 0043), an app lock, landscape, the notification card of the design.
+Push notifications (the bridge encrypts a preview for the device; the app decrypts it and fetches the message over the tailnet; two actions only, Reply and Mark read), sharing (ADR 0043), landscape, the notification card of the design.
 
 ## To verify
 
 - **Transfer to a new phone** excludes the app's data: the rules say so, but no transfer was run (Android).
 - **iOS** equivalents in the table above: none is built.
+- **The app lock on Android 9 and 10**: its older calls are written as the platform documents them, but run on Android 11 and later only. Before Android 13 the recent apps may still show a picture of the app.
