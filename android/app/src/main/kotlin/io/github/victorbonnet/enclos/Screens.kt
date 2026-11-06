@@ -46,7 +46,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -172,7 +171,18 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
     val agents = byAgent(sorted, found, model.unfolded.toSet(), model::unread, narrowed)
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            LargeTitle("Inbox")
+            // Unread only sits on the title's line: in `accent` while on.
+            val unreadOnly = filter == InboxFilter.Unread
+            LargeTitle("Inbox", action = if (model.paired.isEmpty() || sorted.isEmpty()) null else {
+                {
+                    IconButton(
+                        if (unreadOnly) Glyphs.unreadOn else Glyphs.unreadOff,
+                        if (unreadOnly) "Show all conversations" else "Show unread only",
+                        { filter = if (unreadOnly) InboxFilter.All else InboxFilter.Unread },
+                        tint = if (unreadOnly) palette.accent else palette.textMuted,
+                    )
+                }
+            })
             when {
                 model.paired.isEmpty() -> Empty(
                     "No host yet.",
@@ -183,7 +193,6 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
                 sorted.isEmpty() -> Empty("No conversation yet.", "Start one with an agent.", "Agents →", newConversation)
                 else -> {
                     SearchField(query, { query = it })
-                    Filters(filter) { filter = it }
                     LazyColumn(Modifier.weight(1f)) {
                         item { Hairline() }
                         if (found.isEmpty()) {
@@ -254,7 +263,7 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
         singleLine = true,
         textStyle = Type.message.copy(color = p.text),
         cursorBrush = SolidColor(p.accent),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp)
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp)
             .semantics { contentDescription = "Search conversations" },
         decorationBox = { field ->
             Row(
@@ -275,17 +284,6 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
     )
 }
 
-/** All or Unread: one at a time. The inbox is by agent already, so there is no filter by agent. */
-@Composable
-private fun Filters(chosen: InboxFilter, onChoose: (InboxFilter) -> Unit) {
-    val options = listOf(InboxFilter.All to "All", InboxFilter.Unread to "Unread")
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        options.forEach { (option, label) -> Choice(label, option == chosen) { onChoose(option) } }
-    }
-}
 
 /** A choice among a few, outlined in `accent` when chosen (filters, the theme). */
 @Composable
