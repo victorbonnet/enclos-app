@@ -52,4 +52,17 @@ class SearchTest {
         assertEquals(listOf("c-3"), find("", InboxFilter.OfAgent("pi/home/main")).map { it.conversation.id })
         assertNull(find("test", InboxFilter.OfAgent("mac/lab/main")).firstOrNull())
     }
+
+    @Test
+    fun highlights_follow_the_search_rules_on_the_original_text() {
+        // Accents and case, as search ignores them.
+        assertEquals(listOf(0..4), matches("Météo à Lyon demain ?", "meteo"))
+        assertEquals(listOf(0..4, 8..11), matches("Météo à Lyon", "METEO lyon"))
+        // An accent written as its own mark is folded away, and highlighted with its letter.
+        assertEquals(listOf(0..6), matches("Météo", "meteo"))
+        // Spaces collapse as search collapses them.
+        assertEquals(listOf(7..11), matches("rain   light rain", "light"))
+        assertEquals(emptyList<IntRange>(), matches("Météo", "  "))
+        assertEquals(emptyList<IntRange>(), matches("Météo", "paris"))
+    }
 }
