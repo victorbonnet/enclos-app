@@ -47,26 +47,43 @@ class SearchTest {
     }
 
     @Test
-    fun filters_keep_unread_or_one_agents_conversations() {
+    fun the_unread_filter_keeps_conversations_with_something_unread() {
         assertEquals(listOf("c-2"), find("", InboxFilter.Unread).map { it.conversation.id })
-        assertEquals(listOf("c-3"), find("", InboxFilter.OfAgent("pi/home/main")).map { it.conversation.id })
-        assertNull(find("test", InboxFilter.OfAgent("mac/lab/main")).firstOrNull())
+        assertNull(find("rain", InboxFilter.Unread).firstOrNull())
+    }
+
+    private val home = Conversation("mac", "lab/main", "h-1", title = "Home", home = true)
+    private val again = Conversation("mac", "lab/main", "c-4")
+    /** Newest first: coder's, then main's (its Home among them), then pi's. */
+    private val sorted = listOf(code, weather, home, pi, again)
+    private val unreadToo = mapOf("c-4" to 2)
+    private fun entries(unfolded: Set<String> = emptySet(), found: List<Found> = sorted.map { Found(it, null) }, narrowed: Boolean = false) =
+        byAgent(sorted, found, unfolded, { unreadToo[it] ?: 0 }, narrowed)
+
+    @Test
+    fun each_agent_once_in_the_order_of_its_newest_conversation_its_home_on_its_row() {
+        val agents = entries()
+        assertEquals(listOf("mac/lab/coder", "mac/lab/main", "pi/home/main"), agents.map { it.address })
+        assertEquals("h-1", agents[1].home?.id)
+        assertNull(agents[0].home)
+        assertEquals(listOf(1, 2, 1), agents.map { it.others })
     }
 
     @Test
-    fun grouped_by_agent_in_the_order_of_each_agents_newest_conversation() {
-        val again = Conversation("mac", "lab/main", "c-4")
-        val groups = byAgent(listOf(code, weather, pi, again).map { Found(it, null) })
-        assertEquals(listOf("mac/lab/coder", "mac/lab/main", "pi/home/main"), groups.map { it.address })
-        assertEquals(listOf("c-1", "c-4"), groups[1].found.map { it.conversation.id })
+    fun folded_an_agent_shows_only_its_unread_conversations_unfolded_all_newest_first() {
+        assertEquals(listOf("c-4"), entries()[1].under.map { it.conversation.id })
+        assertEquals(emptyList<String>(), entries()[0].under.map { it.conversation.id })
+        val open = entries(unfolded = setOf("mac/lab/main"))[1]
+        assertEquals(listOf("c-1", "c-4"), open.under.map { it.conversation.id })
     }
 
     @Test
-    fun an_agent_is_labelled_by_the_shortest_of_its_names_no_other_has() {
-        val labels = agentLabels(listOf("mac/lab/coder", "mac/lab/main", "mac/home/main", "pi/home/main"))
-        assertEquals("coder", labels["mac/lab/coder"])
-        assertEquals("lab/main", labels["mac/lab/main"])
-        assertEquals("mac/home/main", labels["mac/home/main"])
-        assertEquals("pi/home/main", labels["pi/home/main"])
+    fun narrowed_only_agents_with_something_found_and_all_of_it_shows() {
+        val said = Line(9, "agent", "rain at noon", "notify", 0)
+        val found = listOf(Found(home, said), Found(weather, null))
+        val agents = entries(found = found, narrowed = true)
+        assertEquals(listOf("mac/lab/main"), agents.map { it.address })
+        assertEquals(said, agents[0].homeMatch)
+        assertEquals(listOf("c-1"), agents[0].under.map { it.conversation.id })
     }
 }

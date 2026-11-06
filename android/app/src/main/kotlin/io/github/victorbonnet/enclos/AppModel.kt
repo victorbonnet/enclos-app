@@ -209,14 +209,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         applyTheme(getApplication(), choice)
     }
 
-    /** Whether the inbox groups conversations by agent: the person's choice, kept on this device. */
-    val grouped = mutableStateOf(settings.getBoolean("inbox.grouped", false))
-    /** The agents (`host/sandbox/agent`) whose group the inbox shows folded, while the app runs. */
-    val folded = mutableStateListOf<String>()
+    /** The agents (`host/sandbox/agent`) whose conversations the inbox shows unfolded, while the app runs. */
+    val unfolded = mutableStateListOf<String>()
 
-    fun group(on: Boolean) {
-        grouped.value = on
-        settings.edit(commit = true) { putBoolean("inbox.grouped", on) }
+    init {
+        // The inbox is always by agent now: the earlier choice to group it goes.
+        if (settings.contains("inbox.grouped")) settings.edit { remove("inbox.grouped") }
     }
 
     private fun ui(block: () -> Unit) = main.post(block)
@@ -232,11 +230,20 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun working(conversation: String) =
         typing[conversation] == true || awaiting[conversation] == true || steps[conversation].orEmpty().any { !it.done }
 
-    private fun conversationsOf(agent: Agent) = conversations.filter { it.host == agent.host && it.agent == agent.name }
+    /** The conversations of the agent at [address] (`host/sandbox/agent`). */
+    private fun conversationsOf(address: String) = conversations.filter { "${it.host}/${it.agent}" == address }
+    private fun conversationsOf(agent: Agent) = conversationsOf(agent.address)
 
     /** The conversations [agent] is working on now, the one with the newest message first. */
-    fun workingOn(agent: Agent): List<Conversation> =
-        conversationsOf(agent).filter { working(it.id) }.sortedByDescending { lines[it.id]?.lastOrNull()?.time ?: 0L }
+    fun workingOn(agent: Agent): List<Conversation> = workingOn(agent.address)
+
+    /** The conversations the agent at [address] (`host/sandbox/agent`) is working on now, the one with the newest message first. */
+    fun workingOn(address: String): List<Conversation> =
+        conversationsOf(address).filter { working(it.id) }.sortedByDescending { lines[it.id]?.lastOrNull()?.time ?: 0L }
+
+    /** The time of the newest message in any conversation of the agent at [address]; null before the first. */
+    fun lastAt(address: String): Long? =
+        conversationsOf(address).mapNotNull { c -> lines[c.id]?.lastOrNull()?.time?.takeIf { it > 0 } }.maxOrNull()
 
     /** What the agent is doing in [conversation] now: the tool it runs, if it said which. */
     fun doing(conversation: String): String? =
