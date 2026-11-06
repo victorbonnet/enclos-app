@@ -237,14 +237,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         leftAt = now
     }
 
-    /** Whether the lock turned itself off because the phone no longer has a screen lock: said in Status. */
+    /** Whether the lock turned itself off because the phone no longer has a screen lock: said in Settings. */
     val lockDropped = mutableStateOf(false)
 
     /**
      * The app is back: locked again when the lock is on and it was away
      * long enough. A phone whose screen lock was removed has nothing left
      * to unlock the app with: the lock turns off, rather than lock the
-     * person out, and Status says so.
+     * person out, and Settings says so.
      */
     fun returned(now: Long) {
         if (lockOn.value && !AppLock.available(getApplication())) {

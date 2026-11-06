@@ -25,14 +25,14 @@ The pairing screen has three steps, always in this order: code read, device key 
 ## 3. Connection
 
 - The app opens a connection to each paired host when it comes to the foreground, and keeps it while the phone lets it.
-- A connection that ends while the app is in the foreground is opened again after 2 s, then 4, 8, 16, 32, then every 60 s, until it is authenticated. Reconnect in Status tries at once.
+- A connection that ends while the app is in the foreground is opened again after 2 s, then 4, 8, 16, 32, then every 60 s, until it is authenticated. Reconnect in Settings tries at once.
 - On each connection the app asks for the host's agents and syncs the messages after the newest one it [keeps](#8-on-the-phone) from that host (every message, the first time); the bridge sends each message with the time it was stored.
 - In the background the app does not connect. Until push notifications are built, what arrives meanwhile is shown at the next sync.
-- When the bridge reports an error (an agent it could not reach), the conversation and Status show it, in the bridge's words.
+- When the bridge reports an error (an agent it could not reach), the conversation and Settings show it, in the bridge's words.
 
 ## 4. Screens
 
-Three destinations, Inbox, Agents and Status, and two full screens over them, a conversation and pairing. A destination starts with its title, with no bar above it, so its content starts high; its one action, if any, sits on the title's line. The app is in portrait only, for now, the QR scanner included.
+Three destinations, Inbox, Agents and Settings, and two full screens over them, a conversation and pairing. A destination starts with its title, with no bar above it, so its content starts high; its one action, if any, sits on the title's line. The app is in portrait only, for now, the QR scanner included.
 
 ### Inbox
 
@@ -62,12 +62,17 @@ First, while any agent works, **Working now** and their count: each agent at wor
 
 Then each paired host, with a filled square while connected (`connected · tailnet`) and an outline otherwise (why it is not); under it each sandbox, with its runtime and, once the bridge has reached the agent's plugin, what its channel does: `full channel` (messages both ways and messages on its own, the plugin announced `notify`) or `request/reply`. Under each sandbox its agents, each `working` with the wave while it works, else when it last sent a message (`active 3 hours ago`, `active yesterday`, `active 2 days ago`, its runtime's notices aside), its address before its first one; tapping one opens a new conversation, a draft on this phone until its first message, which starts it on the bridge (`conversation.new`, then the message): a conversation opened and left leaves nothing behind. An action on the title's line pairs another host. A person sees only what is shared with them; the list never hints that more exists.
 
-### Status
+### Settings
 
-Each paired host, its connection (who it is connected as, or why not), the bridge's last error, its address, Reconnect when it is not connected, and Forget this host; the [theme](#7-theme); the [app lock](#app-lock); what is kept on this phone, and Clear cache; Pair a host; the core's version. Nothing here acts on a sandbox.
+In sections, each named small, faint and in capitals above a hairline, its rows separated by hairlines. Nothing here acts on a sandbox.
+
+- **Hosts**: each paired host, its connection (who it is connected as, or why not), the bridge's last error, its address, then Reconnect (when it is not connected) and Forget this host on one line; and a last row, Pair a host, with the QR glyph.
+- **Security**: the [app lock](#app-lock), a switch beside what it does; the whole row toggles it.
+- **Appearance**: the [theme](#7-theme).
+- **On this phone**: what is kept, and Clear cache.
+- **About**: the app's version and the core's.
 
 - **Forget this host**, after a confirmation: connected, the app asks the bridge to unpair this phone (enclos `docs/protocol.md`, `device.forget`); not connected, the host keeps it listed until `enclos app unpair` there, which the confirmation says. Either way the phone deletes its device key and Noise key for that host, and everything it kept from it: agents, conversations, messages, files, how far they were read. The conversations stay on the host. Using it again means pairing again.
-- **App lock**, Off (the default) or On: see [App lock](#app-lock).
 - **Clear cache**, after a confirmation: deletes the conversations, messages, agents and files kept on this phone, then syncs everything again from each connected host. Pairings stay, and how far each conversation was read comes back from the bridges.
 
 ### Conversation
@@ -129,7 +134,7 @@ Short and functional, never decorative: something moves to show where it came fr
 
 ## 7. Theme
 
-Light or dark: the system's setting by default. Once the person chooses (System · Light · Dark, in Status), the app keeps their choice on this device until they choose System again. Switching crossfades the colours; the screen is not rebuilt. The colours are the design system's tokens, the same in both apps.
+Light or dark: the system's setting by default. Once the person chooses (System · Light · Dark, in Settings, Appearance), the app keeps their choice on this device until they choose System again. Switching crossfades the colours; the screen is not rebuilt. The colours are the design system's tokens, the same in both apps.
 
 ## 8. On the phone
 
@@ -142,7 +147,7 @@ Light or dark: the system's setting by default. Once the person chooses (System 
 
 For a phone lost or left unlocked: with the app lock on, the app asks the person to prove it is them, with a biometric the phone has (fingerprint, face) or else the phone's own screen lock (PIN, pattern, password), when it opens and when it comes back after a minute or more in the background. Until then a lock screen covers the app (the mark, "Enclos is locked", and Unlock): it takes every touch, accessibility services do not read what is under it, and Back leaves the app. The prompt shows on its own once per lock; after a cancel, Unlock asks again, and the lock screen says what the system said (cancelled, too many attempts). While the lock is on, the recent apps show no picture of the app.
 
-It is off until the person turns it on in Status, which needs a screen lock on the phone (else Status says to set one) and asks to unlock once, so a lock that cannot be opened is never set; off again needs nothing more, since whoever turns it off is already in. A phone whose screen lock is removed has nothing left to unlock the app with: the lock then turns itself off as the app opens or comes back, rather than lock the person out, and Status says so. It hides the app; it does not encrypt what the phone keeps, nor tie the keys to it: the conversations and keys are as safe at rest as the phone's own storage encryption and key store make them, and the connections stay open behind the lock, so messages keep arriving.
+It is off until the person turns it on in Settings, Security, which needs a screen lock on the phone (else Settings says to set one) and asks to unlock once, so a lock that cannot be opened is never set; off again needs nothing more, since whoever turns it off is already in. A phone whose screen lock is removed has nothing left to unlock the app with: the lock then turns itself off as the app opens or comes back, rather than lock the person out, and Settings says so. It hides the app; it does not encrypt what the phone keeps, nor tie the keys to it: the conversations and keys are as safe at rest as the phone's own storage encryption and key store make them, and the connections stay open behind the lock, so messages keep arriving.
 
 ## Platforms
 
