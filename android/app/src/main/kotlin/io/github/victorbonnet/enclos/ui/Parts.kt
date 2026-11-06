@@ -150,6 +150,58 @@ fun AgentAvatar(name: String, live: Boolean, small: Boolean = false, working: Bo
     }
 }
 
+/**
+ * A sandbox: the Enclos mark, its corners around a filled square, in
+ * `accent` while its host is connected, `line-strong` otherwise.
+ */
+@Composable
+fun SandboxMark(live: Boolean, side: Dp = 32.dp) {
+    val color = if (live) palette.accent else palette.lineStrong
+    Box(Modifier.size(side), contentAlignment = Alignment.Center) {
+        Corners(color, Modifier.size(side), stroke = 2.dp)
+        Box(Modifier.size(side * 0.22f).background(color))
+    }
+}
+
+/**
+ * An agent inside its sandbox: the first letter of its name in a small
+ * square on `surface`, with a hairline edge. While it is [working], the
+ * edge is `accent` and a copy of it swells out and fades, every 1.4 s;
+ * with animations off, only the edge says so.
+ */
+@Composable
+fun AgentInitial(name: String, working: Boolean = false, side: Dp = 28.dp) {
+    val p = palette
+    Box(
+        Modifier.size(side).then(if (working) Modifier.semantics { contentDescription = "$name is working" } else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (working && !animationsOff()) {
+            val pulse = rememberInfiniteTransition(label = "active")
+            val t by pulse.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "pulse")
+            Box(
+                Modifier.size(side).graphicsLayer {
+                    // Read here, the pulse redraws the square without recomposing it.
+                    val grow = (t / 0.7f).coerceAtMost(1f)
+                    scaleX = 1f + 0.45f * grow
+                    scaleY = 1f + 0.45f * grow
+                    alpha = 0.7f * (1f - grow)
+                }.border(1.5.dp, p.accent),
+            )
+        }
+        Box(
+            Modifier.size(side).background(p.surface).border(if (working) 1.5.dp else 1.dp, if (working) p.accent else p.lineStrong),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                name.take(1).lowercase(),
+                style = Type.code.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+                color = if (working) p.accent else p.text,
+            )
+        }
+    }
+}
+
 /** An unread count: a pill in `accent`. */
 @Composable
 fun UnreadBadge(count: Int) {
