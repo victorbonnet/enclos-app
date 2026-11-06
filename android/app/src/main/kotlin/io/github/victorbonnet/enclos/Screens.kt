@@ -658,7 +658,7 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, open: (String) -> Unit
                 }
                 model.agents.filter { it.host == host.name }.groupBy { it.sandbox }.forEach { (sandbox, agents) ->
                     item(key = "sandbox-${host.name}-$sandbox") { Arriving { SandboxRow(sandbox, agents, live) } }
-                    agents.forEach { agent ->
+                    agents.forEachIndexed { i, agent ->
                         item(key = "agent-${agent.address}") {
                             Arriving {
                                 // Its Home opens; with none (an older bridge), a new conversation.
@@ -674,7 +674,7 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, open: (String) -> Unit
                                     .filter { !it.home && it.host == agent.host && it.agent == agent.name && model.listed(it) }
                                     .sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: 0L }
                                 val unfolded = agent.address in shown
-                                AgentConversations(model, others, unfolded, now, open, start = { start(agent) }) {
+                                AgentConversations(model, others, unfolded, now, open, start = { start(agent) }, lastInSandbox = i == agents.lastIndex) {
                                     if (unfolded) shown.remove(agent.address) else shown.add(agent.address)
                                 }
                             }
@@ -792,6 +792,7 @@ private fun AgentConversations(
     now: Long,
     open: (String) -> Unit,
     start: () -> Unit,
+    lastInSandbox: Boolean,
     onFold: () -> Unit,
 ) {
     val p = palette
@@ -841,7 +842,8 @@ private fun AgentConversations(
                 onFold,
             )
         }
-        Hairline()
+        // Between two agents of a sandbox, from where the agents start; after its last, across: where the sandbox ends.
+        Hairline(if (lastInSandbox) Modifier else Modifier.padding(start = 62.dp))
     }
 }
 
