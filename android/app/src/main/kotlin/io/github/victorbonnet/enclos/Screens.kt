@@ -149,11 +149,11 @@ private fun ThemeSetting(model: AppModel) {
 
 // ---------- Inbox ----------
 
-/** Every conversation with every agent, on every host, newest first. */
+/** Every conversation with every agent, on every host, newest first; one with no message yet is not listed. */
 @Composable
 fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> Unit, pair: () -> Unit) {
-    // A conversation with no message yet sorts first: it was just started.
-    val sorted = model.conversations.sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: Long.MAX_VALUE }
+    val sorted = model.conversations.filter(model::listed)
+        .sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: 0L }
     var query by rememberSaveable { mutableStateOf("") }
     var filter by remember { mutableStateOf<InboxFilter>(InboxFilter.All) }
     val found = search(sorted, { model.lines[it].orEmpty() }, model::unread, query, filter)
@@ -593,7 +593,7 @@ fun StatusScreen(model: AppModel, pair: () -> Unit) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
                 Text("On this phone", style = Type.label, color = p.text)
                 Gap(4.dp)
-                val count = model.conversations.size
+                val count = model.conversations.count(model::listed)
                 Text(
                     "$count ${if (count == 1) "conversation" else "conversations"} and the files shown in them, kept to open at once.",
                     style = Type.small,
