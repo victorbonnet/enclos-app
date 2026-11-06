@@ -52,4 +52,13 @@ object Glyphs {
     val chevron = glyph("chevron", strokes = listOf("M9 6l6 6-6 6"))
     /** Clear a field: an addition to the design's set. */
     val clear = glyph("clear", strokes = listOf("M6 6l12 12M18 6L6 18"))
+    /**
+     * Unread only: the inbox's bubble, open at its top right, where a
+     * filled square marks what is unread. An addition to the design's set.
+     */
+    val unread = glyph(
+        "unread",
+        strokes = listOf("M13 5H4v12h3v3l4-3h9v-6"),
+        fills = listOf(rect(16f, 3f, 6f, 6f)),
+    )
 }
