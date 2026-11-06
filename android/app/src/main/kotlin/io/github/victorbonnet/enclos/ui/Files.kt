@@ -80,7 +80,12 @@ fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         attachments.forEach { a ->
             val state = states[a.id]
-            LaunchedEffect(a.id) { if (state == null) fetch(a) }
+            // Fetched when first shown, and again when the system cleared
+            // the cache since it was here: each time the message is shown.
+            LaunchedEffect(a.id, state) {
+                val gone = state is FileState.Ready && !withContext(Dispatchers.IO) { state.file.isFile }
+                if (state == null || gone) fetch(a)
+            }
             if (a.image) {
                 ImageFile(a, state, { fetch(a) }) { opened = a to it }
             } else {
@@ -99,7 +104,8 @@ private fun ImageFile(a: Attachment, state: FileState?, retry: () -> Unit, open:
             val bitmap by produceState<Bitmap?>(null, state.file) { value = decode(state.file, 1080) }
             val image = bitmap
             if (image == null) {
-                Placeholder("Opening the image")
+                // Decoding, or the file was cleared: a tap fetches it again.
+                Placeholder("Opening the image", retry)
             } else {
                 Image(
                     image.asImageBitmap(),
@@ -137,7 +143,8 @@ private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit) {
         Modifier.fillMaxWidth().clip(Shapes.control).border(1.dp, p.line, Shapes.control)
             .clickable(role = Role.Button) {
                 when (state) {
-                    is FileState.Ready -> share(context, a, state.file)
+                    // Cleared by the system since: fetched again, not shared missing.
+                    is FileState.Ready -> if (state.file.isFile) share(context, a, state.file) else retry()
                     is FileState.Failed -> retry()
                     else -> {}
                 }
