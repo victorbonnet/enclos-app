@@ -163,15 +163,6 @@ fun UnreadBadge(count: Int) {
     }
 }
 
-/** What a runtime's channel can do, in its own words: `full channel` outlined in `accent`. */
-@Composable
-fun CapabilityChip(text: String, full: Boolean) {
-    val color = if (full) palette.accent else palette.textMuted
-    Box(
-        Modifier.height(22.dp).border(1.dp, if (full) palette.accent else palette.lineStrong).padding(horizontal = 7.dp),
-        contentAlignment = Alignment.Center,
-    ) { Text(text, style = Type.meta, color = color, maxLines = 1) }
-}
 
 /** A host's connection: a filled square while connected, an outline otherwise. */
 @Composable

@@ -39,6 +39,11 @@ object Glyphs {
         strokes = listOf("M9 4H4v5M15 4h5v5M4 15v5h5M20 15v5h-5"),
         fills = listOf(rect(10f, 10f, 4f, 4f)),
     )
+    /** A sandbox: a box under its lid, a handle on its front. An addition to the design's set. */
+    val sandbox = glyph(
+        "sandbox",
+        strokes = listOf(rect(3f, 4f, 18f, 5f), "M5 9v11h14V9", "M10 13h4"),
+    )
     /** Settings: two sliders, each with a square knob. An addition to the design's set. */
     val settings = glyph(
         "settings",

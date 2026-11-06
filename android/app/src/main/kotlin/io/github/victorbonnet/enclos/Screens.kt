@@ -62,6 +62,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -86,7 +87,6 @@ import io.github.victorbonnet.enclos.core.parsePairLink
 import io.github.victorbonnet.enclos.ui.AgentAvatar
 import io.github.victorbonnet.enclos.ui.AppBar
 import io.github.victorbonnet.enclos.ui.Bubble
-import io.github.victorbonnet.enclos.ui.CapabilityChip
 import io.github.victorbonnet.enclos.ui.Composer
 import io.github.victorbonnet.enclos.ui.ConnectionDot
 import io.github.victorbonnet.enclos.ui.Corners
@@ -117,12 +117,6 @@ import kotlinx.coroutines.delay
 /** The header of a message an agent sent on its own, such as a cron job's: the protocol does not say which job. */
 private const val ON_ITS_OWN = "on its own"
 
-/** What a runtime's channel can do, from the capabilities its plugin announced; none before it was reached. */
-private fun channel(agent: Agent): Pair<String, Boolean>? = when {
-    agent.capabilities.isEmpty() -> null
-    "notify" in agent.capabilities -> "full channel" to true
-    else -> "request/reply" to false
-}
 
 // ---------- Settings: sections and rows ----------
 
@@ -637,6 +631,8 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, open: (String) -> Unit
         }
     }
     val busy = model.agents.mapNotNull { a -> model.workingOn(a).takeIf { it.isNotEmpty() }?.let { a to it } }
+    // The agents (`host/sandbox/agent`) whose conversations show in their card, while the screen shows.
+    val shown = remember { mutableStateListOf<String>() }
     Column(Modifier.fillMaxSize()) {
         // Pairing another host sits on the title's line: no bar above it.
         LargeTitle("Agents") { IconButton(Glyphs.qr, "Pair a host", pair) }
@@ -688,57 +684,165 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, open: (String) -> Unit
                         }
                     }
                 }
+                // Each sandbox a card: what it is, then its agents inside it.
                 model.agents.filter { it.host == host.name }.groupBy { it.sandbox }.forEach { (sandbox, agents) ->
                     item(key = "sandbox-${host.name}-$sandbox") {
-                        Row(
-                            Modifier.fillMaxWidth().padding(start = 34.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(sandbox, style = Type.code.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold), color = p.text)
-                            Text(agents.first().runtime.replaceFirstChar { it.uppercase() }, style = Type.small, color = p.textMuted)
-                            // Known once the bridge reached the agent: it fades in then.
-                            val chip = channel(agents.first())
-                            AnimatedVisibility(chip != null, enter = fadeIn(Motion.enter()), exit = fadeOut(Motion.exit())) {
-                                chip?.let { (text, full) -> CapabilityChip(text, full) }
-                            }
-                        }
-                    }
-                    items(agents, key = { "agent-${it.address}" }) { agent ->
-                        val working = busy.any { it.first == agent }
-                        Row(
-                            Modifier.fillMaxWidth().clickable(onClickLabel = "New conversation", onClick = { start(agent) })
-                                .padding(start = 34.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            AgentAvatar(agent.agent, live, small = true, working = working)
-                            Column(Modifier.weight(1f)) {
-                                Text(agent.agent, style = Type.name.copy(fontSize = 15.sp), color = p.text)
-                                // Working, or when it last sent a message; its address before its first.
-                                Crossfade(working, animationSpec = Motion.change(), label = "activity") { on ->
-                                    if (on) {
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Text("working", style = Type.small, color = p.accent)
-                                            WorkingWave(square = 4.dp, lift = 3.dp)
-                                        }
-                                    } else {
-                                        val last = model.lastActive(agent)
-                                        if (last != null) {
-                                            Text("active ${Times.ago(last, now)}", style = Type.small, color = p.textMuted)
-                                        } else {
-                                            Text(agent.address, style = Type.code, color = p.textFaint)
-                                        }
+                        Arriving {
+                            SandboxCard(sandbox, agents) { agent ->
+                                // Its Home opens; with none (an older bridge), a new conversation.
+                                val home = model.conversations.firstOrNull { it.home && it.host == agent.host && it.agent == agent.name }
+                                AgentRow(
+                                    model,
+                                    agent,
+                                    live,
+                                    working = busy.any { it.first == agent },
+                                    now = now,
+                                    open = { if (home != null) open(home.id) else start(agent) },
+                                    start = { start(agent) },
+                                )
+                                // Its other conversations, newest first, folded under it.
+                                val others = model.conversations
+                                    .filter { !it.home && it.host == agent.host && it.agent == agent.name && model.listed(it) }
+                                    .sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: 0L }
+                                if (others.isNotEmpty()) {
+                                    val unfolded = agent.address in shown
+                                    AgentConversations(model, others, unfolded, open) {
+                                        if (unfolded) shown.remove(agent.address) else shown.add(agent.address)
                                     }
                                 }
                             }
-                            Glyph(Glyphs.plus, p.accent, size = 20.dp)
                         }
                     }
                 }
             }
             item { Gap(16.dp) }
         }
+    }
+}
+
+/**
+ * A sandbox in Agents: a card with a hairline edge on `surface`, its box
+ * glyph, its name, its runtime and how many agents it has; then its
+ * agents, one row each, inside it.
+ */
+@Composable
+private fun SandboxCard(sandbox: String, agents: List<Agent>, row: @Composable (Agent) -> Unit) {
+    val p = palette
+    val first = agents.first()
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+            .clip(Shapes.control).border(1.dp, p.line, Shapes.control).background(p.surface),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp).semantics(mergeDescendants = true) { heading() },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(Modifier.size(36.dp).clip(Shapes.control).background(p.bg), contentAlignment = Alignment.Center) {
+                Glyph(Glyphs.sandbox, p.accent, size = 22.dp)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(sandbox, style = Type.code.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold), color = p.text)
+                val count = "${agents.size} ${if (agents.size == 1) "agent" else "agents"}"
+                Text(
+                    "${first.runtime.replaceFirstChar { it.uppercase() }} · $count",
+                    style = Type.small,
+                    color = p.textMuted,
+                )
+            }
+        }
+        agents.forEach { agent ->
+            Hairline()
+            row(agent)
+        }
+    }
+}
+
+/**
+ * An agent inside its sandbox's card: its avatar (pulsing while it works),
+ * its name, working or when it last sent a message (its address before
+ * its first). Tapping it [open]s its Home; `+`, its own target, [start]s
+ * a new conversation.
+ */
+@Composable
+private fun AgentRow(model: AppModel, agent: Agent, live: Boolean, working: Boolean, now: Long, open: () -> Unit, start: () -> Unit) {
+    val p = palette
+    Row(
+        Modifier.fillMaxWidth().clickable(onClickLabel = "Open ${agent.agent}'s Home", onClick = open)
+            .padding(start = 14.dp, end = 2.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        AgentAvatar(agent.agent, live, small = true, working = working)
+        Column(Modifier.weight(1f)) {
+            Text(agent.agent, style = Type.name.copy(fontSize = 15.sp), color = p.text)
+            Crossfade(working, animationSpec = Motion.change(), label = "activity") { on ->
+                if (on) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("working", style = Type.small, color = p.accent)
+                        WorkingWave(square = 4.dp, lift = 3.dp)
+                    }
+                } else {
+                    val last = model.lastActive(agent)
+                    if (last != null) {
+                        Text("active ${Times.ago(last, now)}", style = Type.small, color = p.textMuted)
+                    } else {
+                        Text(agent.address, style = Type.code, color = p.textFaint)
+                    }
+                }
+            }
+        }
+        IconButton(Glyphs.plus, "New conversation with ${agent.agent}", start, tint = p.accent)
+    }
+}
+
+/**
+ * An agent's conversations other than Home, inside its card: folded, a
+ * line saying how many, with a chevron down; unfolded, each one (its name,
+ * the time of its last message, its unread count), newest first, then
+ * the line again with the chevron up.
+ */
+@Composable
+private fun AgentConversations(model: AppModel, others: List<Conversation>, unfolded: Boolean, open: (String) -> Unit, onFold: () -> Unit) {
+    val p = palette
+    val turn by animateFloatAsState(if (unfolded) -90f else 90f, Motion.change(), label = "chevron")
+    if (unfolded) {
+        others.forEach { c ->
+            val unread = model.unread(c.id)
+            val last = model.lines[c.id]?.lastOrNull()
+            Hairline(Modifier.padding(start = 58.dp))
+            Row(
+                Modifier.fillMaxWidth().clickable { open(c.id) }.padding(start = 58.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    c.title ?: "No name yet",
+                    style = Type.small.copy(fontWeight = FontWeight.Medium),
+                    color = if (c.title != null) p.text else p.textMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (last != null) Text(Times.inList(last.time), style = Type.code, color = if (unread > 0) p.accent else p.textFaint)
+                if (unread > 0) UnreadBadge(unread)
+            }
+        }
+    }
+    Hairline(Modifier.padding(start = 58.dp))
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(onClickLabel = if (unfolded) "Fold the conversations" else "Show the conversations", role = Role.Button, onClick = onFold)
+            .padding(start = 58.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            if (unfolded) "Show less" else "${others.size} ${if (others.size == 1) "conversation" else "conversations"}",
+            style = Type.small.copy(fontWeight = FontWeight.SemiBold),
+            color = p.accent,
+        )
+        Box(Modifier.rotate(turn)) { Glyph(Glyphs.chevron, p.accent, size = 16.dp) }
     }
 }
 
