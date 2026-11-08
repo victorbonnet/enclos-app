@@ -70,13 +70,16 @@ import java.io.File
 
 /**
  * A message's files: an image drawn in the bubble, which opens full screen
- * to share; another file as a line with its name and size, which shares it.
+ * to share; HTML as a line opening a page, other files as a line sharing them.
  * Each is fetched from the bridge when it is first shown.
  */
 @Composable
 fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: (Attachment) -> Unit) {
     var opened by remember { mutableStateOf<Pair<Attachment, File>?>(null) }
-    opened?.let { (a, file) -> Viewer(a, file) { opened = null } }
+    opened?.let { (a, file) ->
+        if (a.artefact) ArtefactViewer(a, file) { opened = null }
+        else Viewer(a, file) { opened = null }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         attachments.forEach { a ->
             val state = states[a.id]
@@ -89,7 +92,7 @@ fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: 
             if (a.image) {
                 ImageFile(a, state, { fetch(a) }) { opened = a to it }
             } else {
-                OtherFile(a, state, { fetch(a) })
+                OtherFile(a, state, { fetch(a) }) { opened = a to it }
             }
         }
     }
@@ -134,9 +137,9 @@ private fun Placeholder(text: String, onClick: (() -> Unit)? = null) {
     ) { Text(text, style = Type.meta, color = p.textFaint) }
 }
 
-/** A file that is not an image: its name and size; tap to share it once it is here. */
+/** A file's name and size: HTML opens as a page; another file opens Share. */
 @Composable
-private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit) {
+private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit, open: (File) -> Unit) {
     val p = palette
     val context = LocalContext.current
     Row(
@@ -144,7 +147,9 @@ private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit) {
             .clickable(role = Role.Button) {
                 when (state) {
                     // Cleared by the system since: fetched again, not shared missing.
-                    is FileState.Ready -> if (state.file.isFile) share(context, a, state.file) else retry()
+                    is FileState.Ready -> if (state.file.isFile) {
+                        if (a.artefact) open(state.file) else share(context, a, state.file)
+                    } else retry()
                     is FileState.Failed -> retry()
                     else -> {}
                 }
@@ -160,7 +165,7 @@ private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit) {
                 when (state) {
                     is FileState.Loading -> "${size(a.size)} · ${percent(state.done, state.size)}"
                     is FileState.Failed -> "Did not come: ${state.why}. Tap to try again."
-                    is FileState.Ready -> "${size(a.size)} · tap to share"
+                    is FileState.Ready -> "${size(a.size)} · ${if (a.artefact) "open page" else "tap to share"}"
                     null -> size(a.size)
                 },
                 style = Type.meta,
