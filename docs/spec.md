@@ -66,7 +66,7 @@ Only the host's own person on a still-paired device may decide. Buttons need a c
 
 Requests are kept in the app's private preferences, covered by its existing no-backup rules. On authentication the host's cached requests are replaced by its fresh sync; forgetting that host or clearing the cache removes them. They show offline with both controls disabled. Android is built; iOS follows the same behaviour when implemented.
 
-The built-in network probe's reserved `probe.enclos.invalid` destination is not an approval request. The host suppresses new notifications for that exact host and retires existing pending ones as diagnostics without changing policy. Such notifications leave the inbox; a detail page already open says **Diagnostic probe · no approval needed** and offers no decision controls. Real destinations, including private addresses, remain eligible for requests.
+Connections attributed to a host policy-test run stay blocked and logged but never become inbox requests, including private-IP probes. The proxy verifies a host-registered, sandbox-scoped marker; arbitrary client markers cannot hide normal traffic. A genuine agent request to the same address remains visible. The built-in network probe's reserved `probe.enclos.invalid` destination is not an approval request. The host suppresses new notifications for that exact host and retires existing pending ones as diagnostics without changing policy. Such notifications leave the inbox; a detail page already open says **Diagnostic probe · no approval needed** and offers no decision controls. Real destinations, including private addresses, remain eligible for requests.
 
 ### Groups
 
