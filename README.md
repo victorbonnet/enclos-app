@@ -4,6 +4,8 @@ The mobile app for [enclos](https://github.com/victorbonnet/enclos): talk to the
 
 Status: a proposal being built, Android only. The app pairs with a host's bridge (`enclos app pair`), lists its agents and talks to them; push notifications and iOS are not built. What it does is in [`docs/spec.md`](docs/spec.md), its decisions in [`docs/adr/`](docs/adr/), the plan in [victorbonnet/enclos#145](https://github.com/victorbonnet/enclos/issues/145). Nothing in it is a security guarantee yet.
 
+Agents can send [static HTML artefacts](docs/spec.md#5-messages): a self-contained page opens directly in the app, with Back and Share. Pages use inline CSS and embedded images or fonts; scripts, external resources and navigation are unavailable. The channel tells the agent to write a UTF-8 `.html` file and send `MEDIA:/absolute/path/page.html`. HTML in a conversation's text still shows literally.
+
 ## Build
 
 Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK and NDK, JDK 17 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).
