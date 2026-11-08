@@ -933,11 +933,12 @@ private fun MoreRow(name: String, hidden: Int, shown: Int, unfolded: Boolean, on
  * Every agent, under its sandbox's heading (the Enclos mark, the sandbox,
  * its runtime and host), each as the conversations view shows it, without
  * its conversations: its initial (pulsing while it works), its name, and
- * working or when it was last active. Tapping one opens its page. [query]
- * keeps those whose address or runtime has every word of it.
+ * working or when it was last active. Tapping one opens its page; tapping
+ * a heading, its sandbox's page (`host/sandbox`). [query] keeps those
+ * whose address or runtime has every word of it.
  */
 @Composable
-fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, pair: () -> Unit) {
+fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, openSandbox: (String) -> Unit, pair: () -> Unit) {
     // "5 min ago" stays true while the screen shows.
     val now by produceState(System.currentTimeMillis() / 1000) {
         while (true) {
@@ -960,7 +961,11 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, pai
                 item(key = "sandbox-${host.name}-$sandbox") {
                     Arriving {
                         val runtime = agents.first().runtime.replaceFirstChar { it.uppercase() }
-                        ListHeading(sandbox, if (model.paired.size > 1) "$runtime · ${host.name}" else runtime) { SandboxMark(live, side = 16.dp) }
+                        ListHeading(
+                            sandbox,
+                            if (model.paired.size > 1) "$runtime · ${host.name}" else runtime,
+                            open = { openSandbox("${host.name}/$sandbox") },
+                        ) { SandboxMark(live, side = 16.dp) }
                     }
                 }
                 items(agents, key = { "agent-${it.address}" }) { agent ->
@@ -985,7 +990,7 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, pai
 
 /** An agent, as the conversations view shows it, without its conversations: tapping it opens its page. */
 @Composable
-private fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () -> Unit) {
+internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () -> Unit) {
     val p = palette
     val working = model.workingOn(agent)
     Row(
@@ -1014,14 +1019,17 @@ private fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () -
 /**
  * A heading of a list, as Settings' sections are named: small and faint
  * above a hairline, with what it leads with ([lead], such as a sandbox's
- * mark) and a note at its end.
+ * mark) and a note at its end; with [open], a chevron after the note, and
+ * tapping it opens what it names.
  */
 @Composable
-internal fun ListHeading(text: String, note: String? = null, lead: (@Composable () -> Unit)? = null) {
+internal fun ListHeading(text: String, note: String? = null, open: (() -> Unit)? = null, lead: (@Composable () -> Unit)? = null) {
     val p = palette
     Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 8.dp).semantics(mergeDescendants = true) { heading() },
+            Modifier.fillMaxWidth()
+                .then(if (open != null) Modifier.clickable(onClickLabel = "Open $text", onClick = open) else Modifier)
+                .padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 8.dp).semantics(mergeDescendants = true) { heading() },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -1037,6 +1045,10 @@ internal fun ListHeading(text: String, note: String? = null, lead: (@Composable 
                     modifier = Modifier.weight(1f),
                     textAlign = androidx.compose.ui.text.style.TextAlign.End,
                 )
+            }
+            if (open != null) {
+                if (note == null) Spacer(Modifier.weight(1f))
+                Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
             }
         }
         Hairline()

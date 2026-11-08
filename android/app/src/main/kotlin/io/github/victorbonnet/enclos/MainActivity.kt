@@ -63,7 +63,23 @@ private sealed interface Route {
     data object Settings : Route
     data object NewChat : Route
     data class Chat(val id: String) : Route
-    data class AgentPage(val address: String) : Route
+    /** An agent's page (`host/sandbox/agent`), opened from its sandbox's page when [inSandbox]. */
+    data class AgentPage(val address: String, val inSandbox: Boolean = false) : Route
+
+    /** A sandbox's page: `host/sandbox`. */
+    data class SandboxPage(val address: String) : Route
+
+    /** Where back leads: an agent opened from its sandbox's page goes back to it; the rest, to the tabs. */
+    val up: Route get() = when {
+        this is AgentPage && inSandbox -> SandboxPage(address.substringBeforeLast('/'))
+        else -> Tabs
+    }
+
+    /** How deep it is: a move to a deeper route goes forward. */
+    val depth: Int get() = when {
+        this == Tabs -> 0
+        else -> up.depth + 1
+    }
 
     /** As saved across a configuration change. */
     fun save(): String = when (this) {
@@ -72,7 +88,8 @@ private sealed interface Route {
         Settings -> "settings"
         NewChat -> "new"
         is Chat -> "chat:$id"
-        is AgentPage -> "agent:$address"
+        is AgentPage -> if (inSandbox) "sandbox-agent:$address" else "agent:$address"
+        is SandboxPage -> "sandbox:$address"
     }
 
     companion object {
@@ -82,6 +99,8 @@ private sealed interface Route {
             saved == "new" -> NewChat
             saved.startsWith("chat:") -> Chat(saved.removePrefix("chat:"))
             saved.startsWith("agent:") -> AgentPage(saved.removePrefix("agent:"))
+            saved.startsWith("sandbox-agent:") -> AgentPage(saved.removePrefix("sandbox-agent:"), inSandbox = true)
+            saved.startsWith("sandbox:") -> SandboxPage(saved.removePrefix("sandbox:"))
             else -> Tabs
         }
     }
@@ -200,10 +219,11 @@ private fun Screens(model: AppModel) {
     // shown (current), as it does while one is opening (target).
     val onFullScreen = routes.currentState != Route.Tabs || routes.targetState != Route.Tabs
     PredictiveBackHandler(enabled = onFullScreen) { progress ->
+        val up = routes.currentState.up
         try {
-            progress.collect { event -> routes.seekTo(event.progress, Route.Tabs) }
-            saved = Route.Tabs.save()
-            routes.animateTo(Route.Tabs)
+            progress.collect { event -> routes.seekTo(event.progress, up) }
+            saved = up.save()
+            routes.animateTo(up)
         } catch (_: CancellationException) {
             routes.animateTo(routes.currentState)
         }
@@ -216,7 +236,7 @@ private fun Screens(model: AppModel) {
     BackHandler(enabled = !onFullScreen && view != View.Conversations) { view = View.Conversations }
 
     Box(Modifier.fillMaxSize().background(palette.bg).windowInsetsPadding(WindowInsets.statusBars)) {
-        transition.AnimatedContent(transitionSpec = { routeMove(forward = targetState != Route.Tabs) }) { route ->
+        transition.AnimatedContent(transitionSpec = { routeMove(forward = targetState.depth > initialState.depth) }) { route ->
             val line = palette.line
             // A full screen's left edge is a hairline, so it reads crisply
             // over the tabs while it slides.
@@ -236,13 +256,21 @@ private fun Screens(model: AppModel) {
                         SettingsScreen(model, pair = { go(Route.Pair) })
                     }
                     Route.NewChat -> NewChatScreen(model, back = { go(Route.Tabs) }, opened = { go(Route.Chat(it)) })
-                    is Route.AgentPage -> AgentScreen(model, route.address, back = { go(Route.Tabs) }, openChat = { go(Route.Chat(it)) }, start = start)
+                    is Route.AgentPage -> AgentScreen(model, route.address, back = { go(route.up) }, openChat = { go(Route.Chat(it)) }, start = start)
+                    is Route.SandboxPage -> SandboxScreen(
+                        model,
+                        route.address,
+                        back = { go(Route.Tabs) },
+                        openAgent = { go(Route.AgentPage(it.address, inSandbox = true)) },
+                        openChat = { go(Route.Chat(it)) },
+                    )
                     Route.Tabs -> HomeShell(
                         model,
                         view,
                         onView = { view = it },
                         openChat = { go(Route.Chat(it)) },
                         openAgent = { go(Route.AgentPage(it.address)) },
+                        openSandbox = { go(Route.SandboxPage(it)) },
                         start = start,
                         settings = { go(Route.Settings) },
                         compose = { go(Route.NewChat) },

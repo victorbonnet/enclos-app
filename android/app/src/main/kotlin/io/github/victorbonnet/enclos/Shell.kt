@@ -29,6 +29,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
+import io.github.victorbonnet.enclos.ui.SandboxMark
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -82,6 +83,7 @@ fun HomeShell(
     onView: (View) -> Unit,
     openChat: (String) -> Unit,
     openAgent: (Agent) -> Unit,
+    openSandbox: (String) -> Unit,
     start: (Agent) -> Unit,
     settings: () -> Unit,
     compose: () -> Unit,
@@ -116,7 +118,7 @@ fun HomeShell(
                 Box(Modifier.fillMaxSize().background(p.bg)) {
                     when (shown) {
                         View.Conversations -> InboxScreen(model, query, unreadOnly, openChat, start, openAgent, pair)
-                        View.Agents -> AgentsScreen(model, query, openAgent, pair)
+                        View.Agents -> AgentsScreen(model, query, openAgent, openSandbox, pair)
                     }
                 }
             }
@@ -300,6 +302,76 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
             }
             Text(
                 "Changing an agent from the app comes later, for the host's own user.",
+                style = Type.small,
+                color = p.textFaint,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(24.dp),
+            )
+        }
+    }
+}
+
+// ---------- A sandbox's page ----------
+
+/**
+ * A sandbox's page (`host/sandbox`): its mark (in `accent` while its host
+ * is connected), name, runtime and host; its agents, as the agents view
+ * shows them, each opening its page; its groups, each opening; what runs
+ * it; and where the rest (its state, policy and sessions) shows, on the
+ * host. Read only: the bridge sends no more about a sandbox.
+ */
+@Composable
+fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent: (Agent) -> Unit, openChat: (String) -> Unit) {
+    val p = palette
+    val host = address.substringBefore('/')
+    val sandbox = address.substringAfter('/')
+    val agents = model.agents.filter { it.host == host && it.sandbox == sandbox }
+    val now = remember { System.currentTimeMillis() / 1000 }
+    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+        AppBar {
+            IconButton(Glyphs.back, "Back", back)
+            Text(sandbox, style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp), color = p.text, maxLines = 1)
+        }
+        Hairline()
+        if (agents.isEmpty()) {
+            Text("This sandbox is no longer listed by its host.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
+            return@Column
+        }
+        val live = model.connected(host)
+        val runtime = agents.first().runtime.replaceFirstChar { it.uppercase() }
+        val groups = model.conversations
+            .filter { it.group && it.host == host && it.members.first().substringBefore('/') == sandbox }
+            .sortedByDescending { model.lines[it.id]?.lastOrNull()?.time ?: 0L }
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            Column(Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                SandboxMark(live, side = 56.dp)
+                Gap(14.dp)
+                Text(sandbox, style = Type.heading, color = p.text)
+                Text("$runtime · $host", style = Type.code, color = p.textFaint)
+            }
+            ListHeading("Agents · ${agents.size}")
+            agents.forEach { a -> AgentListRow(model, a, now) { openAgent(a) } }
+            if (groups.isNotEmpty()) {
+                ListHeading("Groups · ${groups.size}")
+                groups.forEach { g ->
+                    val handles = g.members.map { it.substringAfterLast('/') }
+                    Row(
+                        Modifier.fillMaxWidth().clickable(onClickLabel = "Open the group") { openChat(g.id) }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        MemberStack(handles, side = 32.dp)
+                        Text(g.title ?: handles.joinToString(", "), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+                    }
+                }
+            }
+            ListHeading("Runs on")
+            Info("Runtime", runtime)
+            Info("Host", "$host · ${if (live) "connected" else model.status[host] ?: "not connected"}")
+            Text(
+                "Its state, policy and sessions show on the host: enclos sandbox show $sandbox.",
                 style = Type.small,
                 color = p.textFaint,
                 textAlign = TextAlign.Center,
