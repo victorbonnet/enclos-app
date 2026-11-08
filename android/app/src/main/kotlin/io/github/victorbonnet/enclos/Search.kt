@@ -110,3 +110,52 @@ fun fold(text: String): String =
         .lowercase()
         .replace(Regex("\\s+"), " ")
         .trim()
+
+/**
+ * Where the words of [query] are in [text], by the rules [search] uses
+ * ([fold]: case, accents, spaces), as ranges of [text]'s own characters, to
+ * highlight. [text] is folded one character at a time, each folded character
+ * keeping where it came from, since folding changes the length (an accent
+ * written as its own mark goes, `İ` lowercases to two characters).
+ */
+fun matches(text: String, query: String): List<IntRange> {
+    val words = fold(query).split(' ').filter { it.isNotEmpty() }
+    if (words.isEmpty()) return emptyList()
+    val folded = StringBuilder()
+    // For each folded character: where its source starts, and where it ends.
+    val starts = mutableListOf<Int>()
+    val ends = mutableListOf<Int>()
+    var i = 0
+    while (i < text.length) {
+        val point = text.codePointAt(i)
+        val next = i + Character.charCount(point)
+        if (Character.isWhitespace(point)) {
+            if (folded.isNotEmpty() && folded.last() != ' ') {
+                folded.append(' ')
+                starts += i
+                ends += next
+            }
+        } else {
+            val piece = fold(text.substring(i, next))
+            if (piece.isEmpty() && ends.isNotEmpty()) {
+                // A mark on its own: part of the character before it.
+                ends[ends.size - 1] = next
+            }
+            piece.forEach {
+                folded.append(it)
+                starts += i
+                ends += next
+            }
+        }
+        i = next
+    }
+    val found = mutableListOf<IntRange>()
+    for (word in words) {
+        var at = folded.indexOf(word)
+        while (at >= 0) {
+            found += starts[at] until ends[at + word.length - 1]
+            at = folded.indexOf(word, at + word.length)
+        }
+    }
+    return found
+}

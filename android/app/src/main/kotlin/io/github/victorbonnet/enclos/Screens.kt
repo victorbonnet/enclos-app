@@ -757,16 +757,11 @@ internal fun Choice(label: String, on: Boolean, onClick: () -> Unit) {
     ) { Text(label, style = Type.label, color = text, maxLines = 1) }
 }
 
-/** [text] with the words of [query] in `accent`, whatever their case. */
+/** [text] with the words of [query] in `accent`, using search's matching rules. */
 internal fun highlighted(text: String, query: String, accent: Color): AnnotatedString = buildAnnotatedString {
     append(text)
-    val lower = text.lowercase()
-    query.lowercase().split(' ').filter { it.isNotBlank() }.forEach { word ->
-        var at = lower.indexOf(word)
-        while (at >= 0) {
-            addStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold), at, at + word.length)
-            at = lower.indexOf(word, at + word.length)
-        }
+    matches(text, query).forEach { range ->
+        addStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold), range.first, range.last + 1)
     }
 }
 
