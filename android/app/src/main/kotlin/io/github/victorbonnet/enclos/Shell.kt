@@ -221,8 +221,7 @@ private fun can(capability: String): String? = when (capability) {
 /**
  * An agent's page: its initial, name and address; its conversations (Home,
  * a new one, how many); what runs it (runtime, sandbox, host and
- * connection, what it can do); and its commands. Read only: changing an
- * agent from the app comes later, for the host's own user.
+ * connection, what it can do); its commands and shared photo controls.
  */
 @Composable
 fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (String) -> Unit, start: (Agent) -> Unit) {
@@ -246,11 +245,12 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
         var allCommands by remember { mutableStateOf(false) }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             Column(Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                AgentInitial(agent.agent, working, side = 64.dp)
+                EditableAgentPhoto(model, agent, working)
                 Gap(14.dp)
                 Text(agent.agent, style = Type.heading, color = p.text)
                 Text(agent.address, style = Type.code, color = p.textFaint)
             }
+            AgentPhotoControls(model, agent)
             Section("Conversations") {
                 if (home != null) {
                     SettingRow(Modifier.clickable(onClickLabel = "Open Home") { openChat(home.id) }) {
@@ -299,7 +299,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 }
             }
             Text(
-                "Changing an agent from the app comes later, for the host's own user.",
+                "The shared photo is stored on this agent's host. Other agent settings are managed there.",
                 style = Type.small,
                 color = p.textFaint,
                 textAlign = TextAlign.Center,
@@ -359,7 +359,7 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        MemberStack(handles, side = 32.dp)
+                        MemberStack(handles, side = 32.dp, scope = "$host/$sandbox")
                         Text(g.title ?: handles.joinToString(", "), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
                     }
@@ -433,7 +433,7 @@ private fun GroupPicker(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                AgentInitial(a.agent, side = 32.dp)
+                AgentInitial(a.agent, side = 32.dp, address = a.address)
                 Column(Modifier.weight(1f)) {
                     Text(a.agent, style = Type.name, color = if (allowed || ticked) p.text else p.textFaint)
                     Text("${a.sandbox} · ${a.host}", style = Type.code, color = p.textFaint)
@@ -495,9 +495,9 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     if (grouping) {
-                        MemberStack(members.map { it.agent }.ifEmpty { listOf("?") }, side = 28.dp)
+                        MemberStack(members.map { it.agent }.ifEmpty { listOf("?") }, side = 28.dp, scope = members.firstOrNull()?.let { "${it.host}/${it.sandbox}" })
                     } else if (agent != null) {
-                        AgentInitial(agent.agent, side = 28.dp)
+                        AgentInitial(agent.agent, side = 28.dp, address = agent.address)
                     }
                     Text(if (grouping) "New group" else agent?.agent ?: "No agent", style = Type.name, color = p.text)
                     // Pointing down: a list opens.
@@ -528,7 +528,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    AgentInitial(a.agent, side = 24.dp)
+                                    AgentInitial(a.agent, side = 24.dp, address = a.address)
                                     Column(Modifier.weight(1f, fill = false)) {
                                         Text(a.agent, style = Type.name, color = p.text)
                                         Text("${a.sandbox} · ${a.host}", style = Type.code, color = p.textFaint)
@@ -554,7 +554,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                 Text("No agent yet: pair a host, or wait for it to list its agents.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(24.dp))
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    AgentInitial(agent.agent, model.workingOn(agent).isNotEmpty(), side = 64.dp)
+                    AgentInitial(agent.agent, model.workingOn(agent).isNotEmpty(), side = 64.dp, address = agent.address)
                     Gap(14.dp)
                     Text(agent.agent, style = Type.heading, color = p.text)
                     Gap(4.dp)

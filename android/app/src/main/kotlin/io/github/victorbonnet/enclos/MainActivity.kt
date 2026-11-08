@@ -32,6 +32,8 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.runtime.CompositionLocalProvider
+import io.github.victorbonnet.enclos.ui.LocalAgentPictures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -189,12 +191,14 @@ class MainActivity : ComponentActivity() {
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) setRecentsScreenshotEnabled(!lockOn)
             }
             EnclosTheme(dark) {
-                val locked = model.locked.value
-                Box(Modifier.fillMaxSize()) {
-                    // Kept under the lock, so the screen the person was on is there once unlocked;
-                    // hidden from accessibility services meanwhile.
-                    Box(if (locked) Modifier.fillMaxSize().clearAndSetSemantics {} else Modifier.fillMaxSize()) { Screens(model) }
-                    if (locked) LockScreen(model, unlock = ::unlock, leave = { moveTaskToBack(true) })
+                CompositionLocalProvider(LocalAgentPictures provides model.agentImages.pictures) {
+                    val locked = model.locked.value
+                    Box(Modifier.fillMaxSize()) {
+                        // Kept under the lock, so the screen the person was on is there once unlocked;
+                        // hidden from accessibility services meanwhile.
+                        Box(if (locked) Modifier.fillMaxSize().clearAndSetSemantics {} else Modifier.fillMaxSize()) { Screens(model) }
+                        if (locked) LockScreen(model, unlock = ::unlock, leave = { moveTaskToBack(true) })
+                    }
                 }
             }
         }

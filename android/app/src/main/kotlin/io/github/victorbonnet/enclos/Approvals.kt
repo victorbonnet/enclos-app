@@ -66,7 +66,7 @@ fun PolicyRequestRow(request: PolicyRequest, open: () -> Unit) {
             Modifier.size(32.dp).semantics { contentDescription = agent?.let { "Requested by $it" } ?: "Requesting agent unknown" },
             contentAlignment = Alignment.Center,
         ) {
-            if (agent != null) AgentInitial(agent, side = 32.dp)
+            if (agent != null) AgentInitial(agent, side = 32.dp, address = "${request.host}/${request.agent}")
             else SandboxMark(live = false, side = 32.dp, tint = Color.Gray)
         }
         Column(Modifier.weight(1f)) {

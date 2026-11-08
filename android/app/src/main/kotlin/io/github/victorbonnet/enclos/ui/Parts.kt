@@ -13,6 +13,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -39,6 +41,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,6 +55,8 @@ import androidx.compose.ui.platform.LocalDensity
 import kotlin.math.PI
 import kotlin.math.sin
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
@@ -68,6 +73,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+/** Keyed by host/sandbox/agent, so names shared across hosts never share pictures. */
+val LocalAgentPictures = staticCompositionLocalOf<Map<String, Bitmap>> { emptyMap() }
 
 /** A line of `line`: lists and bars are separated by hairlines, never shadows. */
 @Composable
@@ -121,8 +129,12 @@ fun Corners(color: Color, modifier: Modifier = Modifier, stroke: Dp = 2.dp, arm:
  * 1.4 s; with animations off, only the corners' `accent` says so.
  */
 @Composable
-fun AgentAvatar(name: String, live: Boolean, small: Boolean = false, working: Boolean = false) {
+fun AgentAvatar(name: String, live: Boolean, small: Boolean = false, working: Boolean = false, address: String? = null) {
     val side = if (small) 32.dp else 44.dp
+    if (address != null && LocalAgentPictures.current[address] != null) {
+        AgentInitial(name, working, side, address)
+        return
+    }
     val stroke = if (small) 2.dp else 2.5.dp
     Box(
         Modifier.size(side).then(if (working) Modifier.semantics { contentDescription = "$name is working" } else Modifier),
@@ -181,7 +193,7 @@ private fun agentColors(name: String): Pair<Color, Color> {
  * the ring stays.
  */
 @Composable
-fun AgentInitial(name: String, working: Boolean = false, side: Dp = 28.dp) {
+fun AgentInitial(name: String, working: Boolean = false, side: Dp = 28.dp, address: String? = null) {
     val p = palette
     val (from, to) = remember(name) { agentColors(name) }
     Box(
@@ -209,7 +221,9 @@ fun AgentInitial(name: String, working: Boolean = false, side: Dp = 28.dp) {
             Modifier.size(side).clip(CircleShape).background(Brush.linearGradient(listOf(from, to))),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
+            val photo = address?.let { LocalAgentPictures.current[it] }
+            if (photo != null) Image(photo.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(side))
+            else Text(
                 name.take(1).uppercase(),
                 style = Type.name.copy(fontSize = (side.value * 0.44f).coerceAtLeast(11f).sp, fontWeight = FontWeight.SemiBold),
                 color = Color.White,
@@ -369,6 +383,7 @@ fun Bubble(
     header: String? = null,
     files: (@Composable () -> Unit)? = null,
     speaker: String? = null,
+    speakerAddress: String? = null,
 ) {
     val p = palette
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (outgoing) Alignment.End else Alignment.Start) {
@@ -379,7 +394,7 @@ fun Bubble(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                AgentInitial(speaker, side = 20.dp)
+                AgentInitial(speaker, side = 20.dp, address = speakerAddress)
                 Text(speaker, style = Type.meta.copy(fontWeight = FontWeight.SemiBold), color = p.textMuted)
             }
         }
