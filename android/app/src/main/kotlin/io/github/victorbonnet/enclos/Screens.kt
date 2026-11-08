@@ -368,9 +368,6 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, start: (Agent) -> Unit,
                 }
             }
         }
-        if (model.paired.isNotEmpty()) {
-            Fab("New conversation", Glyphs.compose, newConversation, Modifier.align(Alignment.BottomEnd).padding(16.dp))
-        }
     }
 }
 
@@ -396,9 +393,11 @@ private fun AgentFolder(model: AppModel, entry: AgentEntry, open: Boolean, onTog
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         AgentInitial(name, working)
-        Text(name, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        Box(Modifier.rotate(turn)) { Glyph(Glyphs.chevron, p.textFaint, size = 16.dp) }
-        Spacer(Modifier.weight(1f))
+        // The name and its chevron take the room left: the compose button stays at the end.
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(name, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Box(Modifier.rotate(turn)) { Glyph(Glyphs.chevron, p.textFaint, size = 16.dp) }
+        }
         AnimatedVisibility(
             visible = !open && unread > 0,
             enter = fadeIn(Motion.enter(Motion.SHORT)) + scaleIn(Motion.enter(Motion.SHORT), initialScale = 0.6f),
