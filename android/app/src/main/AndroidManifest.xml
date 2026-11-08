@@ -18,7 +18,7 @@
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:label="enclos"
+        android:label="Enclos"
         android:enableOnBackInvokedCallback="true"
         android:theme="@style/Theme.Enclos"
         tools:targetApi="33">
@@ -34,7 +34,9 @@
             android:configChanges="uiMode"
             android:exported="true"
             android:launchMode="singleTask"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:screenOrientation="portrait"
+            tools:ignore="DiscouragedApi,LockedOrientationActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -49,11 +51,12 @@
                 <data android:scheme="enclos" android:host="pair" />
             </intent-filter>
         </activity>
-        <!-- The QR code scanner, which the library locks to landscape: it
-             follows how the phone is held instead -->
+        <!-- The QR code scanner, which the library locks to landscape:
+             portrait, as the rest of the app -->
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"
-            android:screenOrientation="fullSensor"
+            android:screenOrientation="portrait"
+            tools:ignore="DiscouragedApi,LockedOrientationActivity"
             tools:replace="screenOrientation" />
         <!-- Shares a message's file with another app, which may read that
              one file only (res/xml/shared_files.xml) -->

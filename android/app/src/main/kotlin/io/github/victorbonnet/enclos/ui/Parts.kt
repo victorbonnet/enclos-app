@@ -298,7 +298,7 @@ fun NavBar(selected: Tab, onSelect: (Tab) -> Unit) {
                 val tint by animateColorAsState(if (on) palette.accent else palette.textMuted, Motion.change(), label = "tint")
                 val label by animateColorAsState(if (on) palette.text else palette.textMuted, Motion.change(), label = "label")
                 Column(
-                    Modifier.weight(1f).clickable(role = Role.Tab, onClick = { onSelect(tab) }),
+                    Modifier.weight(1f).clickable(interactionSource = null, indication = null, role = Role.Tab) { onSelect(tab) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {

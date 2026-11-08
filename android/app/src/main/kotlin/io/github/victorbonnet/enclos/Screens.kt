@@ -1562,7 +1562,8 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                 .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                 .setPrompt("The code of enclos app pair")
                 .setBeepEnabled(false)
-                .setOrientationLocked(false)
+                // Portrait, as the app (the manifest)
+                .setOrientationLocked(true)
                 // A terminal with a dark theme draws the code light on
                 // dark: read it either way round.
                 .addExtra(Intents.Scan.SCAN_TYPE, Intents.Scan.MIXED_SCAN),
