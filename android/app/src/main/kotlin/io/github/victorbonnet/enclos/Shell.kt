@@ -315,11 +315,11 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
  * A sandbox's page (`host/sandbox`): its mark (in `accent` while its host
  * is connected), name, runtime and host; its agents, as the agents view
  * shows them, each opening its page; its groups, each opening; what runs
- * it; and where the rest (its state, policy and sessions) shows, on the
- * host. Read only: the bridge sends no more about a sandbox.
+ * it; its active policy and accepted access, with an editor for the host
+ * person; and where its remaining state and sessions show on the host.
  */
 @Composable
-fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent: (Agent) -> Unit, openChat: (String) -> Unit) {
+fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent: (Agent) -> Unit, openChat: (String) -> Unit, openPolicy: () -> Unit) {
     val p = palette
     val host = address.substringBefore('/')
     val sandbox = address.substringAfter('/')
@@ -365,11 +365,13 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                     }
                 }
             }
+            ListHeading("Policy")
+            SandboxPolicySummary(model, address, openPolicy)
             ListHeading("Runs on")
             Info("Runtime", runtime)
             Info("Host", "$host · ${if (live) "connected" else model.status[host] ?: "not connected"}")
             Text(
-                "Its state, policy and sessions show on the host: enclos sandbox show $sandbox.",
+                "Its state and sessions show on the host: enclos sandbox show $sandbox.",
                 style = Type.small,
                 color = p.textFaint,
                 textAlign = TextAlign.Center,
