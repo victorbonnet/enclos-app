@@ -45,6 +45,9 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.ui.EnclosTheme
+import io.github.victorbonnet.enclos.ui.IconButton
+import io.github.victorbonnet.enclos.ui.Glyphs
+import io.github.victorbonnet.enclos.ui.AppBar
 import io.github.victorbonnet.enclos.ui.Motion
 import io.github.victorbonnet.enclos.ui.NavBar
 import io.github.victorbonnet.enclos.ui.Tab
@@ -53,23 +56,32 @@ import io.github.victorbonnet.enclos.ui.palette
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-/** What fills the window: the three tabs, or a full screen over them. */
+/** What fills the window: the first screen (its two views), or a full screen over it. */
 private sealed interface Route {
     data object Tabs : Route
     data object Pair : Route
+    data object Settings : Route
+    data object NewChat : Route
     data class Chat(val id: String) : Route
+    data class AgentPage(val address: String) : Route
 
     /** As saved across a configuration change. */
     fun save(): String = when (this) {
         Tabs -> "tabs"
         Pair -> "pair"
+        Settings -> "settings"
+        NewChat -> "new"
         is Chat -> "chat:$id"
+        is AgentPage -> "agent:$address"
     }
 
     companion object {
         fun restore(saved: String): Route = when {
             saved == "pair" -> Pair
+            saved == "settings" -> Settings
+            saved == "new" -> NewChat
             saved.startsWith("chat:") -> Chat(saved.removePrefix("chat:"))
+            saved.startsWith("agent:") -> AgentPage(saved.removePrefix("agent:"))
             else -> Tabs
         }
     }
@@ -172,7 +184,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun Screens(model: AppModel) {
     var saved by rememberSaveable { mutableStateOf("tabs") }
-    var tab by rememberSaveable { mutableStateOf(Tab.Inbox) }
+    var view by rememberSaveable { mutableStateOf(View.Conversations) }
     val routes = remember { SeekableTransitionState(Route.restore(saved)) }
     val transition = rememberTransition(routes, label = "route")
     val scope = rememberCoroutineScope()
@@ -200,8 +212,8 @@ private fun Screens(model: AppModel) {
     val opened = model.openedLink.value
     LaunchedEffect(opened) { if (opened != null) go(Route.Pair) }
 
-    // Back from another tab: to the inbox.
-    BackHandler(enabled = !onFullScreen && tab != Tab.Inbox) { tab = Tab.Inbox }
+    // Back from the agents: to the conversations.
+    BackHandler(enabled = !onFullScreen && view != View.Conversations) { view = View.Conversations }
 
     Box(Modifier.fillMaxSize().background(palette.bg).windowInsetsPadding(WindowInsets.statusBars)) {
         transition.AnimatedContent(transitionSpec = { routeMove(forward = targetState != Route.Tabs) }) { route ->
@@ -212,13 +224,29 @@ private fun Screens(model: AppModel) {
                 drawRect(line, size = Size(1.dp.toPx(), size.height))
             }
             Box(Modifier.fillMaxSize().background(palette.bg).then(edge)) {
+                val start = { agent: Agent -> go(Route.Chat(model.newConversation(agent))) }
                 when (route) {
                     Route.Pair -> PairScreen(model, back = { go(Route.Tabs) }, done = {
-                        tab = Tab.Agents
+                        view = View.Agents
                         go(Route.Tabs)
                     })
                     is Route.Chat -> ConversationScreen(model, route.id, back = { go(Route.Tabs) })
-                    Route.Tabs -> Tabs(model, tab, onTab = { tab = it }, go = go)
+                    Route.Settings -> Column(Modifier.fillMaxSize()) {
+                        AppBar { IconButton(Glyphs.back, "Back", { go(Route.Tabs) }) }
+                        SettingsScreen(model, pair = { go(Route.Pair) })
+                    }
+                    Route.NewChat -> NewChatScreen(model, back = { go(Route.Tabs) }, opened = { go(Route.Chat(it)) })
+                    is Route.AgentPage -> AgentScreen(model, route.address, back = { go(Route.Tabs) }, openChat = { go(Route.Chat(it)) }, start = start)
+                    Route.Tabs -> HomeShell(
+                        model,
+                        view,
+                        onView = { view = it },
+                        openChat = { go(Route.Chat(it)) },
+                        openAgent = { go(Route.AgentPage(it.address)) },
+                        settings = { go(Route.Settings) },
+                        compose = { go(Route.NewChat) },
+                        pair = { go(Route.Pair) },
+                    )
                 }
             }
         }
@@ -243,30 +271,3 @@ private fun routeMove(forward: Boolean): ContentTransform =
         val drag = tween<IntOffset>(Motion.MEDIUM, easing = LinearEasing)
         slideInHorizontally(drag) { -it / 10 } togetherWith slideOutHorizontally(drag) { it }
     }.apply { targetContentZIndex = if (forward) 1f else -1f }
-
-@Composable
-private fun Tabs(model: AppModel, tab: Tab, onTab: (Tab) -> Unit, go: (Route) -> Unit) {
-    val pair = { go(Route.Pair) }
-    Column(Modifier.fillMaxSize()) {
-        // Fade through: the tab left fades out quickly, the one chosen fades
-        // in over it, growing slightly into place.
-        AnimatedContent(
-            tab,
-            Modifier.weight(1f),
-            transitionSpec = {
-                (fadeIn(Motion.enter(Motion.MEDIUM - 50)) + scaleIn(Motion.enter(Motion.MEDIUM - 50), initialScale = 0.98f)) togetherWith
-                    fadeOut(Motion.exit(100))
-            },
-            label = "tab",
-        ) { shown ->
-            Box(Modifier.fillMaxSize().background(palette.bg)) {
-                when (shown) {
-                    Tab.Inbox -> InboxScreen(model, open = { go(Route.Chat(it)) }, start = { go(Route.Chat(model.newConversation(it))) }, newConversation = { onTab(Tab.Agents) }, pair = pair)
-                    Tab.Agents -> AgentsScreen(model, start = { go(Route.Chat(model.newConversation(it))) }, open = { go(Route.Chat(it)) }, pair = pair)
-                    Tab.Settings -> SettingsScreen(model, pair = pair)
-                }
-            }
-        }
-        NavBar(tab, onTab)
-    }
-}
