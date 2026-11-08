@@ -514,8 +514,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     "sig" to encodeBytes(Keys.sign(host.keyAlias, session.handshakeHash())),
                 )
             },
-            onMessage = { m -> ui { received(host, m) } },
-            // A connection [connect] replaced says nothing of the new one.
+            // A connection [connect] replaced, or that Forget or Clear cache
+            // closed, says nothing more: closing is asynchronous, and a late
+            // message would refill what was just deleted, or a forgotten host.
+            onMessage = { m -> ui { if (connections[host.name] === connection) received(host, m) } },
             onClosed = { why -> ui { if (connections[host.name] === connection) ended(host, why) } },
         )
         connections[host.name] = connection
