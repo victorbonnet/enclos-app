@@ -66,6 +66,8 @@ Only the host's own person on a still-paired device may decide. Buttons need a c
 
 Requests are kept in the app's private preferences, covered by its existing no-backup rules. On authentication the host's cached requests are replaced by its fresh sync; forgetting that host or clearing the cache removes them. They show offline with both controls disabled. Android is built; iOS follows the same behaviour when implemented.
 
+The built-in network probe's reserved `probe.enclos.invalid` destination is not an approval request. The host suppresses new notifications for that exact host and retires existing pending ones as diagnostics without changing policy. Such notifications leave the inbox; a detail page already open says **Diagnostic probe · no approval needed** and offers no decision controls. Real destinations, including private addresses, remain eligible for requests.
+
 ### Groups
 
 A group is one conversation between the person and two to six agents of **one sandbox**, which the host's bridge keeps and whose turns it runs (enclos ADR 0045, proposed; `docs/protocol.md`, Groups): the app shows it and sends the person's messages.
