@@ -206,7 +206,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun <T> read(query: Store.() -> T): T? = try {
         store.query()
     } catch (e: android.database.SQLException) {
-        android.util.Log.w("enclos", "could not read what the phone kept", e)
+        android.util.Log.w("enclos", "could not read what the phone kept: ${e.javaClass.simpleName}")
         null
     }
 
@@ -215,7 +215,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         try {
             store.write()
         } catch (e: android.database.SQLException) {
-            android.util.Log.w("enclos", "not kept on the phone", e)
+            // Its type only: nothing of what was said goes to logcat.
+            android.util.Log.w("enclos", "not kept on the phone: ${e.javaClass.simpleName}")
         }
     }
     /** By conversation: whether the agent said it is writing (`typing`). */

@@ -127,9 +127,12 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
             put("members", if (c.members.isEmpty()) null else JSONArray(c.members).toString())
         }
         // An update, else an insert: Android 9 and 10's SQLite has no upsert.
+        // insertOrThrow, not insert, which on a failure (a full disk) logs
+        // the row it tried, a conversation's name included, to logcat; the
+        // caller logs the failure without it.
         val db = writableDatabase
         if (db.update("conversations", values, "id = ?", arrayOf(c.id)) == 0) {
-            db.insert("conversations", null, values.apply { put("id", c.id) })
+            db.insertOrThrow("conversations", null, values.apply { put("id", c.id) })
         }
     }
 
@@ -157,7 +160,8 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         try {
             db.delete("agents", "host = ?", arrayOf(host))
             agents.forEach { a ->
-                db.insert(
+                // insertOrThrow: insert would log the row on a failure.
+                db.insertOrThrow(
                     "agents",
                     null,
                     ContentValues().apply {
