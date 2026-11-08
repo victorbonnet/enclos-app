@@ -37,6 +37,12 @@ class MarkdownTest {
     }
 
     @Test
+    fun html_previews_as_the_literal_text_it_is_shown_as() {
+        assertEquals("<div>important</div>", Markdown.plain("<div>important</div>"))
+        assertEquals("Press <kbd>Ctrl</kbd> now", Markdown.plain("Press <kbd>Ctrl</kbd> now"))
+    }
+
+    @Test
     fun only_web_and_mail_links_open() {
         assertTrue(Markdown.opens("https://enclos.dev"))
         assertTrue(Markdown.opens("http://example.com"))
