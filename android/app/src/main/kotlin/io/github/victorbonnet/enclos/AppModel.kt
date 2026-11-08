@@ -293,23 +293,24 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** The agents (`host/sandbox/agent`) whose conversations the inbox shows unfolded, while the app runs. */
     val unfolded = mutableStateListOf<String>()
 
-    /** The inbox's sections ([InboxSection]) the person folded away, kept across starts. */
-    val folded = mutableStateListOf<InboxSection>().apply {
-        settings.getStringSet("inbox.folded", null).orEmpty().forEach { s ->
-            InboxSection.entries.firstOrNull { it.name == s }?.let(::add)
-        }
+    /**
+     * What the person folded away, kept across starts: the inbox's sections
+     * (an [InboxSection]'s name) and the agents view's hosts ([hostFold]).
+     */
+    val folded = mutableStateListOf<String>().apply { addAll(settings.getStringSet("folded", null).orEmpty()) }
+
+    /** Folds [key] away, or unfolds it. */
+    fun fold(key: String) {
+        if (!folded.remove(key)) folded.add(key)
+        settings.edit { putStringSet("folded", folded.toSet()) }
     }
 
-    /** Folds [section] of the inbox away, or unfolds it. */
-    fun fold(section: InboxSection) {
-        if (!folded.remove(section)) folded.add(section)
-        settings.edit { putStringSet("inbox.folded", folded.map { it.name }.toSet()) }
-    }
+    /** A host's key in [folded]. */
+    fun hostFold(host: String) = "host:$host"
 
     init {
         // The inbox is always by agent now: the earlier choice to group it goes.
-        if (settings.contains("inbox.grouped")) settings.edit { remove("inbox.grouped") }
-    }
+        if (settings.contains("inbox.grouped")) settings.edit { remove("inbox.grouped") }    }
 
     private fun ui(block: () -> Unit) = main.post(block)
 

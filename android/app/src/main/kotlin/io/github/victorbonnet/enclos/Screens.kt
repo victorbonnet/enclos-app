@@ -316,7 +316,7 @@ fun InboxScreen(
     val groupsFound = found.filter { it.conversation.group }
     val agents = byAgent(sorted.filter { !it.group }, found.filter { !it.conversation.group }, model.unfolded.toSet(), model::unread, narrowed)
     // A section folded away stays so, except under a search: that shows all it finds.
-    val shown = { s: InboxSection -> query.isNotBlank() || s !in model.folded }
+    val shown = { s: InboxSection -> query.isNotBlank() || s.name !in model.folded }
     val unreadIn = { group: Boolean -> sorted.filter { it.group == group }.sumOf { model.unread(it.id) } }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -334,7 +334,7 @@ fun InboxScreen(
                         val agentsShown = shown(InboxSection.Agents)
                         if (groupsFound.isNotEmpty()) {
                             item(key = "groups") {
-                                FoldHeading("Groups", groupsShown, if (groupsShown) 0 else unreadIn(true), query.isBlank()) { model.fold(InboxSection.Groups) }
+                                FoldHeading("Groups", groupsShown, if (groupsShown) 0 else unreadIn(true), query.isBlank()) { model.fold(InboxSection.Groups.name) }
                             }
                             if (groupsShown) {
                                 items(groupsFound, key = { "group:${it.conversation.id}" }) { f ->
@@ -345,7 +345,7 @@ fun InboxScreen(
                         }
                         if (agents.isNotEmpty()) {
                             item(key = "agents") {
-                                FoldHeading("Agents", agentsShown, if (agentsShown) 0 else unreadIn(false), query.isBlank()) { model.fold(InboxSection.Agents) }
+                                FoldHeading("Agents", agentsShown, if (agentsShown) 0 else unreadIn(false), query.isBlank()) { model.fold(InboxSection.Agents.name) }
                             }
                         }
                         if (found.isEmpty()) {
@@ -589,13 +589,22 @@ private fun MenuRow(glyph: ImageVector, text: String, onClick: () -> Unit) {
 }
 
 /**
- * A section's heading in the conversations view, which folds it away or
- * back: its name, the unread count of what it folds away, and a chevron
+ * A section's heading in the conversations view (or a host's, in the
+ * agents view), which folds it away or back: what it leads with ([lead],
+ * such as a host's connection), its name, the unread count of what it
+ * folds away, and a chevron
  * pointing down while open; no line under it. Under a search ([foldable]
  * false) it only names the section.
  */
 @Composable
-private fun FoldHeading(text: String, open: Boolean, unread: Int, foldable: Boolean, toggle: () -> Unit) {
+private fun FoldHeading(
+    text: String,
+    open: Boolean,
+    unread: Int,
+    foldable: Boolean,
+    lead: (@Composable () -> Unit)? = null,
+    toggle: () -> Unit,
+) {
     val p = palette
     val turn by animateFloatAsState(if (open) 90f else 0f, Motion.change(Motion.MEDIUM), label = "fold")
     Column(Modifier.fillMaxWidth()) {
@@ -616,6 +625,7 @@ private fun FoldHeading(text: String, open: Boolean, unread: Int, foldable: Bool
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            lead?.invoke()
             Text(text, style = Type.meta.copy(letterSpacing = 0.04.em), color = p.textMuted, maxLines = 1, modifier = Modifier.weight(1f))
             if (unread > 0) UnreadBadge(unread)
             if (foldable) Box(Modifier.rotate(turn)) { Glyph(Glyphs.chevron, p.textMuted, size = 16.dp) }
@@ -930,8 +940,9 @@ private fun MoreRow(name: String, hidden: Int, shown: Int, unfolded: Boolean, on
 // ---------- Agents ----------
 
 /**
- * Every agent, under its sandbox's heading (the Enclos mark, the sandbox,
- * its runtime and host), each as the conversations view shows it, without
+ * Every agent, under its host's heading (its connection and name, which
+ * folds the host away and back, kept across starts), then its sandbox's
+ * (the Enclos mark, the sandbox, its runtime), each as the conversations view shows it, without
  * its conversations: its initial (pulsing while it works), its name, and
  * working or when it was last active. Tapping one opens its page; tapping
  * a heading, its sandbox's page (`host/sandbox`). [query] keeps those
@@ -957,30 +968,36 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
     LazyColumn(Modifier.fillMaxSize()) {
         model.paired.forEach { host ->
             val live = model.connected(host.name)
-            shown.filter { it.host == host.name }.groupBy { it.sandbox }.forEach { (sandbox, agents) ->
+            val its = shown.filter { it.host == host.name }
+            // A search shows only the hosts with something found, unfolded.
+            if (query.isNotBlank() && its.isEmpty()) return@forEach
+            val key = model.hostFold(host.name)
+            val open = query.isNotBlank() || key !in model.folded
+            item(key = key) {
+                FoldHeading(host.name, open, 0, query.isBlank(), lead = { ConnectionDot(live) }) { model.fold(key) }
+            }
+            if (!open) return@forEach
+            if (its.isEmpty()) {
+                item(key = "$key-none") {
+                    Text("No agent yet: the host lists them once connected.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
+                }
+            }
+            its.groupBy { it.sandbox }.forEach { (sandbox, agents) ->
                 item(key = "sandbox-${host.name}-$sandbox") {
                     Arriving {
                         val runtime = agents.first().runtime.replaceFirstChar { it.uppercase() }
-                        ListHeading(
-                            sandbox,
-                            if (model.paired.size > 1) "$runtime · ${host.name}" else runtime,
-                            open = { openSandbox("${host.name}/$sandbox") },
-                        ) { SandboxMark(live, side = 16.dp) }
+                        ListHeading(sandbox, runtime, open = { openSandbox("${host.name}/$sandbox") }, top = 12.dp) { SandboxMark(live, side = 16.dp) }
                     }
                 }
                 items(agents, key = { "agent-${it.address}" }) { agent ->
                     Arriving { AgentListRow(model, agent, now) { openAgent(agent) } }
                 }
             }
+            item(key = "$key-gap") { Gap(8.dp) }
         }
-        if (shown.isEmpty()) {
+        if (shown.isEmpty() && query.isNotBlank()) {
             item {
-                Text(
-                    if (query.isBlank()) "No agent yet: the host lists them once connected." else "No agent matches.",
-                    style = Type.small,
-                    color = palette.textMuted,
-                    modifier = Modifier.padding(16.dp),
-                )
+                Text("No agent matches.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
             }
         }
         // Room for the search and compose bar over the list's end.
@@ -1017,19 +1034,25 @@ internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () 
 }
 
 /**
- * A heading of a list, as Settings' sections are named: small and faint
- * above a hairline, with what it leads with ([lead], such as a sandbox's
- * mark) and a note at its end; with [open], a chevron after the note, and
- * tapping it opens what it names.
+ * A heading of a list, small and faint with no line under it, with what
+ * it leads with ([lead], such as a sandbox's mark) and a note at its end;
+ * with [open], a chevron after the note, and tapping it opens what it
+ * names. [top] is the room above it.
  */
 @Composable
-internal fun ListHeading(text: String, note: String? = null, open: (() -> Unit)? = null, lead: (@Composable () -> Unit)? = null) {
+internal fun ListHeading(
+    text: String,
+    note: String? = null,
+    open: (() -> Unit)? = null,
+    top: androidx.compose.ui.unit.Dp = 28.dp,
+    lead: (@Composable () -> Unit)? = null,
+) {
     val p = palette
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth()
                 .then(if (open != null) Modifier.clickable(onClickLabel = "Open $text", onClick = open) else Modifier)
-                .padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 8.dp).semantics(mergeDescendants = true) { heading() },
+                .padding(start = 16.dp, end = 16.dp, top = top, bottom = 8.dp).semantics(mergeDescendants = true) { heading() },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -1051,7 +1074,6 @@ internal fun ListHeading(text: String, note: String? = null, open: (() -> Unit)?
                 Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
             }
         }
-        Hairline()
     }
 }
 
