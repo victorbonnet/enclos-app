@@ -288,20 +288,19 @@ private fun Screens(model: AppModel) {
 }
 
 /**
- * A full screen arriving (forward) or leaving (back). Forward, Material's
- * shared X axis made short: what is covered fades out first while drifting
- * left, then the new screen fades in on top from a tenth of the width, so
- * the two barely overlap. Back, the screen stays opaque and slides off to
- * the right, uncovering the tabs drifting back into place: a move a finger
- * can drag, as the predictive back gesture does, with nothing showing
- * through.
+ * A full screen arriving (forward) or leaving (back), one move played both
+ * ways: the screen, opaque, slides in from the right edge over the tabs,
+ * which drift a tenth of the width to the left under it; going back it
+ * slides off to the right, uncovering them drifting back. Same distance,
+ * same 250 ms, same pace, so opening and closing feel alike; linear, so a
+ * finger can drag it, as the predictive back gesture does, with nothing
+ * showing through.
  */
-private fun routeMove(forward: Boolean): ContentTransform =
-    if (forward) {
-        (slideInHorizontally(Motion.enter()) { it / 10 } + fadeIn(Motion.enter(Motion.MEDIUM - 50, delay = 50))) togetherWith
-            (slideOutHorizontally(Motion.enter()) { -it / 20 } + fadeOut(Motion.exit(100)))
+private fun routeMove(forward: Boolean): ContentTransform {
+    val move = tween<IntOffset>(Motion.MEDIUM, easing = LinearEasing)
+    return if (forward) {
+        slideInHorizontally(move) { it } togetherWith slideOutHorizontally(move) { -it / 10 }
     } else {
-        // Linear: dragged by a finger, the screen stays under it.
-        val drag = tween<IntOffset>(Motion.MEDIUM, easing = LinearEasing)
-        slideInHorizontally(drag) { -it / 10 } togetherWith slideOutHorizontally(drag) { it }
+        slideInHorizontally(move) { -it / 10 } togetherWith slideOutHorizontally(move) { it }
     }.apply { targetContentZIndex = if (forward) 1f else -1f }
+}
