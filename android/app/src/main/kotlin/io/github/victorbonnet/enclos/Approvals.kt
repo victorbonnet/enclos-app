@@ -39,22 +39,36 @@ data class PolicyRequest(val host: String, val id: String, val sandbox: String, 
 }
 
 @Composable
-fun PolicyRequestRow(model: AppModel, request: PolicyRequest, open: () -> Unit) {
+fun PolicyRequestRow(request: PolicyRequest, open: () -> Unit) {
     val p = palette
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
-        .clip(Shapes.control).border(1.dp, p.line, Shapes.control).background(p.surface)) {
-        Column(Modifier.fillMaxWidth().clickable(onClickLabel = "Review attempted action", onClick = open).padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Glyph(Glyphs.settings, p.accent, size = 22.dp)
-                Text(request.title, style = Type.name, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+    val title = when (request.kind) {
+        "write" -> "Write to ${request.target.trimEnd('/').substringAfterLast('/').ifBlank { "/" }}"
+        "read" -> "Read ${request.target.trimEnd('/').substringAfterLast('/').ifBlank { "/" }}"
+        else -> request.title
+    }
+    val status = when {
+        request.state == "applying" -> "Saving decision…"
+        request.state == "failed" -> "Needs review"
+        !request.available -> "Cannot approve"
+        else -> null
+    }
+    val context = listOfNotNull(status, request.agent.substringAfter('/').ifBlank { null }, request.sandbox, request.host).joinToString(" · ")
+    Column {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 64.dp)
+                .clickable(onClickLabel = "Review attempted action", role = Role.Button, onClick = open)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Glyph(Glyphs.settings, if (request.available) p.accent else p.textFaint, size = 20.dp)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(context, style = Type.code, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Gap(6.dp)
-            Text("${request.sandbox} · ${request.host}" + if (request.agent.isBlank()) " · sandbox request" else " · ${request.agent.substringAfter('/')}" , style = Type.code, color = p.textFaint)
-            Gap(6.dp)
-            Text(if (request.available) request.change else request.reason ?: "This scope needs review on the host.", style = Type.small, color = p.textMuted, maxLines = 4, overflow = TextOverflow.Ellipsis)
+            Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
         }
-        Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp)) { PolicyDecisionButtons(model, request) }
+        Hairline(Modifier.padding(start = 48.dp, end = 16.dp))
     }
 }
 

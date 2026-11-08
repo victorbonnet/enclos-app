@@ -337,7 +337,7 @@ fun InboxScreen(
                                 Text("Sandbox requests · ${requests.size}", style = Type.small, color = palette.textFaint, modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 6.dp))
                             }
                             items(requests, key = { "policy:${it.key}" }) { a ->
-                                Arriving { PolicyRequestRow(model, a) { openApproval(a.key) } }
+                                Arriving { PolicyRequestRow(a) { openApproval(a.key) } }
                             }
                             item(key = "policy-gap") { Gap(8.dp) }
                         }
