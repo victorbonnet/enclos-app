@@ -277,7 +277,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 Info("Sandbox", agent.sandbox)
                 Info("Host", "${agent.host} · ${if (model.connected(agent.host)) "connected" else model.status[agent.host] ?: "not connected"}")
                 val does = agent.capabilities.mapNotNull(::can)
-                Info("It", if (does.isEmpty()) "is known once its host reaches it" else does.joinToString(", "))
+                Info("Can", if (does.isEmpty()) "known once its host reaches it" else does.joinToString(", "))
             }
             if (commands.isNotEmpty()) {
                 Section("Commands · ${commands.size}") {

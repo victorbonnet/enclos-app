@@ -781,7 +781,7 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, pai
                 item(key = "sandbox-${host.name}-$sandbox") {
                     Arriving {
                         val runtime = agents.first().runtime.replaceFirstChar { it.uppercase() }
-                        ListHeading(sandbox, "$runtime · ${host.name}") { SandboxMark(live, side = 16.dp) }
+                        ListHeading(sandbox, if (model.paired.size > 1) "$runtime · ${host.name}" else runtime) { SandboxMark(live, side = 16.dp) }
                     }
                 }
                 items(agents, key = { "agent-${it.address}" }) { agent ->

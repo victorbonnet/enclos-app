@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -50,6 +51,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import kotlin.math.PI
 import kotlin.math.sin
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
@@ -164,39 +166,53 @@ fun SandboxMark(live: Boolean, side: Dp = 32.dp) {
 }
 
 /**
- * An agent inside its sandbox: the first letter of its name in a small
- * square on `surface`, with a hairline edge. While it is [working], the
- * edge is `accent` and a copy of it swells out and fades, every 1.4 s;
- * with animations off, only the edge says so.
+ * An agent's two colours: a hue from its name, so each agent keeps its own,
+ * deep enough for white letters in light and dark alike.
+ */
+private fun agentColors(name: String): Pair<Color, Color> {
+    val hue = ((name.hashCode() % 360) + 360) % 360f
+    return Color.hsl(hue, 0.42f, 0.46f) to Color.hsl((hue + 40f) % 360f, 0.48f, 0.32f)
+}
+
+/**
+ * An agent: a round picture of its own two colours, a diagonal blend, with
+ * the first letter of its name in white. While it is [working], a ring in
+ * `accent` swells out of it and fades, every 1.4 s; with animations off,
+ * the ring stays.
  */
 @Composable
 fun AgentInitial(name: String, working: Boolean = false, side: Dp = 28.dp) {
     val p = palette
+    val (from, to) = remember(name) { agentColors(name) }
     Box(
         Modifier.size(side).then(if (working) Modifier.semantics { contentDescription = "$name is working" } else Modifier),
         contentAlignment = Alignment.Center,
     ) {
-        if (working && !animationsOff()) {
-            val pulse = rememberInfiniteTransition(label = "active")
-            val t by pulse.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "pulse")
-            Box(
-                Modifier.size(side).graphicsLayer {
-                    // Read here, the pulse redraws the square without recomposing it.
-                    val grow = (t / 0.7f).coerceAtMost(1f)
-                    scaleX = 1f + 0.45f * grow
-                    scaleY = 1f + 0.45f * grow
-                    alpha = 0.7f * (1f - grow)
-                }.border(1.5.dp, p.accent),
-            )
+        if (working) {
+            if (animationsOff()) {
+                Box(Modifier.size(side + 6.dp).border(1.5.dp, p.accent, CircleShape))
+            } else {
+                val pulse = rememberInfiniteTransition(label = "active")
+                val t by pulse.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "pulse")
+                Box(
+                    Modifier.size(side).graphicsLayer {
+                        // Read here, the pulse redraws the ring without recomposing it.
+                        val grow = (t / 0.7f).coerceAtMost(1f)
+                        scaleX = 1f + 0.45f * grow
+                        scaleY = 1f + 0.45f * grow
+                        alpha = 0.8f * (1f - grow)
+                    }.border(2.dp, p.accent, CircleShape),
+                )
+            }
         }
         Box(
-            Modifier.size(side).background(p.surface).border(if (working) 1.5.dp else 1.dp, if (working) p.accent else p.lineStrong),
+            Modifier.size(side).clip(CircleShape).background(Brush.linearGradient(listOf(from, to))),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                name.take(1).lowercase(),
-                style = Type.code.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
-                color = if (working) p.accent else p.text,
+                name.take(1).uppercase(),
+                style = Type.name.copy(fontSize = (side.value * 0.44f).coerceAtLeast(11f).sp, fontWeight = FontWeight.SemiBold),
+                color = Color.White,
             )
         }
     }
