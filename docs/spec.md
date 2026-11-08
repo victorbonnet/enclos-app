@@ -32,7 +32,7 @@ The pairing screen has three steps, always in this order: code read, device key 
 
 ## 4. Screens
 
-Three destinations, Inbox, Agents and Settings, and full screens over them, a conversation, pairing and a policy request. A destination starts with its title, with no bar above it, so its content starts high; its one action, if any, sits on the title's line. The app is in portrait only, for now, the QR scanner included.
+The first screen has two views, Inbox and Agents, chosen with the switch at the top. Swiping left on the main content opens Agents; swiping right returns to Inbox. The content follows the finger and settles on a view when released; there is no wrapping at either end. The switch stays in sync and can still be tapped. Vertical swipes scroll the current list. The search and compose controls stay in place below the content, with the same search text across both views. Settings and the other full screens (a conversation, pairing and a policy request) open over the first screen. Back from Agents returns to Inbox. Android is built; iOS follows when implemented. The app is in portrait only, for now, the QR scanner included.
 
 ### Inbox
 
@@ -153,7 +153,7 @@ The runtime's plugin tells the agent what the app draws, so that it formats when
 Short and functional, never decorative: something moves to show where it came from or went. Durations: 150 ms for a change in place, 250 ms for a screen or a message arriving, 150 ms for what leaves. Arriving decelerates, leaving accelerates.
 
 - A full screen arrives over the tabs: the tabs fade out drifting left, the screen fades in from a tenth of the width. Going back, the screen slides off to the right, opaque, the tabs drifting back under it; with the back gesture it follows the finger and goes or returns where it is let go.
-- Tabs fade through each other (200 ms); the corners close in on the tab chosen.
+- The Inbox and Agents views slide side by side with a horizontal swipe; tapping their switch slides to the chosen view in 250 ms.
 - A message fades in while the others slide up; an agent that moves to the top of the inbox slides there with its conversations, and those it unfolds fade in.
 - Badges, chips, pairing steps, the send button and the theme change smoothly.
 - An agent at work: its avatar's corners swell out of it and fade, every 1.4 s; the working wave beside it.
@@ -182,7 +182,7 @@ It is off until the person turns it on in Settings, Security, which needs a scre
 | --- | --- | --- |
 | UI | Jetpack Compose, Material 3 structure in enclos's tokens | SwiftUI, the platform's structure in the same tokens |
 | Core | `core-ffi` through UniFFI's Kotlin bindings (JNA) | the same crate through UniFFI's Swift bindings |
-| Destinations | bottom navigation bar; the active tab inside the logo's corners | `TabView`, the same framed active tab |
+| Home views | `HorizontalPager` below the top switch, which follows the active page; search and compose stay fixed | a native paging view below the switch, with fixed search and compose controls (not built) |
 | Destination title | title at the top, no bar above (28 sp); its action on the same line | large navigation title (34 pt), its action in the navigation bar |
 | Portrait only | `screenOrientation="portrait"` (Android 16+ ignores it on large screens) | supported orientations: portrait (`Info.plist`) |
 | New conversation | extended FAB | compose button in the navigation bar |

@@ -1,10 +1,8 @@
 package io.github.victorbonnet.enclos
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,6 +23,8 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -73,13 +73,13 @@ enum class View { Conversations, Agents }
 /**
  * The app's first screen: at the top, the switch between the conversations
  * and the agents, then unread only (on conversations) and Settings; the
- * view; and over its end, the search for it and the compose button, which
- * starts a conversation with an agent the person picks.
+ * view, swiped sideways between the two; and over its end, the search and
+ * compose button, which starts a conversation with an agent the person picks.
  */
 @Composable
 fun HomeShell(
     model: AppModel,
-    view: View,
+    views: PagerState,
     onView: (View) -> Unit,
     openChat: (String) -> Unit,
     openAgent: (Agent) -> Unit,
@@ -91,6 +91,7 @@ fun HomeShell(
     pair: () -> Unit,
 ) {
     val p = palette
+    val view = View.entries[views.currentPage]
     var query by rememberSaveable { mutableStateOf("") }
     var unreadOnly by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
@@ -111,13 +112,9 @@ fun HomeShell(
             IconButton(Glyphs.settings, "Settings", settings, tint = p.textMuted)
         }
         Box(Modifier.weight(1f)) {
-            AnimatedContent(
-                view,
-                transitionSpec = { fadeIn(Motion.enter(Motion.MEDIUM - 50)) togetherWith fadeOut(Motion.exit(100)) },
-                label = "view",
-            ) { shown ->
+            HorizontalPager(state = views, modifier = Modifier.fillMaxSize()) { page ->
                 Box(Modifier.fillMaxSize().background(p.bg)) {
-                    when (shown) {
+                    when (View.entries[page]) {
                         View.Conversations -> InboxScreen(model, query, unreadOnly, openChat, start, openAgent, pair, openApproval)
                         View.Agents -> AgentsScreen(model, query, openAgent, openSandbox, pair)
                     }

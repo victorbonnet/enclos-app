@@ -24,6 +24,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -200,16 +201,20 @@ class MainActivity : ComponentActivity() {
  * The screens and the moves between them. A full screen arrives from the
  * right over the tabs, which drift left; going back reverses it, and with
  * the back gesture the move follows the finger (predictive back) until it
- * is let go. Tabs fade through each other. Each screen draws its own
- * ground, so two never show through each other mid-move.
+ * is let go. The two home views slide with a horizontal swipe. Each screen
+ * draws its own ground, so two never show through each other mid-move.
  */
 @Composable
 private fun Screens(model: AppModel) {
     var saved by rememberSaveable { mutableStateOf("tabs") }
-    var view by rememberSaveable { mutableStateOf(View.Conversations) }
+    val views = rememberPagerState(pageCount = { View.entries.size })
     val routes = remember { SeekableTransitionState(Route.restore(saved)) }
     val transition = rememberTransition(routes, label = "route")
     val scope = rememberCoroutineScope()
+    val onView = { to: View ->
+        scope.launch { views.animateScrollToPage(to.ordinal, animationSpec = Motion.change(Motion.MEDIUM)) }
+        Unit
+    }
     val go = { to: Route ->
         saved = to.save()
         scope.launch { routes.animateTo(to) }
@@ -236,7 +241,7 @@ private fun Screens(model: AppModel) {
     LaunchedEffect(opened) { if (opened != null) go(Route.Pair) }
 
     // Back from the agents: to the conversations.
-    BackHandler(enabled = !onFullScreen && view != View.Conversations) { view = View.Conversations }
+    BackHandler(enabled = !onFullScreen && views.currentPage != View.Conversations.ordinal) { onView(View.Conversations) }
 
     Box(Modifier.fillMaxSize().background(palette.bg).windowInsetsPadding(WindowInsets.statusBars)) {
         transition.AnimatedContent(transitionSpec = { routeMove(forward = targetState.depth > initialState.depth) }) { route ->
@@ -250,7 +255,7 @@ private fun Screens(model: AppModel) {
                 val start = { agent: Agent -> go(Route.Chat(model.newConversation(agent))) }
                 when (route) {
                     Route.Pair -> PairScreen(model, back = { go(Route.Tabs) }, done = {
-                        view = View.Agents
+                        onView(View.Agents)
                         go(Route.Tabs)
                     })
                     is Route.ApprovalPage -> PolicyRequestScreen(model, route.key, back = { go(Route.Tabs) }, openChat = { go(Route.Chat(it)) })
@@ -270,8 +275,8 @@ private fun Screens(model: AppModel) {
                     )
                     Route.Tabs -> HomeShell(
                         model,
-                        view,
-                        onView = { view = it },
+                        views,
+                        onView = onView,
                         openChat = { go(Route.Chat(it)) },
                         openAgent = { go(Route.AgentPage(it.address)) },
                         openSandbox = { go(Route.SandboxPage(it)) },
