@@ -883,6 +883,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 titledBy = if (name.isEmpty()) null else "person",
             )
         }
+        // A draft's name stays here: the bridge does not know the
+        // conversation yet, and is given the name with its first message.
+        if (conversation.id in drafts) return
         connections[conversation.host]?.send(
             message("conversation.rename", "conversation" to conversation.id, "title" to name),
         )
@@ -912,6 +915,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             )
             if (!started) return false
             drafts -= conversation.id
+            val named = conversations.firstOrNull { it.id == conversation.id }
+            if (named?.titledBy == "person" && named.title != null) {
+                connection.send(message("conversation.rename", "conversation" to conversation.id, "title" to named.title))
+            }
         }
         val sent = connection.send(out)
         if (!sent) said[conversation.host] = "Not sent: the connection ended or could not encrypt the message. Your message is still here."
