@@ -847,7 +847,7 @@ internal fun ListHeading(text: String, note: String? = null, lead: (@Composable 
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             lead?.invoke()
-            Text(text, style = Type.meta.copy(letterSpacing = 0.04.em), color = p.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(text, style = Type.meta.copy(letterSpacing = 0.04.em), color = p.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (note != null) {
                 Text(
                     note,
