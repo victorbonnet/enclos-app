@@ -281,7 +281,14 @@ fun LockScreen(model: AppModel, unlock: () -> Unit, leave: () -> Unit) {
  * yet is not listed.
  */
 @Composable
-fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> Unit, pair: () -> Unit) {
+fun InboxScreen(model: AppModel, open: (String) -> Unit, start: (Agent) -> Unit, newConversation: () -> Unit, pair: () -> Unit) {
+    // "5 min ago" stays true while the screen shows.
+    val now by produceState(System.currentTimeMillis() / 1000) {
+        while (true) {
+            delay(30_000)
+            value = System.currentTimeMillis() / 1000
+        }
+    }
     val sorted = model.conversations.filter(model::listed)
         .sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: 0L }
     var query by rememberSaveable { mutableStateOf("") }
@@ -328,27 +335,33 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
                         // An agent that moves to the top slides there, its conversations with it.
                         agents.forEach { entry ->
                             val unfolded = entry.address in model.unfolded
+                            val home = entry.home
+                            // Home first: always while open; folded, only with something unread; searching, if found.
+                            val homeShown = home != null && when {
+                                narrowed -> found.any { it.conversation.id == home.id }
+                                unfolded -> true
+                                else -> model.unread(home.id) > 0
+                            }
+                            val rows = buildList {
+                                if (homeShown) add(Found(home!!, entry.homeMatch))
+                                addAll(entry.under)
+                            }
+                            val agent = model.agents.firstOrNull { it.address == entry.address }
                             item(key = "agent:${entry.address}") {
                                 Arriving {
-                                    val fold = { if (unfolded) model.unfolded.remove(entry.address) else model.unfolded.add(entry.address) }
-                                    // Its Home; with none, its conversations.
-                                    AgentRow(model, entry, query) { entry.home?.let { open(it.id) } ?: fold() }
+                                    AgentFolder(
+                                        model,
+                                        entry,
+                                        open = unfolded || narrowed,
+                                        onToggle = { if (unfolded) model.unfolded.remove(entry.address) else model.unfolded.add(entry.address) },
+                                        onNew = agent?.let { a -> { start(a) } },
+                                    )
                                 }
                             }
-                            items(entry.under, key = { it.conversation.id }) { f ->
-                                Arriving { ConversationRow(model, f.conversation, f.match, query) { open(f.conversation.id) } }
+                            items(rows, key = { it.conversation.id }) { f ->
+                                Arriving { ThreadRow(model, f.conversation, f.match, query, now) { open(f.conversation.id) } }
                             }
-                            // A search or filter shows everything it found: nothing to fold.
-                            val hidden = entry.others - entry.under.size
-                            if (!narrowed && (unfolded || hidden > 0)) {
-                                item(key = "more:${entry.address}") {
-                                    Arriving {
-                                        MoreRow(entry.address.substringAfterLast('/'), hidden, entry.under.size, unfolded) {
-                                            if (unfolded) model.unfolded.remove(entry.address) else model.unfolded.add(entry.address)
-                                        }
-                                    }
-                                }
-                            }
+                            item(key = "end:${entry.address}") { Arriving { Hairline(Modifier.padding(top = 6.dp)) } }
                         }
                         item { Spacer(Modifier.height(88.dp)) }
                     }
@@ -358,6 +371,87 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
         if (model.paired.isNotEmpty()) {
             Fab("New conversation", Glyphs.compose, newConversation, Modifier.align(Alignment.BottomEnd).padding(16.dp))
         }
+    }
+}
+
+/**
+ * An agent in the inbox, as a folder: its initial (pulsing while it works),
+ * its name and a chevron, down while open; folded, its unread total; and
+ * a compose button, its own target, for a new conversation. Tapping the
+ * row opens or folds its conversations.
+ */
+@Composable
+private fun AgentFolder(model: AppModel, entry: AgentEntry, open: Boolean, onToggle: () -> Unit, onNew: (() -> Unit)?) {
+    val p = palette
+    val name = entry.address.substringAfterLast('/')
+    val working = model.workingOn(entry.address).isNotEmpty()
+    val unread = model.conversations.filter { "${it.host}/${it.agent}" == entry.address }.sumOf { model.unread(it.id) }
+    val turn by animateFloatAsState(if (open) 90f else 0f, Motion.change(), label = "chevron")
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(onClickLabel = if (open) "Fold $name's conversations" else "Show $name's conversations", onClick = onToggle)
+            .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 2.dp)
+            .semantics { heading() },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        AgentInitial(name, working)
+        Text(name, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Box(Modifier.rotate(turn)) { Glyph(Glyphs.chevron, p.textFaint, size = 16.dp) }
+        Spacer(Modifier.weight(1f))
+        AnimatedVisibility(
+            visible = !open && unread > 0,
+            enter = fadeIn(Motion.enter(Motion.SHORT)) + scaleIn(Motion.enter(Motion.SHORT), initialScale = 0.6f),
+            exit = fadeOut(Motion.exit()) + scaleOut(Motion.exit(), targetScale = 0.6f),
+        ) { UnreadBadge(unread.coerceAtLeast(1)) }
+        if (onNew != null) {
+            Box(
+                Modifier.size(44.dp).clickable(onClickLabel = "New conversation with $name", role = Role.Button, onClick = onNew)
+                    .semantics { contentDescription = "New conversation with $name" },
+                contentAlignment = Alignment.Center,
+            ) { Glyph(Glyphs.compose, p.textMuted, size = 20.dp) }
+        } else {
+            Spacer(Modifier.width(12.dp))
+        }
+    }
+}
+
+/**
+ * A conversation under its agent, on one line, starting where the agent's
+ * name does: its name (Home for the agent's Home; "No name yet" while it
+ * has none), then while the agent works on it the wave, else how long ago
+ * its last message was, and its unread count. Found by a message, that
+ * message shows under it, its words in `accent`.
+ */
+@Composable
+private fun ThreadRow(model: AppModel, c: Conversation, match: Line?, query: String, now: Long, onClick: () -> Unit) {
+    val p = palette
+    val unread = model.unread(c.id)
+    val last = model.lines[c.id]?.lastOrNull()
+    val title = c.title ?: if (c.home) "Home" else null
+    Column(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(start = 56.dp, end = 16.dp, top = 9.dp, bottom = 9.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                title?.let { highlighted(it, query, p.accent) } ?: AnnotatedString("No name yet"),
+                style = Type.name.copy(fontSize = 15.sp, fontWeight = if (unread > 0) FontWeight.SemiBold else FontWeight.Normal),
+                color = if (title != null) p.text else p.textMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            when {
+                model.working(c.id) -> WorkingWave(square = 4.dp, lift = 3.dp)
+                last != null -> Text(Times.ago(last.time, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint, maxLines = 1)
+            }
+            AnimatedVisibility(
+                visible = unread > 0,
+                enter = fadeIn(Motion.enter(Motion.SHORT)) + scaleIn(Motion.enter(Motion.SHORT), initialScale = 0.6f),
+                exit = fadeOut(Motion.exit()) + scaleOut(Motion.exit(), targetScale = 0.6f),
+            ) { UnreadBadge(unread.coerceAtLeast(1)) }
+        }
+        if (match != null) Preview(match, true, query, false, "", Modifier.padding(top = 2.dp))
     }
 }
 

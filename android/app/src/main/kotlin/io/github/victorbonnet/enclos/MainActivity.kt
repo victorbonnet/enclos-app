@@ -261,7 +261,7 @@ private fun Tabs(model: AppModel, tab: Tab, onTab: (Tab) -> Unit, go: (Route) ->
         ) { shown ->
             Box(Modifier.fillMaxSize().background(palette.bg)) {
                 when (shown) {
-                    Tab.Inbox -> InboxScreen(model, open = { go(Route.Chat(it)) }, newConversation = { onTab(Tab.Agents) }, pair = pair)
+                    Tab.Inbox -> InboxScreen(model, open = { go(Route.Chat(it)) }, start = { go(Route.Chat(model.newConversation(it))) }, newConversation = { onTab(Tab.Agents) }, pair = pair)
                     Tab.Agents -> AgentsScreen(model, start = { go(Route.Chat(model.newConversation(it))) }, open = { go(Route.Chat(it)) }, pair = pair)
                     Tab.Settings -> SettingsScreen(model, pair = pair)
                 }
