@@ -20,5 +20,26 @@ fun suggest(commands: List<AgentCommand>, draft: String): List<AgentCommand> {
     return starting + within
 }
 
+/** The `@` word being typed at the end of [draft], or none. */
+private fun mentionWord(draft: String): String? =
+    draft.split(' ', '\n').last().takeIf { it.startsWith("@") }
+
+/**
+ * The members to offer while the person types an `@` word at the end of
+ * [draft] in a group: those whose handle starts with what follows the
+ * `@`, whatever the case, in the group's order, then `all` if it matches.
+ * Nothing otherwise.
+ */
+fun mentionsFor(handles: List<String>, draft: String): List<String> {
+    val typed = mentionWord(draft)?.drop(1)?.lowercase() ?: return emptyList()
+    return (handles + "all").filter { it.lowercase().startsWith(typed) }
+}
+
+/** What picking [handle] makes of [draft]: its `@` word replaced with `@handle` and a space. */
+fun mentioned(draft: String, handle: String): String {
+    val word = mentionWord(draft) ?: return "$draft@$handle "
+    return draft.dropLast(word.length) + "@$handle "
+}
+
 /** What picking [command] puts in the field: `/` and its name, and a space for what follows. */
 fun picked(command: AgentCommand): String = "/${command.name} "

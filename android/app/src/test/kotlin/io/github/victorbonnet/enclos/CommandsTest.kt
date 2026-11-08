@@ -33,6 +33,22 @@ class CommandsTest {
     }
 
     @Test
+    fun an_at_word_offers_the_members_it_starts_then_all() {
+        val members = listOf("main", "coder", "alice")
+        assertEquals(listOf("main", "coder", "alice", "all"), mentionsFor(members, "hello @"))
+        assertEquals(listOf("alice", "all"), mentionsFor(members, "@A"))
+        assertEquals(listOf("coder"), mentionsFor(members, "ask\n@co"))
+        assertEquals(emptyList<String>(), mentionsFor(members, "@coder done"))
+        assertEquals(emptyList<String>(), mentionsFor(members, "mail@x"))
+    }
+
+    @Test
+    fun picking_a_member_replaces_the_at_word() {
+        assertEquals("ask @coder ", mentioned("ask @co", "coder"))
+        assertEquals("@all ", mentioned("@", "all"))
+    }
+
+    @Test
     fun picking_one_puts_its_name_and_a_space_in_the_field() {
         assertEquals("/new ", picked(new))
     }

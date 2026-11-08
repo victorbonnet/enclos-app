@@ -308,6 +308,74 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
     }
 }
 
+/**
+ * Choosing a group's members: a name, then every agent, ticked or not;
+ * once one is ticked, only the agents of its sandbox can be.
+ */
+@Composable
+private fun GroupPicker(
+    agents: List<Agent>,
+    members: androidx.compose.runtime.snapshots.SnapshotStateList<Agent>,
+    name: String,
+    onName: (String) -> Unit,
+    modifier: Modifier,
+) {
+    val p = palette
+    val first = members.firstOrNull()
+    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+        BasicTextField(
+            value = name,
+            onValueChange = onName,
+            singleLine = true,
+            textStyle = Type.name.copy(color = p.text),
+            cursorBrush = SolidColor(p.accent),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            decorationBox = { field ->
+                Box(
+                    Modifier.fillMaxWidth().height(48.dp).clip(Shapes.control).border(1.dp, p.lineStrong, Shapes.control).padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (name.isEmpty()) Text("Group name (the agents' names if none)", style = Type.name.copy(fontWeight = FontWeight.Normal), color = p.textFaint)
+                    field()
+                }
+            },
+        )
+        Text(
+            "Two to six agents of one sandbox. In the group, @name addresses one, @all asks everyone, and a message naming no one invites them all.",
+            style = Type.small,
+            color = p.textMuted,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+        Gap(12.dp)
+        Hairline()
+        agents.forEach { a ->
+            val ticked = a in members
+            val allowed = first == null || (a.host == first.host && a.sandbox == first.sandbox)
+            Row(
+                Modifier.fillMaxWidth()
+                    .selectable(selected = ticked, enabled = allowed || ticked, role = Role.Checkbox) {
+                        if (ticked) members.remove(a) else if (members.size < 6) members.add(a)
+                    }
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                AgentInitial(a.agent, side = 32.dp)
+                Column(Modifier.weight(1f)) {
+                    Text(a.agent, style = Type.name, color = if (allowed || ticked) p.text else p.textFaint)
+                    Text("${a.sandbox} · ${a.host}", style = Type.code, color = p.textFaint)
+                }
+                Box(
+                    Modifier.size(22.dp).clip(Shapes.control).border(1.5.dp, if (ticked) p.accent else p.lineStrong, Shapes.control)
+                        .background(if (ticked) p.accent else Color.Transparent),
+                    contentAlignment = Alignment.Center,
+                ) { if (ticked) Glyph(Glyphs.check, p.bg, size = 16.dp) }
+            }
+            Hairline(Modifier.padding(start = 62.dp))
+        }
+    }
+}
+
 /** A fact on an agent's page: its label, faint, then its value. */
 @Composable
 private fun Info(label: String, value: String) {
@@ -325,7 +393,9 @@ private fun Info(label: String, value: String) {
 /**
  * A new conversation: the agent it is with, picked from a chip at the top
  * (the one most recently active first), its card in the middle, and the
- * field. The first message starts the conversation, which then opens.
+ * field. The first message starts the conversation, which then opens. The
+ * chip's list also starts a group: two to six agents of one sandbox,
+ * ticked, and a name if the person gives one.
  */
 @Composable
 fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
@@ -334,6 +404,11 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
     var chosen by remember { mutableStateOf(agents.firstOrNull()) }
     var text by remember { mutableStateOf("") }
     var picking by remember { mutableStateOf(false) }
+    // A group: the agents ticked, of one sandbox of one host.
+    var grouping by remember { mutableStateOf(false) }
+    val members = remember { androidx.compose.runtime.mutableStateListOf<Agent>() }
+    var name by remember { mutableStateOf("") }
+    val canGroup = agents.groupBy { it.host to it.sandbox }.values.any { it.size >= 2 }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
             IconButton(Glyphs.clear, "Close", back)
@@ -346,14 +421,36 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    if (agent != null) AgentInitial(agent.agent, side = 28.dp)
-                    Text(agent?.agent ?: "No agent", style = Type.name, color = p.text)
+                    if (grouping) {
+                        MemberStack(members.map { it.agent }.ifEmpty { listOf("?") }, side = 28.dp)
+                    } else if (agent != null) {
+                        AgentInitial(agent.agent, side = 28.dp)
+                    }
+                    Text(if (grouping) "New group" else agent?.agent ?: "No agent", style = Type.name, color = p.text)
                     // Pointing down: a list opens.
                     if (agents.size > 1) Box(Modifier.size(16.dp).rotate(90f), contentAlignment = Alignment.Center) {
                         Glyph(Glyphs.chevron, p.textMuted, size = 16.dp)
                     }
                 }
                 DropdownMenu(expanded = picking, onDismissRequest = { picking = false }, modifier = Modifier.background(p.bg)) {
+                    if (canGroup) {
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { Glyph(Glyphs.inbox, p.text, size = 20.dp) }
+                                    Text("New group", style = Type.name, color = p.text)
+                                    if (grouping) Glyph(Glyphs.check, p.accent, size = 18.dp)
+                                }
+                            },
+                            onClick = {
+                                grouping = true
+                                members.clear()
+                                chosen?.let { members.add(it) }
+                                picking = false
+                            },
+                        )
+                        Hairline()
+                    }
                     agents.forEach { a ->
                         DropdownMenuItem(
                             text = {
@@ -368,6 +465,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                             },
                             onClick = {
                                 chosen = a
+                                grouping = false
                                 picking = false
                             },
                         )
@@ -375,7 +473,9 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                 }
             }
         }
-        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+        if (grouping) {
+            GroupPicker(agents, members, name, { name = it }, Modifier.weight(1f))
+        } else Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
             val agent = chosen
             if (agent == null) {
                 Text("No agent yet: pair a host, or wait for it to list its agents.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(24.dp))
@@ -391,16 +491,27 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                 }
             }
         }
-        val agent = chosen
+        val agent = if (grouping) members.firstOrNull() else chosen
         val live = agent != null && model.connected(agent.host)
+        val enough = !grouping || members.size in 2..6
         Composer(
             text,
             { text = it },
-            "Message ${agent?.agent ?: ""}".trim(),
-            canSend = live,
-            notice = if (agent != null && !live) "Not connected to ${agent.host}: send once it's back." else null,
+            if (grouping) "Message the group, @ to address" else "Message ${agent?.agent ?: ""}".trim(),
+            canSend = live && enough,
+            notice = when {
+                agent != null && !live -> "Not connected to ${agent.host}: send once it's back."
+                !enough -> "Tick two to six agents of one sandbox."
+                else -> null
+            },
         ) {
             if (agent == null) return@Composer
+            if (grouping) {
+                val id = model.newGroup(members.toList(), name) ?: return@Composer
+                val group = model.conversations.firstOrNull { it.id == id } ?: return@Composer
+                if (model.send(group, text.trim())) opened(id)
+                return@Composer
+            }
             val id = model.newConversation(agent)
             val started = model.conversations.firstOrNull { it.id == id } ?: return@Composer
             if (model.send(started, text.trim())) opened(id)

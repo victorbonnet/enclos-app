@@ -368,8 +368,21 @@ fun Bubble(
     outgoing: Boolean,
     header: String? = null,
     files: (@Composable () -> Unit)? = null,
+    speaker: String? = null,
 ) {
     val p = palette
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = if (outgoing) Alignment.End else Alignment.Start) {
+        // In a group, who of its members said it: its avatar and name above.
+        if (speaker != null && !outgoing) {
+            Row(
+                Modifier.padding(start = 2.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                AgentInitial(speaker, side = 20.dp)
+                Text(speaker, style = Type.meta.copy(fontWeight = FontWeight.SemiBold), color = p.textMuted)
+            }
+        }
     Box(Modifier.fillMaxWidth(), contentAlignment = if (outgoing) Alignment.CenterEnd else Alignment.CenterStart) {
         val shape = if (outgoing) Shapes.bubbleOut else Shapes.bubbleIn
         val base = Modifier.widthIn(max = 300.dp).clip(shape)
@@ -399,6 +412,7 @@ fun Bubble(
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
+    }
     }
 }
 

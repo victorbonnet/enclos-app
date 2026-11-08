@@ -52,6 +52,15 @@ Each agent has one Home conversation, which its host's bridge makes and keeps (e
 
 **Status lines.** The runtime's notices about itself (Hermes: the gateway online, shutting down, restarting) are not the agent speaking: they come as `status` and show as a quiet centred line, small and faint, with their time, never a bubble. They never count as unread, and the inbox previews the last other message when there is one.
 
+### Groups
+
+A group is one conversation between the person and two to six agents of **one sandbox**, which the host's bridge keeps and whose turns it runs (enclos ADR 0045, proposed; `docs/protocol.md`, Groups): the app shows it and sends the person's messages.
+
+- **Starting one**: the compose button's agent chip lists **New group** when a sandbox has at least two agents. Its agents are ticked (once one is, only the agents of its sandbox can be), with a name or none (their names then); the first message starts the group (`group.new`, then the message).
+- **In the conversations view**: a **Groups** section above the agents, each group with its members' avatars overlapping, its name, its last message with who said it, how long ago or the working wave, and its unread count. Groups are not in an agent's tree.
+- **In the group**: the members' avatars and handles in the bar; each agent message with its speaker's avatar and name above it. Typing `@` lists the members matching what follows, with their avatars, and **@all** last ("everyone answers"); picking one puts `@handle ` in the field. `@handle` addresses that member, several those members, `@all` every member, each of whom must answer; a message naming no one invites them all, and they may pass.
+- **Where it is**: a line over the field, from the bridge's `group.state`: `@coder is answering · round 1 of 3` with the wave and **Stop** (`group.stop`, which cancels what is queued and the running turn; what was said stays), then Settled, Paused after the rounds or the replies allowed, Stopped, or Failed with why.
+
 ### Names
 
 A conversation has a name: its agent's, from what was said in it (Hermes names each session; the plugin passes the model's summary on, not the first message's cut), or the person's. Tapping the name in a conversation's bar renames it; the person's name replaces the agent's, which no longer replaces it, and clearing it lets the agent name it again. The bridge keeps the name and sends it to every device of the person (enclos `docs/protocol.md`, A conversation's name).

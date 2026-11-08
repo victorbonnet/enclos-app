@@ -52,6 +52,8 @@ data class Line(
     val attachments: List<Attachment> = emptyList(),
     /** The tools the agent ran for this answer, which the bridge does not keep: this phone does. */
     val steps: List<Step> = emptyList(),
+    /** In a group, the member who said it (`sandbox/agent`); none otherwise. */
+    val agent: String? = null,
 )
 
 /** A file of a message, fetched from the bridge when it is shown. */
@@ -82,6 +84,26 @@ data class Conversation(
      * first, never hidden as empty.
      */
     val home: Boolean = false,
+    /**
+     * A group's members (`sandbox/agent` each), in its order; none for a
+     * conversation with one agent. A group's [agent] is its sandbox.
+     */
+    val members: List<String> = emptyList(),
+) {
+    val group: Boolean get() = members.isNotEmpty()
+}
+
+/**
+ * Where a group's discussion is, as its bridge said: [state] `working`,
+ * `settled`, `bounded`, `stopped` or `failed`; each member's turn
+ * (`queued`, `working`, `replied`, `passed`, `failed`, `cancelled`).
+ */
+data class GroupStatus(
+    val state: String,
+    val round: Int,
+    val maxRounds: Int,
+    val turns: List<Pair<String, String?>>,
+    val reason: String?,
 )
 
 /** A message the runtime sends about itself (gateway online, shutting down): a quiet line, never unread. */
@@ -549,6 +571,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     m.optString("title").ifBlank { null },
                     m.optString("titled_by").ifBlank { null },
                     home = m.optBoolean("home"),
+                    members = m.optJSONArray("members")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),
                 )
                 val at = conversations.indexOfFirst { it.id == id }
                 if (at < 0 || conversations[at] != known) {
@@ -579,6 +602,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     Attachment(a.getString("id"), a.optString("mime"), a.optString("name"), a.optLong("size"))
                 }
                 var line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached)
+                // In a group, who of its members said it.
+                if (line.from == "agent" && conversations.firstOrNull { it.id == id }?.group == true) {
+                    line = line.copy(agent = "${host.name}/${m.getString("agent")}")
+                }
                 if (line.from == "agent") {
                     typing.remove(id)
                     awaiting.remove(id)
@@ -597,6 +624,21 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     val kept = line
                     save { message(host.name, id, kept) }
                 }
+            }
+            // Where a group's discussion is.
+            "group.state" -> {
+                val id = m.getString("conversation")
+                val list = m.optJSONArray("members")
+                groups[id] = GroupStatus(
+                    state = m.optString("state"),
+                    round = m.optInt("round"),
+                    maxRounds = m.optInt("max_rounds"),
+                    turns = (0 until (list?.length() ?: 0)).map { i ->
+                        val t = list!!.getJSONObject(i)
+                        "${host.name}/${t.getString("agent")}" to t.optString("turn").ifBlank { null }
+                    },
+                    reason = m.optString("reason").ifBlank { null },
+                )
             }
             "typing" -> {
                 val id = m.getString("conversation")
@@ -667,8 +709,37 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         return id
     }
 
-    /** Whether the inbox lists [conversation]: once something was said in it, and an agent's Home always. */
-    fun listed(conversation: Conversation) = conversation.home || !lines[conversation.id].isNullOrEmpty()
+    /** Whether the inbox lists [conversation]: once something was said in it, an agent's Home and a group always. */
+    fun listed(conversation: Conversation) = conversation.home || conversation.group || !lines[conversation.id].isNullOrEmpty()
+
+    /**
+     * Starts a group of [members] (two to six agents of one sandbox of
+     * one host) named [title] (their names when blank); returns its id.
+     * The bridge confirms it with the group's conversation.
+     */
+    fun newGroup(members: List<Agent>, title: String): String? {
+        val host = members.firstOrNull()?.host ?: return null
+        val connection = connections[host] ?: return null
+        val id = UUID.randomUUID().toString()
+        val names = members.map { it.name }
+        val message = message("group.new", "conversation" to id, "members" to org.json.JSONArray(names))
+        if (title.isNotBlank()) message.put("title", title.trim())
+        if (!connection.send(message)) return null
+        // Shown at once, as the bridge will send it.
+        conversations.add(
+            Conversation(host, names.first().substringBefore('/'), id, title.trim().ifBlank { members.joinToString(", ") { it.agent } }, "person",
+                members = names.map { "$host/$it" }),
+        )
+        return id
+    }
+
+    /** Stops group [conversation]'s discussion; what was said stays. */
+    fun stopGroup(conversation: Conversation) {
+        connections[conversation.host]?.send(message("group.stop", "conversation" to conversation.id))
+    }
+
+    /** By group: where its discussion is, as its bridge said last. */
+    val groups = mutableStateMapOf<String, GroupStatus>()
 
     /**
      * Names [conversation] (an empty [title] clears its name, and the agent

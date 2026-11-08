@@ -296,7 +296,9 @@ fun InboxScreen(model: AppModel, query: String, unreadOnly: Boolean, open: (Stri
     val filter = if (unreadOnly) InboxFilter.Unread else InboxFilter.All
     val found = search(sorted, { model.lines[it].orEmpty() }, model::unread, query, filter)
     val narrowed = query.isNotBlank() || filter != InboxFilter.All
-    val agents = byAgent(sorted, found, model.unfolded.toSet(), model::unread, narrowed)
+    // Groups have their own section; the agents' trees hold one-to-one conversations.
+    val groupsFound = found.filter { it.conversation.group }
+    val agents = byAgent(sorted.filter { !it.group }, found.filter { !it.conversation.group }, model.unfolded.toSet(), model::unread, narrowed)
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             when {
@@ -309,7 +311,14 @@ fun InboxScreen(model: AppModel, query: String, unreadOnly: Boolean, open: (Stri
                 sorted.isEmpty() -> Empty("No conversation yet.", "Start one with the compose button below.", "Pair another host →", pair)
                 else -> {
                     LazyColumn(Modifier.weight(1f)) {
-                        item { ListHeading("Agents") }
+                        if (groupsFound.isNotEmpty()) {
+                            item(key = "groups") { ListHeading("Groups") }
+                            items(groupsFound, key = { "group:${it.conversation.id}" }) { f ->
+                                Arriving { GroupRow(model, f.conversation, f.match, query, now) { open(f.conversation.id) } }
+                            }
+                            item(key = "groups-gap") { Gap(6.dp) }
+                        }
+                        if (agents.isNotEmpty()) item(key = "agents") { ListHeading("Agents") }
                         if (found.isEmpty()) {
                             item {
                                 Text(
@@ -355,6 +364,54 @@ fun InboxScreen(model: AppModel, query: String, unreadOnly: Boolean, open: (Stri
                         item { Spacer(Modifier.height(96.dp)) }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * A group in the conversations view: its members' avatars, its name, the
+ * wave while a member answers or how long ago its last message was, and
+ * a chevron; under the name, its last message with who said it (or the
+ * message a search found), and its unread count.
+ */
+@Composable
+private fun GroupRow(model: AppModel, c: Conversation, match: Line?, query: String, now: Long, onClick: () -> Unit) {
+    val p = palette
+    val handles = c.members.map { it.substringAfterLast('/') }
+    val all = model.lines[c.id].orEmpty()
+    val last = match ?: (all.lastOrNull { !it.status } ?: all.lastOrNull())
+    val unread = model.unread(c.id)
+    val working = model.groups[c.id]?.state == "working"
+    Row(
+        Modifier.fillMaxWidth().clickable(onClickLabel = "Open the group", onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        MemberStack(handles, side = 32.dp)
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(c.title ?: handles.joinToString(", "), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                when {
+                    working -> WorkingWave(square = 4.dp, lift = 3.dp)
+                    last != null -> Text(Times.ago(last.time, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint)
+                }
+                Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+            }
+            Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val text = when {
+                    last == null -> "${handles.size} agents: ${handles.joinToString(" ") { "@$it" }}"
+                    last.from != "agent" -> "You: ${last.text}"
+                    else -> (last.agent?.substringAfterLast('/')?.let { "$it: " } ?: "") + remember(last.text) { words(last) }
+                }
+                Text(
+                    if (match != null) highlighted(text, query, p.accent) else AnnotatedString(text),
+                    style = Type.small,
+                    color = if (unread > 0) p.text else p.textMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (unread > 0) UnreadBadge(unread)
             }
         }
     }
@@ -971,7 +1028,11 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val lines = model.lines[id].orEmpty()
     val agent = conversation.agent.substringAfter('/')
     val live = model.connected(conversation.host)
-    val working = model.working(id)
+    // A group's members by handle, and where its discussion is.
+    val handles = conversation.members.map { it.substringAfterLast('/') }
+    val status = model.groups[id]
+    val turnOf = status?.turns?.firstOrNull { it.second == "working" }?.first?.substringAfterLast('/')
+    val working = if (conversation.group) status?.state == "working" else model.working(id)
     // What the person writes, kept when they leave and come back.
     val draft = model.unsent[id].orEmpty()
     val list = rememberLazyListState()
@@ -993,7 +1054,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
-            AgentAvatar(agent, live, small = true)
+            if (conversation.group) MemberStack(handles, side = 30.dp) else AgentAvatar(agent, live, small = true)
             // Its name, and the agent under it; tap to rename.
             Column(Modifier.weight(1f).clickable(onClickLabel = "Rename the conversation") { renaming = true }) {
                 Text(
@@ -1004,7 +1065,11 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    if (conversation.title != null) "$agent · ${conversation.host}/${conversation.agent}" else "${conversation.host}/${conversation.agent}",
+                    when {
+                        conversation.group -> handles.joinToString(" ") { "@$it" } + " · ${conversation.host}/${conversation.agent}"
+                        conversation.title != null -> "$agent · ${conversation.host}/${conversation.agent}"
+                        else -> "${conversation.host}/${conversation.agent}"
+                    },
                     style = Type.code,
                     color = p.textFaint,
                     maxLines = 1,
@@ -1025,7 +1090,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         ) {
             model.said[conversation.host]?.let { item(key = "said") { Arriving { SystemLine("The bridge said: $it") } } }
             if (!live) item(key = "status") { Arriving { SystemLine(model.status[conversation.host] ?: "not connected") } }
-            if (working) item(key = "working") { Arriving { WorkingBubble(agent) } }
+            if (working) item(key = "working") { Arriving { WorkingBubble(turnOf ?: agent) } }
             // The tools it runs now, above the working bubble.
             val running = model.steps[id].orEmpty()
             if (running.isNotEmpty()) item(key = "steps-live") { Arriving { ToolSteps(running, live = true, expanded = true) {} } }
@@ -1042,7 +1107,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             text = line.text,
                             time = Times.clock(line.time),
                             outgoing = line.from != "agent",
-                            header = if (line.kind == "notify") ON_ITS_OWN else null,
+                            header = if (line.kind == "notify" && !conversation.group) ON_ITS_OWN else null,
+                            speaker = line.agent?.substringAfterLast('/'),
                             files = line.attachments.takeIf { it.isNotEmpty() }?.let { attached ->
                                 { Files(attached, model.files) { model.fetch(conversation.host, it) } }
                             },
@@ -1063,20 +1129,112 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 if (i == 0 || Times.day(lines[i - 1].time) != day) item(key = "day-${line.seq}") { Arriving { DaySeparator(day) } }
             }
         }
-        // The agent's commands that match what is typed after `/`; picking one puts it in the field.
-        val known = model.commands["${conversation.host}/${conversation.agent}"].orEmpty()
-        val offered = remember(known, draft) { suggest(known, draft) }
-        CommandSuggestions(offered, draft.drop(1)) { model.unsent[id] = picked(it) }
+        if (conversation.group) {
+            // Members to address, as the person types `@`.
+            val members = remember(handles, draft) { mentionsFor(handles, draft) }
+            MentionSuggestions(members) { model.unsent[id] = mentioned(draft, it) }
+            if (status != null) GroupStrip(status, turnOf) { model.stopGroup(conversation) }
+        } else {
+            // The agent's commands that match what is typed after `/`; picking one puts it in the field.
+            val known = model.commands["${conversation.host}/${conversation.agent}"].orEmpty()
+            val offered = remember(known, draft) { suggest(known, draft) }
+            CommandSuggestions(offered, draft.drop(1)) { model.unsent[id] = picked(it) }
+        }
         // Not connected: write, but nothing goes until the host is back.
         Composer(
             draft,
             { if (it.isEmpty()) model.unsent.remove(id) else model.unsent[id] = it },
-            "Message $agent",
+            if (conversation.group) "Message the group, @ to address" else "Message $agent",
             canSend = live,
             notice = if (live) null else "Not connected to ${conversation.host}: send once it's back.",
         ) {
             // Cleared once it went; else it stays, to send again.
             model.send(conversation, draft.trim())
+        }
+    }
+}
+
+/** A group's members' avatars, overlapping, at most three. */
+@Composable
+internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.Dp = 32.dp) {
+    val shown = handles.take(3)
+    val step = side * 0.55f
+    Box(Modifier.size(width = side + step * (shown.size - 1).coerceAtLeast(0), height = side)) {
+        shown.forEachIndexed { i, h ->
+            Box(
+                Modifier.padding(start = step * i).size(side).clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(palette.bg).padding(1.5.dp),
+            ) { AgentInitial(h, side = side - 3.dp) }
+        }
+    }
+}
+
+/**
+ * The members to address, over the field, as the person types `@` in a
+ * group: each with its avatar and `@handle`, `@all` last; picking one puts
+ * it in the field.
+ */
+@Composable
+private fun MentionSuggestions(offered: List<String>, onPick: (String) -> Unit) {
+    val p = palette
+    AnimatedVisibility(
+        offered.isNotEmpty(),
+        enter = fadeIn(Motion.enter(Motion.SHORT)) + expandVertically(Motion.enter(Motion.SHORT), expandFrom = Alignment.Bottom),
+        exit = fadeOut(Motion.exit()) + shrinkVertically(Motion.exit(), shrinkTowards = Alignment.Bottom),
+    ) {
+        Column(Modifier.fillMaxWidth().background(p.surface)) {
+            Hairline()
+            offered.forEach { h ->
+                Row(
+                    Modifier.fillMaxWidth().clickable(onClickLabel = "Address @$h") { onPick(h) }.padding(horizontal = 16.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (h == "all") {
+                        Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) { Glyph(Glyphs.inbox, p.textMuted, size = 20.dp) }
+                    } else {
+                        AgentInitial(h, side = 26.dp)
+                    }
+                    Text("@$h", style = Type.code.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), color = p.text)
+                    if (h == "all") Text("everyone answers", style = Type.small, color = p.textMuted)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Where a group's discussion is, over the field: who works now (the wave)
+ * and Stop; settled; bounded and why; stopped; failed.
+ */
+@Composable
+private fun GroupStrip(status: GroupStatus, turnOf: String?, onStop: () -> Unit) {
+    val p = palette
+    val text = when (status.state) {
+        "working" -> if (turnOf != null) "@$turnOf is answering · round ${status.round + 1} of ${status.maxRounds}" else "Working"
+        "settled" -> "Settled"
+        "bounded" -> if (status.reason == "max_replies") "Paused: reply limit reached" else "Paused after ${status.maxRounds} rounds"
+        "stopped" -> "Stopped"
+        "failed" -> "Failed" + (status.reason?.let { ": $it" } ?: "")
+        else -> return
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Hairline()
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (status.state == "working") WorkingWave(square = 4.dp, lift = 3.dp)
+            Text(
+                text,
+                style = Type.small,
+                color = if (status.state == "working") p.accent else p.textMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (status.state == "working") TextLink("Stop", onStop) else Spacer(Modifier.height(44.dp))
         }
     }
 }
