@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -13,6 +14,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.ui.*
@@ -41,7 +44,7 @@ data class PolicyRequest(val host: String, val id: String, val sandbox: String, 
 @Composable
 fun PolicyRequestRow(request: PolicyRequest, open: () -> Unit) {
     val p = palette
-    val agent = request.agent.substringAfter('/').ifBlank { null }
+    val agent = request.agent.substringAfterLast('/').ifBlank { null }
     val title = when (request.kind) {
         "write" -> "Write to ${request.target.trimEnd('/').substringAfterLast('/').ifBlank { "/" }}"
         "read" -> "Read ${request.target.trimEnd('/').substringAfterLast('/').ifBlank { "/" }}"
@@ -53,26 +56,29 @@ fun PolicyRequestRow(request: PolicyRequest, open: () -> Unit) {
         !request.available -> "Cannot approve"
         else -> null
     }
-    val context = listOfNotNull(status, agent ?: "Sandbox request", request.sandbox, request.host).joinToString(" · ")
-    Column {
-        Row(
-            Modifier.fillMaxWidth().heightIn(min = 64.dp)
-                .clickable(onClickLabel = "Review attempted action", role = Role.Button, onClick = open)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+    val context = listOfNotNull(status, agent ?: "Agent unknown", request.sandbox, request.host).joinToString(" · ")
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(onClickLabel = "Review attempted action", role = Role.Button, onClick = open)
+            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Box(
+            Modifier.size(32.dp).semantics { contentDescription = agent?.let { "Requested by $it" } ?: "Requesting agent unknown" },
+            contentAlignment = Alignment.Center,
         ) {
-            Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
-                if (agent != null) AgentInitial(agent, side = 28.dp)
-                else Glyph(Glyphs.sandbox, p.textFaint, size = 24.dp)
+            if (agent != null) AgentInitial(agent, side = 32.dp)
+            else Box(Modifier.fillMaxSize().background(p.surface, CircleShape), contentAlignment = Alignment.Center) {
+                Text("?", style = Type.name, color = p.textMuted)
             }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(title, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(context, style = Type.code, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
         }
-        Hairline(Modifier.padding(start = 56.dp, end = 16.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(title, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+            }
+            Text(context, style = Type.small, color = p.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+        }
     }
 }
 
