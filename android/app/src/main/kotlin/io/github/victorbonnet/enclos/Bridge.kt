@@ -13,6 +13,18 @@ import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
+/**
+ * The most a message may hold before it is sealed: one Noise transport
+ * message (65,535 bytes) less its 16-byte tag (docs/protocol.md, Handshake).
+ */
+const val MAX_PLAINTEXT = 65_519
+
+/** A message as it is sealed: its JSON and a line break. */
+private fun line(message: JSONObject) = (message.toString() + "\n").toByteArray(Charsets.UTF_8)
+
+/** Whether [message] fits in one Noise message, the most that goes at once. */
+fun fits(message: JSONObject): Boolean = line(message).size <= MAX_PLAINTEXT
+
 /** A protocol message: `v`, a new `id`, its `type`, then [fields]. */
 fun message(type: String, vararg fields: Pair<String, Any?>): JSONObject {
     val o = JSONObject().put("v", 1).put("id", UUID.randomUUID().toString()).put("type", type)
@@ -40,7 +52,14 @@ class BridgeConnection(
     @Volatile private var session: DeviceSession? = null
 
     fun open() {
-        val request = Request.Builder().url(url.replaceFirst("https://", "wss://") + "/").build()
+        // An address OkHttp cannot build a request from ends the connection,
+        // as any failure does, rather than the app.
+        val request = try {
+            Request.Builder().url(url.replaceFirst("https://", "wss://") + "/").build()
+        } catch (e: IllegalArgumentException) {
+            onClosed("not an address to connect to: $url")
+            return
+        }
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 try {
@@ -82,10 +101,19 @@ class BridgeConnection(
         onClosed(why)
     }
 
-    /** Sends [message], sealed; nothing before the handshake is done. */
+    /**
+     * Sends [message], sealed; nothing before the handshake is done, nor a
+     * message larger than one Noise message ([fits]). Whether it went.
+     */
     fun send(message: JSONObject): Boolean {
         val s = session ?: return false
-        val sealed = s.encrypt((message.toString() + "\n").toByteArray(Charsets.UTF_8))
+        val plain = line(message)
+        if (plain.size > MAX_PLAINTEXT) return false
+        val sealed = try {
+            s.encrypt(plain)
+        } catch (e: Exception) {
+            return false
+        }
         return socket?.send(sealed.toByteString()) ?: false
     }
 

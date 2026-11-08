@@ -395,6 +395,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             pairLinkError.value = "Not an enclos pairing link: ${e.message}"
             return
         }
+        val address = runCatching { java.net.URI(parsed.url) }.getOrNull()
+        if (address?.scheme != "https" || address.host.isNullOrBlank()) {
+            pairLinkError.value = "Not an enclos pairing link: its address names no host"
+            return
+        }
         pairLinkError.value = null
         pairing.value = Pairing(parsed.host, parsed.url.removePrefix("https://"), parsed.expires.toLong())
         val noise = generateNoiseKeypair()
@@ -424,7 +429,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                             deviceId = m.getString("device"),
                             noiseKeyWrapped = Keys.wrap(noise.privateKey),
                             keyAlias = alias,
-                            pushKey = decodeBytes(m.getString("push_key")),
+                            pushKeyWrapped = Keys.wrap(decodeBytes(m.getString("push_key"))),
                         )
                         hosts.add(host)
                         ui {
@@ -880,6 +885,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     fun send(conversation: Conversation, text: String): Boolean {
         said.remove(conversation.host)
+        val out = message("message.send", "conversation" to conversation.id, "text" to text)
+        if (!fits(out)) {
+            said[conversation.host] = "Too long to send: ${text.toByteArray(Charsets.UTF_8).size / 1000} KB, and at most about 63 KB go at once."
+            return false
+        }
         if (!connected(conversation.host)) return false
         val connection = connections[conversation.host] ?: return false
         // A draft becomes a conversation on the bridge with its first message.
@@ -890,9 +900,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             if (!started) return false
             drafts -= conversation.id
         }
-        val sent = connection.send(
-            message("message.send", "conversation" to conversation.id, "text" to text),
-        )
+        val sent = connection.send(out)
+        if (!sent) said[conversation.host] = "Not sent: the connection ended or could not encrypt the message. Your message is still here."
         if (sent) {
             awaiting[conversation.id] = true
             unsent.remove(conversation.id)
