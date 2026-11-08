@@ -652,13 +652,23 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     line = line.copy(agent = "${host.name}/${m.getString("agent")}")
                 }
                 if (line.from == "agent") {
-                    typing.remove(id)
-                    awaiting.remove(id)
-                    // The steps that led to this message go with it.
-                    steps.remove(id)?.let { line = line.copy(steps = it) }
+                    val agent = m.getString("agent")
+                    // Only a reply answers the person; any other kind (notify,
+                    // and later ones) leaves the turn and its steps alone.
+                    if (line.kind == "reply") {
+                        // An answer ends the turn: the steps that led to it go with it.
+                        typing.remove(id)
+                        awaiting.remove(id)
+                        steps.remove(id)?.let { line = line.copy(steps = it) }
+                    } else if (agents.none { it.host == host.name && it.name == agent && "typing" in it.capabilities }) {
+                        // A message on its own (a cron job's) while the agent
+                        // works keeps the turn's steps and its working state;
+                        // only a runtime that says nothing of its typing has
+                        // no other sign that a turn ended.
+                        awaiting.remove(id)
+                    }
                     // The bridge learns what an agent's channel can do once it
                     // reached it, which an agent's message shows: ask again.
-                    val agent = m.getString("agent")
                     if (agents.any { it.host == host.name && it.name == agent && it.capabilities.isEmpty() }) {
                         connections[host.name]?.send(message("agents"))
                     }
