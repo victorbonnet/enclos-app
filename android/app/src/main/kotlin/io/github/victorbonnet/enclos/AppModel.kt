@@ -69,6 +69,9 @@ sealed interface FileState {
     data class Failed(val why: String) : FileState
 }
 
+/** A section of the conversations view, which the person may fold away. */
+enum class InboxSection { Groups, Agents }
+
 /** A conversation: its host, agent (`<sandbox>/<agent>`) and id. */
 data class Conversation(
     val host: String,
@@ -289,6 +292,19 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** The agents (`host/sandbox/agent`) whose conversations the inbox shows unfolded, while the app runs. */
     val unfolded = mutableStateListOf<String>()
+
+    /** The inbox's sections ([InboxSection]) the person folded away, kept across starts. */
+    val folded = mutableStateListOf<InboxSection>().apply {
+        settings.getStringSet("inbox.folded", null).orEmpty().forEach { s ->
+            InboxSection.entries.firstOrNull { it.name == s }?.let(::add)
+        }
+    }
+
+    /** Folds [section] of the inbox away, or unfolds it. */
+    fun fold(section: InboxSection) {
+        if (!folded.remove(section)) folded.add(section)
+        settings.edit { putStringSet("inbox.folded", folded.map { it.name }.toSet()) }
+    }
 
     init {
         // The inbox is always by agent now: the earlier choice to group it goes.

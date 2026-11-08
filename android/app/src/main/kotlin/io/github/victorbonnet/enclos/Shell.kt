@@ -82,6 +82,7 @@ fun HomeShell(
     onView: (View) -> Unit,
     openChat: (String) -> Unit,
     openAgent: (Agent) -> Unit,
+    start: (Agent) -> Unit,
     settings: () -> Unit,
     compose: () -> Unit,
     pair: () -> Unit,
@@ -114,7 +115,7 @@ fun HomeShell(
             ) { shown ->
                 Box(Modifier.fillMaxSize().background(p.bg)) {
                     when (shown) {
-                        View.Conversations -> InboxScreen(model, query, unreadOnly, openChat, pair)
+                        View.Conversations -> InboxScreen(model, query, unreadOnly, openChat, start, openAgent, pair)
                         View.Agents -> AgentsScreen(model, query, openAgent, pair)
                     }
                 }

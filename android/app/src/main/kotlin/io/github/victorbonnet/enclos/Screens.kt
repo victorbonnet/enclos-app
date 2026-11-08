@@ -23,6 +23,14 @@ import io.github.victorbonnet.enclos.ui.ThemeChoice
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -283,7 +291,15 @@ fun LockScreen(model: AppModel, unlock: () -> Unit, leave: () -> Unit) {
  * yet is not listed.
  */
 @Composable
-fun InboxScreen(model: AppModel, query: String, unreadOnly: Boolean, open: (String) -> Unit, pair: () -> Unit) {
+fun InboxScreen(
+    model: AppModel,
+    query: String,
+    unreadOnly: Boolean,
+    open: (String) -> Unit,
+    start: (Agent) -> Unit,
+    openAgent: (Agent) -> Unit,
+    pair: () -> Unit,
+) {
     // "5 min ago" stays true while the screen shows.
     val now by produceState(System.currentTimeMillis() / 1000) {
         while (true) {
@@ -299,6 +315,9 @@ fun InboxScreen(model: AppModel, query: String, unreadOnly: Boolean, open: (Stri
     // Groups have their own section; the agents' trees hold one-to-one conversations.
     val groupsFound = found.filter { it.conversation.group }
     val agents = byAgent(sorted.filter { !it.group }, found.filter { !it.conversation.group }, model.unfolded.toSet(), model::unread, narrowed)
+    // A section folded away stays so, except under a search: that shows all it finds.
+    val shown = { s: InboxSection -> query.isNotBlank() || s !in model.folded }
+    val unreadIn = { group: Boolean -> sorted.filter { it.group == group }.sumOf { model.unread(it.id) } }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             when {
@@ -311,14 +330,24 @@ fun InboxScreen(model: AppModel, query: String, unreadOnly: Boolean, open: (Stri
                 sorted.isEmpty() -> Empty("No conversation yet.", "Start one with the compose button below.", "Pair another host →", pair)
                 else -> {
                     LazyColumn(Modifier.weight(1f)) {
+                        val groupsShown = shown(InboxSection.Groups)
+                        val agentsShown = shown(InboxSection.Agents)
                         if (groupsFound.isNotEmpty()) {
-                            item(key = "groups") { ListHeading("Groups") }
-                            items(groupsFound, key = { "group:${it.conversation.id}" }) { f ->
-                                Arriving { GroupRow(model, f.conversation, f.match, query, now) { open(f.conversation.id) } }
+                            item(key = "groups") {
+                                FoldHeading("Groups", groupsShown, if (groupsShown) 0 else unreadIn(true), query.isBlank()) { model.fold(InboxSection.Groups) }
                             }
-                            item(key = "groups-gap") { Gap(6.dp) }
+                            if (groupsShown) {
+                                items(groupsFound, key = { "group:${it.conversation.id}" }) { f ->
+                                    Arriving { GroupRow(model, f.conversation, f.match, query, now) { open(f.conversation.id) } }
+                                }
+                                item(key = "groups-gap") { Gap(6.dp) }
+                            }
                         }
-                        if (agents.isNotEmpty()) item(key = "agents") { ListHeading("Agents") }
+                        if (agents.isNotEmpty()) {
+                            item(key = "agents") {
+                                FoldHeading("Agents", agentsShown, if (agentsShown) 0 else unreadIn(false), query.isBlank()) { model.fold(InboxSection.Agents) }
+                            }
+                        }
                         if (found.isEmpty()) {
                             item {
                                 Text(
@@ -330,16 +359,29 @@ fun InboxScreen(model: AppModel, query: String, unreadOnly: Boolean, open: (Stri
                             }
                         }
                         // An agent that moves to the top slides there, its conversations with it.
-                        agents.forEach { entry ->
+                        if (agentsShown) agents.forEach { entry ->
                             val expanded = entry.address in model.unfolded
                             val rows = entry.under
                             // Searching shows everything found: no "more" then.
                             val hidden = entry.others - rows.size
                             val more = !narrowed && (hidden > 0 || (expanded && entry.others > RECENT))
                             val toggle: () -> Unit = { if (expanded) model.unfolded.remove(entry.address) else model.unfolded.add(entry.address) }
+                            val agent = model.agents.firstOrNull { it.address == entry.address }
                             item(key = "agent:${entry.address}") {
                                 Arriving {
-                                    AgentHead(model, entry, query, now, branches = rows.isNotEmpty() || more) {
+                                    AgentHead(
+                                        model,
+                                        entry,
+                                        query,
+                                        now,
+                                        branches = rows.isNotEmpty() || more,
+                                        menu = AgentMenu(
+                                            start = agent?.let { { start(it) } },
+                                            all = if (more) toggle else null,
+                                            expanded = expanded,
+                                            about = agent?.let { { openAgent(it) } },
+                                        ),
+                                    ) {
                                         // Its Home; with none (an older bridge), its conversations.
                                         entry.home?.let { open(it.id) } ?: toggle()
                                     }
@@ -435,13 +477,15 @@ private fun Modifier.branch(color: Color, last: Boolean) = drawBehind {
  * then working (the wave) or how long ago it last said something, and a
  * chevron; under the name, its Home's last message on one line (or, while
  * it works, what it does), and Home's unread count. Tapping it opens its
- * Home. With conversations under it, the tree's trunk starts below the
- * initial.
+ * Home; a long press opens its [menu]. With conversations under it, the
+ * tree's trunk starts below the initial.
  */
 @Composable
-private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Long, branches: Boolean, onOpen: () -> Unit) {
+private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Long, branches: Boolean, menu: AgentMenu, onOpen: () -> Unit) {
     val p = palette
     val name = entry.address.substringAfterLast('/')
+    val haptics = LocalHapticFeedback.current
+    var menuOpen by remember { mutableStateOf(false) }
     val working = model.workingOn(entry.address)
     val home = entry.home
     val homeLines = home?.let { model.lines[it.id] }.orEmpty()
@@ -451,7 +495,15 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
     val line = p.lineStrong
     Row(
         Modifier.fillMaxWidth()
-            .clickable(onClickLabel = if (home != null) "Open $name's Home" else null, onClick = onOpen)
+            .combinedClickable(
+                onClickLabel = if (home != null) "Open $name's Home" else null,
+                onLongClickLabel = "More for $name",
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    menuOpen = true
+                },
+                onClick = onOpen,
+            )
             .then(
                 if (branches) {
                     Modifier.drawBehind {
@@ -497,6 +549,76 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
                 )
                 if (unread > 0) UnreadBadge(unread)
             }
+            // Under the name, as the row's own options; here, it takes no room in the row.
+            DropdownMenu(menuOpen, { menuOpen = false }, offset = DpOffset((-8).dp, (-4).dp), modifier = Modifier.background(p.bg)) {
+                val pick = { action: () -> Unit ->
+                    menuOpen = false
+                    action()
+                }
+                menu.start?.let { MenuRow(Glyphs.compose, "New conversation") { pick(it) } }
+                menu.all?.let { MenuRow(Glyphs.inbox, if (menu.expanded) "Fewer conversations" else "All conversations") { pick(it) } }
+                menu.about?.let {
+                    Hairline()
+                    MenuRow(Glyphs.agents, "About $name") { pick(it) }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * What a long press on an agent in the inbox offers: a new conversation
+ * with it ([start]; none while its host does not list it), all its
+ * conversations or fewer ([all], when some are folded away), and its page
+ * ([about]).
+ */
+class AgentMenu(val start: (() -> Unit)?, val all: (() -> Unit)?, val expanded: Boolean, val about: (() -> Unit)?)
+
+@Composable
+private fun MenuRow(glyph: ImageVector, text: String, onClick: () -> Unit) {
+    val p = palette
+    DropdownMenuItem(
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { Glyph(glyph, p.text, size = 20.dp) }
+                Text(text, style = Type.name, color = p.text)
+            }
+        },
+        onClick = onClick,
+    )
+}
+
+/**
+ * A section's heading in the conversations view, which folds it away or
+ * back: its name, the unread count of what it folds away, and a chevron
+ * pointing down while open; no line under it. Under a search ([foldable]
+ * false) it only names the section.
+ */
+@Composable
+private fun FoldHeading(text: String, open: Boolean, unread: Int, foldable: Boolean, toggle: () -> Unit) {
+    val p = palette
+    val turn by animateFloatAsState(if (open) 90f else 0f, Motion.change(Motion.MEDIUM), label = "fold")
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth()
+                .then(
+                    if (foldable) {
+                        Modifier.clickable(onClickLabel = if (open) "Fold $text away" else "Show $text", role = Role.Button, onClick = toggle)
+                    } else {
+                        Modifier
+                    },
+                )
+                .padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 8.dp)
+                .semantics(mergeDescendants = true) {
+                    heading()
+                    stateDescription = if (open) "Shown" else "Folded"
+                },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(text, style = Type.meta.copy(letterSpacing = 0.04.em), color = p.textMuted, maxLines = 1, modifier = Modifier.weight(1f))
+            if (unread > 0) UnreadBadge(unread)
+            if (foldable) Box(Modifier.rotate(turn)) { Glyph(Glyphs.chevron, p.textMuted, size = 16.dp) }
         }
     }
 }

@@ -243,6 +243,7 @@ private fun Screens(model: AppModel) {
                         onView = { view = it },
                         openChat = { go(Route.Chat(it)) },
                         openAgent = { go(Route.AgentPage(it.address)) },
+                        start = start,
                         settings = { go(Route.Settings) },
                         compose = { go(Route.NewChat) },
                         pair = { go(Route.Pair) },
