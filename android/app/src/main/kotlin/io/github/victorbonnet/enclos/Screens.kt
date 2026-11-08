@@ -299,6 +299,7 @@ fun InboxScreen(
     start: (Agent) -> Unit,
     openAgent: (Agent) -> Unit,
     pair: () -> Unit,
+    openApproval: (String) -> Unit,
 ) {
     // "5 min ago" stays true while the screen shows.
     val now by produceState(System.currentTimeMillis() / 1000) {
@@ -311,6 +312,7 @@ fun InboxScreen(
         .sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: 0L }
     val filter = if (unreadOnly) InboxFilter.Unread else InboxFilter.All
     val found = search(sorted, { model.lines[it].orEmpty() }, model::unread, query, filter)
+    val requests = model.approvals.values.filter { a -> a.attention && (query.isBlank() || "${a.title} ${a.sandbox} ${a.host}".contains(query, ignoreCase = true)) }.sortedByDescending { it.time }
     val narrowed = query.isNotBlank() || filter != InboxFilter.All
     // Groups have their own section; the agents' trees hold one-to-one conversations.
     val groupsFound = found.filter { it.conversation.group }
@@ -327,9 +329,18 @@ fun InboxScreen(
                     "Pair a host →",
                     pair,
                 )
-                sorted.isEmpty() -> Empty("No conversation yet.", "Start one with the compose button below.", "Pair another host →", pair)
+                sorted.isEmpty() && requests.isEmpty() -> Empty("No conversation yet.", "Start one with the compose button below.", "Pair another host →", pair)
                 else -> {
                     LazyColumn(Modifier.weight(1f)) {
+                        if (requests.isNotEmpty()) {
+                            item(key = "policy-requests") {
+                                Text("Sandbox requests · ${requests.size}", style = Type.small, color = palette.textFaint, modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 6.dp))
+                            }
+                            items(requests, key = { "policy:${it.key}" }) { a ->
+                                Arriving { PolicyRequestRow(model, a) { openApproval(a.key) } }
+                            }
+                            item(key = "policy-gap") { Gap(8.dp) }
+                        }
                         val groupsShown = shown(InboxSection.Groups)
                         val agentsShown = shown(InboxSection.Agents)
                         if (groupsFound.isNotEmpty()) {

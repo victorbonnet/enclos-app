@@ -146,6 +146,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val status = mutableStateMapOf<String, String>()
     /** By host: the last error its bridge sent, such as an agent it could not reach. */
     val said = mutableStateMapOf<String, String>()
+    private val approvalCache = application.getSharedPreferences("policy-requests", Context.MODE_PRIVATE)
+    val approvals = mutableStateMapOf<String, PolicyRequest>()
+    val approvalsFresh = mutableStateMapOf<String, Boolean>()
+    val decidingApprovals = mutableStateMapOf<String, String>() // request key -> message id
+    val approvalErrors = mutableStateMapOf<String, String>()
     val agents = mutableStateListOf<Agent>()
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
@@ -164,10 +169,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // Off the main thread, on the writes' own, before any write: first
         // what the first screens show, then every message, merged in.
         saving.execute {
+            val cachedRequests = approvalCache.all.mapNotNull { (_, value) ->
+                runCatching { val m = JSONObject(value as String); PolicyRequest.from(m.getString("host"), m) }.getOrNull()
+            }.filter { a -> paired.any { it.name == a.host } }
             val recent = read { recent() }
             // The connections open next: their HTTP client is built here, not on the main thread.
             BridgeConnection.prepare()
             ui {
+                cachedRequests.forEach { approvals[it.key] = it }
                 if (recent != null) {
                     agents.addAll(recent.agents)
                     conversations.addAll(recent.conversations)
@@ -514,6 +523,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
+        approvalsFresh[host.name] = false
+        decidingApprovals.keys.filter { it.startsWith("${host.name}/") }.forEach { decidingApprovals.remove(it) }
         status[host.name] = why
         // Nothing will come over a closed connection: stop showing the agent at work.
         val ids = conversations.filter { it.host == host.name }.map { it.id }.toSet()
@@ -552,7 +563,19 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     private fun received(host: Host, m: JSONObject) {
         when (m.optString("type")) {
+            "approval" -> {
+                val request = PolicyRequest.from(host.name, m)
+                approvals[request.key] = request
+                decidingApprovals.remove(request.key)
+                approvalErrors.remove(request.key)
+                val json = JSONObject(m.toString()).put("host", host.name).toString()
+                saving.execute { approvalCache.edit { putString(request.key, json) } }
+            }
+            "synced" -> { approvalsFresh[host.name] = true }
             "authenticated" -> {
+                approvalsFresh[host.name] = false
+                approvals.keys.filter { approvals[it]?.host == host.name }.forEach { approvals.remove(it) }
+                saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("${host.name}/") }.forEach { remove(it) } } }
                 failures.remove(host.name)
                 status[host.name] = "connected as ${m.optString("person")}"
                 connections[host.name]?.send(message("agents"))
@@ -699,6 +722,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             "error" -> {
+                val approval = decidingApprovals.entries.firstOrNull { it.value == m.optString("of") }?.key
+                if (approval != null) {
+                    decidingApprovals.remove(approval)
+                    approvalErrors[approval] = m.optString("message")
+                }
                 // An error about a file asked for fails that file; else it is the bridge's word.
                 val file = asked.remove(m.optString("of"))
                 if (file != null) {
@@ -748,6 +776,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 members = names.map { "$host/$it" }),
         )
         return id
+    }
+
+    /** No offline queue or optimistic approval: the host confirms the saved decision. */
+    fun decideApproval(request: PolicyRequest, approve: Boolean) {
+        if (!request.pending || !connected(request.host) || approvalsFresh[request.host] != true || request.key in decidingApprovals || (approve && !request.available)) return
+        val command = message("approval.decide", "request" to request.id, "revision" to request.revision, "approve" to approve)
+        if (connections[request.host]?.send(command) == true) {
+            decidingApprovals[request.key] = command.getString("id")
+            approvalErrors.remove(request.key)
+        } else approvalErrors[request.key] = "The decision was not sent. Reconnect and try again."
     }
 
     /** Stops group [conversation]'s discussion; what was said stays. */
@@ -906,6 +944,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
+        approvals.clear()
+        approvalsFresh.clear()
+        decidingApprovals.clear()
+        approvalErrors.clear()
+        saving.execute { approvalCache.edit { clear() } }
         conversations.clear()
         lines.clear()
         agents.clear()
@@ -938,6 +981,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         conversations.removeAll { it.host == host }
         ids.forEach { lines.remove(it) }
         agents.removeAll { it.host == host }
+        approvals.keys.filter { approvals[it]?.host == host }.forEach { approvals.remove(it); decidingApprovals.remove(it); approvalErrors.remove(it) }
+        approvalsFresh.remove(host)
+        saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("$host/") }.forEach { remove(it) } } }
         kept.remove(host)
         save { forget(host) }
     }

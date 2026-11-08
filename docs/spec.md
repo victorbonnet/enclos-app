@@ -32,7 +32,7 @@ The pairing screen has three steps, always in this order: code read, device key 
 
 ## 4. Screens
 
-Three destinations, Inbox, Agents and Settings, and two full screens over them, a conversation and pairing. A destination starts with its title, with no bar above it, so its content starts high; its one action, if any, sits on the title's line. The app is in portrait only, for now, the QR scanner included.
+Three destinations, Inbox, Agents and Settings, and full screens over them, a conversation, pairing and a policy request. A destination starts with its title, with no bar above it, so its content starts high; its one action, if any, sits on the title's line. The app is in portrait only, for now, the QR scanner included.
 
 ### Inbox
 
@@ -55,6 +55,16 @@ By agent, always: one row per agent of every host, the agent with the newest con
 Each agent has one Home conversation, which its host's bridge makes and keeps (enclos ADR 0044, `docs/protocol.md`, Home): the runtime's home channel. What belongs to no conversation lands there: a cron job that has no conversation of its own, a message the agent sends with no other place to go, the runtime's notices about itself. It is named Home, opened by its agent's row in the inbox, shown even when empty ("Cron jobs and the agent's notices come here."), and the person may talk to the agent in it too. A cron job started in a conversation still answers in that conversation. Hermes's `/sethome` is answered by its plugin, not run: there is nothing to set.
 
 **Status lines.** The runtime's notices about itself (Hermes: the gateway online, shutting down, restarting) are not the agent speaking: they come as `status` and show as a quiet centred line, small and faint, with their time, never a bubble. They never count as unread, and the inbox previews the last other message when there is one.
+
+### Sandbox policy requests
+
+**Above Groups in the inbox**, a Sandbox requests section shows pending, applying and failed policy requests from all paired hosts, newest first, even when there is no conversation. Search matches their target, sandbox and host; the unread-only filter does not hide them. Each row uses the app's surface, hairline, type and accent tokens. It shows the attempted access, host, sandbox and agent when known, the persistent policy scope and two 48 dp controls: **Approve** and **Deny**. A file change requiring a restart says **Approve & restart**. A proxy refusal names the sandbox, since its host cannot identify an agent. Unsupported scopes show why and have approval disabled. The app never opens a confirmation dialog for a scope already shown in the row.
+
+Tapping the row opens its detail page: attempted action and selectable target, who requested it, the exact scope the host generated, private-address access if requested, and whether all running sandbox work ends for a restart. It links to the originating conversation when one is known, and keeps the same decision controls at the bottom. It says approval persists for every agent of that sandbox and updates their policy knowledge for later work. An approval does not automatically retry the attempted action. Network scopes are one host:port; write scopes cover the named path and everything beneath it. Sensitive read denials remain unavailable for approval. Host behaviour is [enclos ADR 0046](https://github.com/victorbonnet/enclos/blob/codex/mobile-policy-approvals/docs/adr/0046-the-hosts-person-approves-sandbox-policy-scopes-from-the-phone.md), proposed; this is a sandbox policy request, not a runtime tool approval.
+
+Only the host's own person on a still-paired device may decide. Buttons need a connected host and a completed fresh sync, remain disabled during a decision, and show Saving decision. Nothing is queued offline or optimistically marked approved. A changed policy refreshes the preview; the person must review it again. A request decided on another device shows that result. Completed approvals and denials leave the inbox but stay on an open detail page; failed or interrupted applications stay visible with a reason to review the host's policy. They are not retried automatically.
+
+Requests are kept in the app's private preferences, covered by its existing no-backup rules. On authentication the host's cached requests are replaced by its fresh sync; forgetting that host or clearing the cache removes them. They show offline with both controls disabled. Android is built; iOS follows the same behaviour when implemented.
 
 ### Groups
 
@@ -177,6 +187,7 @@ It is off until the person turns it on in Settings, Security, which needs a scre
 | Portrait only | `screenOrientation="portrait"` (Android 16+ ignores it on large screens) | supported orientations: portrait (`Info.plist`) |
 | New conversation | extended FAB | compose button in the navigation bar |
 | Agent commands | a list over the field, opening with `/` | the same list over the field (not the keyboard's suggestion bar) |
+| Sandbox policy requests | rows above Groups, with Approve / Deny and a full-screen detail page | a native list section above Groups and a navigation detail page (not built) |
 | Inbox by agent | an agent's row opens Home; a line ending its group (`17 conversations ⌄`, `Show less ⌃`) unfolds the rest | a `List` of rows, an agent's row opening Home and a button row ending its group |
 | Back | arrow; predictive back gesture follows the finger | chevron with the previous title; the interactive swipe from the edge |
 | Pairing | full screen | sheet with Cancel |
