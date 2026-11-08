@@ -41,6 +41,7 @@ data class PolicyRequest(val host: String, val id: String, val sandbox: String, 
 @Composable
 fun PolicyRequestRow(request: PolicyRequest, open: () -> Unit) {
     val p = palette
+    val agent = request.agent.substringAfter('/').ifBlank { null }
     val title = when (request.kind) {
         "write" -> "Write to ${request.target.trimEnd('/').substringAfterLast('/').ifBlank { "/" }}"
         "read" -> "Read ${request.target.trimEnd('/').substringAfterLast('/').ifBlank { "/" }}"
@@ -52,7 +53,7 @@ fun PolicyRequestRow(request: PolicyRequest, open: () -> Unit) {
         !request.available -> "Cannot approve"
         else -> null
     }
-    val context = listOfNotNull(status, request.agent.substringAfter('/').ifBlank { null }, request.sandbox, request.host).joinToString(" · ")
+    val context = listOfNotNull(status, agent ?: "Sandbox request", request.sandbox, request.host).joinToString(" · ")
     Column {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 64.dp)
@@ -61,14 +62,17 @@ fun PolicyRequestRow(request: PolicyRequest, open: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Glyph(Glyphs.settings, if (request.available) p.accent else p.textFaint, size = 20.dp)
+            Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
+                if (agent != null) AgentInitial(agent, side = 28.dp)
+                else Glyph(Glyphs.sandbox, p.textFaint, size = 24.dp)
+            }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(title, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(context, style = Type.code, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
         }
-        Hairline(Modifier.padding(start = 48.dp, end = 16.dp))
+        Hairline(Modifier.padding(start = 56.dp, end = 16.dp))
     }
 }
 

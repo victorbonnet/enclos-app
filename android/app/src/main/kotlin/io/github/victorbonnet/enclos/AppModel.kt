@@ -70,7 +70,7 @@ sealed interface FileState {
 }
 
 /** A section of the conversations view, which the person may fold away. */
-enum class InboxSection { Groups, Agents }
+enum class InboxSection { Requests, Groups, Agents }
 
 /** A conversation: its host, agent (`<sandbox>/<agent>`) and id. */
 data class Conversation(

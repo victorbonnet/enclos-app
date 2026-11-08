@@ -333,13 +333,16 @@ fun InboxScreen(
                 else -> {
                     LazyColumn(Modifier.weight(1f)) {
                         if (requests.isNotEmpty()) {
+                            val requestsShown = shown(InboxSection.Requests)
                             item(key = "policy-requests") {
-                                Text("Sandbox requests · ${requests.size}", style = Type.small, color = palette.textFaint, modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 6.dp))
+                                FoldHeading("Sandbox requests", requestsShown, if (requestsShown) 0 else requests.size, query.isBlank()) { model.fold(InboxSection.Requests.name) }
                             }
-                            items(requests, key = { "policy:${it.key}" }) { a ->
-                                Arriving { PolicyRequestRow(a) { openApproval(a.key) } }
+                            if (requestsShown) {
+                                items(requests, key = { "policy:${it.key}" }) { a ->
+                                    Arriving { PolicyRequestRow(a) { openApproval(a.key) } }
+                                }
+                                item(key = "policy-gap") { Gap(8.dp) }
                             }
-                            item(key = "policy-gap") { Gap(8.dp) }
                         }
                         val groupsShown = shown(InboxSection.Groups)
                         val agentsShown = shown(InboxSection.Agents)
