@@ -174,6 +174,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val decidingApprovals = mutableStateMapOf<String, String>() // request key -> message id
     val approvalErrors = mutableStateMapOf<String, String>()
     val agents = mutableStateListOf<Agent>()
+    val routines = RoutineClient(
+        send = { host, command -> connections[host]?.send(command) == true },
+        connected = ::connected,
+        supported = { address -> agents.any { it.address == address && "routines" in it.capabilities } },
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+    )
     val agentImages = AgentImages(application,
         send = { host, command -> connected(host) && connections[host]?.send(command) == true },
         connected = ::connected,
@@ -536,6 +542,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * message after the newest kept. [foreground] opens it, and [ended] again.
      */
     fun connect(host: Host) {
+        routines.ended(host.name)
         connections.remove(host.name)?.close()
         // While retrying, why the last attempt ended stays on screen.
         if (status[host.name]?.startsWith("connected") != false) status[host.name] = "connecting"
@@ -569,6 +576,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
+        routines.ended(host.name)
         agentImages.ended(host.name)
         approvalsFresh[host.name] = false
         policyFresh.keys.filter { it.startsWith("${host.name}/") }.forEach { policyFresh[it] = false; policyReviews.remove(it) }
@@ -614,6 +622,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun received(host: Host, m: JSONObject) {
+        if (m.optString("type") in setOf("routine.response", "error") && routines.received(host.name, m)) return
         when (m.optString("type")) {
             "sandbox.policy", "sandbox.policy.preview" -> {
                 val of = m.optString("of")
@@ -1155,6 +1164,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
+        paired.forEach { routines.forget(it.name) }
         archiveRequests.clear(); archivePending.clear(); archiveProblems.clear()
         agentImages.clear(paired.map { it.name })
         sandboxPolicies.clear(); policyBusy.clear(); policyFresh.clear(); policyErrors.clear(); policyReviews.clear(); policyRequests.clear()
@@ -1195,6 +1205,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         clearArchiveRequests(host)
         archiveProblems.keys.filter { it.host == host }.forEach { archiveProblems.remove(it) }
         agentImages.forget(host)
+        routines.forget(host)
         forgetPolicy(host)
         val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
         conversations.removeAll { it.host == host }

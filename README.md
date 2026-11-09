@@ -8,6 +8,8 @@ Agents can send [static HTML artefacts](docs/spec.md#5-messages): a self-contain
 
 Conversations can be [archived and restored](docs/spec.md#archived-conversations) across paired devices. Archived conversations stay searchable with their history intact; new activity leaves them archived. The bridge owns the flag, so Hermes and a future OpenClaw channel use the same behaviour without a runtime-specific archive command.
 
+Supporting agents expose [Routines](docs/spec.md#routines): scheduled instructions, delivery choices and advanced runtime settings, with edit, pause/resume, run and delete controls. The runtime keeps and executes them while the phone is closed. Routines use an optional generic channel contract; Hermes is the first implementation.
+
 ## Build
 
 Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK and NDK, JDK 17 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).

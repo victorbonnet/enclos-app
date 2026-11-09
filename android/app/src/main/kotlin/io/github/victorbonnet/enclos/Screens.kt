@@ -303,6 +303,7 @@ fun InboxScreen(
     open: (String) -> Unit,
     start: (Agent) -> Unit,
     openAgent: (Agent) -> Unit,
+    openRoutines: (Agent) -> Unit,
     pair: () -> Unit,
     openApproval: (String) -> Unit,
 ) {
@@ -406,6 +407,7 @@ fun InboxScreen(
                                             all = if (more) toggle else null,
                                             expanded = expanded,
                                             about = agent?.let { { openAgent(it) } },
+                                            routines = agent?.takeIf { "routines" in it.capabilities }?.let { { openRoutines(it) } },
                                         ),
                                         onOpen = entry.home?.let { home -> { open(home.id) } } ?: if (more) toggle else null,
                                     )
@@ -519,7 +521,7 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
     val unread = home?.let { model.unread(it.id) } ?: 0
     val newest = model.lastAt(entry.address, archived)
     val line = p.lineStrong
-    val hasMenu = home != null || menu.start != null || menu.all != null || menu.about != null
+    val hasMenu = home != null || menu.start != null || menu.all != null || menu.about != null || menu.routines != null
     val showMenu: () -> Unit = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); menuOpen = true }
     val actions = when {
         onOpen != null -> Modifier.combinedClickable(
@@ -588,6 +590,7 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
                 }
                 menu.start?.let { MenuRow(Glyphs.compose, "New conversation") { pick(it) } }
                 menu.all?.let { MenuRow(Glyphs.inbox, if (menu.expanded) "Fewer conversations" else "All conversations") { pick(it) } }
+                menu.routines?.let { MenuRow(Glyphs.clock, "Routines") { pick(it) } }
                 home?.let { ArchiveMenuItem(model, it) { menuOpen = false } }
                 menu.about?.let {
                     Hairline()
@@ -603,9 +606,9 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
  * What a long press on an agent in the inbox offers: a new conversation
  * with it ([start]; none while its host does not list it), all its
  * conversations or fewer ([all], when some are folded away), and its page
- * ([about]).
+ * ([about]), and routines when the runtime supports them ([routines]).
  */
-class AgentMenu(val start: (() -> Unit)?, val all: (() -> Unit)?, val expanded: Boolean, val about: (() -> Unit)?)
+class AgentMenu(val start: (() -> Unit)?, val all: (() -> Unit)?, val expanded: Boolean, val about: (() -> Unit)?, val routines: (() -> Unit)? = null)
 
 @Composable
 private fun MenuRow(glyph: ImageVector, text: String, onClick: () -> Unit) {
