@@ -6,4 +6,6 @@
     <color name="forest">#173C31</color>
     <!-- bg, light theme -->
     <color name="bg">#FAFAF8</color>
+    <!-- accent, shared with native date and time pickers -->
+    <color name="accent">#3D6A29</color>
 </resources>

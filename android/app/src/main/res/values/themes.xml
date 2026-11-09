@@ -4,5 +4,6 @@
          opens without a flash of the other theme -->
     <style name="Theme.Enclos" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorAccent">@color/accent</item>
     </style>
 </resources>
