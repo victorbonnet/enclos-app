@@ -60,6 +60,7 @@ object Glyphs {
     val check = glyph("check", stroke = 2.4f, strokes = listOf("M4 12l5 5L20 6"))
     val clock = glyph("clock", strokes = listOf(rect(4f, 4f, 16f, 16f), "M12 8v4h4"))
     val search = glyph("search", strokes = listOf(rect(4f, 4f, 12f, 12f), "M15 15l5 5"))
+    val filter = glyph("filter", strokes = listOf("M4 6h16M7 12h10M10 18h4"))
     /** Pointing right: something that opens. */
     val chevron = glyph("chevron", strokes = listOf("M9 6l6 6-6 6"))
     /** Clear a field: an addition to the design's set. */

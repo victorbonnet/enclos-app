@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import io.github.victorbonnet.enclos.ui.AgentInitial
 import io.github.victorbonnet.enclos.ui.AppBar
 import io.github.victorbonnet.enclos.ui.Composer
+import io.github.victorbonnet.enclos.ui.ConversationFilters
 import io.github.victorbonnet.enclos.ui.Gap
 import io.github.victorbonnet.enclos.ui.Glyph
 import io.github.victorbonnet.enclos.ui.Glyphs
@@ -72,7 +73,7 @@ enum class View { Conversations, Agents }
 
 /**
  * The app's first screen: at the top, the switch between the conversations
- * and the agents, then unread only (on conversations) and Settings; the
+ * and the agents, then conversation filters and Settings; the
  * view, swiped sideways between the two; and over its end, the search and
  * compose button, which starts a conversation with an agent the person picks.
  */
@@ -96,7 +97,6 @@ fun HomeShell(
     var query by rememberSaveable { mutableStateOf("") }
     var unreadOnly by rememberSaveable { mutableStateOf(false) }
     var archivedOnly by rememberSaveable { mutableStateOf(false) }
-    var archiveFilter by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
@@ -105,28 +105,11 @@ fun HomeShell(
             ViewSwitch(view, onView)
             Spacer(Modifier.weight(1f))
             if (view == View.Conversations && model.paired.isNotEmpty()) {
-                Box {
-                    IconButton(
-                        Glyphs.archive,
-                        if (archivedOnly) "Archived conversations" else "Conversation archive filter",
-                        { archiveFilter = true },
-                        tint = if (archivedOnly) p.accent else p.textMuted,
-                    )
-                    DropdownMenu(archiveFilter, { archiveFilter = false }, modifier = Modifier.background(p.bg)) {
-                        listOf(false to "Active conversations", true to "Archived conversations").forEach { (archived, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label, color = p.text) },
-                                leadingIcon = { if (archivedOnly == archived) Glyph(Glyphs.check, p.accent, size = 18.dp) },
-                                onClick = { archivedOnly = archived; archiveFilter = false },
-                            )
-                        }
-                    }
-                }
-                IconButton(
-                    if (unreadOnly) Glyphs.unreadOn else Glyphs.unreadOff,
-                    if (unreadOnly) "Show all conversations" else "Show unread only",
-                    { unreadOnly = !unreadOnly },
-                    tint = if (unreadOnly) p.accent else p.textMuted,
+                ConversationFilters(
+                    unreadOnly = unreadOnly,
+                    archivedOnly = archivedOnly,
+                    onUnreadChange = { unreadOnly = it },
+                    onArchivedChange = { archivedOnly = it },
                 )
             }
             IconButton(Glyphs.settings, "Settings", settings, tint = p.textMuted)
