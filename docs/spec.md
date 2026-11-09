@@ -220,6 +220,8 @@ Controls are disabled while offline, awaiting a receipt, uncertain or terminal. 
 
 Approval metadata, state and message links use the existing host-scoped question cache, retaining immutable definitions and newest confirmed revisions across background loads, history sync and app restarts. Clear cache and Forget this host remove the local copies. Old question records remain compatible. An older app displays readable typed-command fallback; an older bridge or Hermes without exact-request and lifecycle support also retains that native text path. This needs updated app, bridge, channel and supporting Hermes APIs.
 
+Typed fallback works through the existing direct/Home conversation route. In a running bridge-managed group, ordinary messages queue behind the current turn, so typing `/approve` cannot release that turn's wait. Structured buttons target the requesting group member directly; an older group client needs updated controls or another native approval surface.
+
 This behaviour is specified once for Android and iOS. Android uses Compose buttons and selectable, horizontally scrolling command text; iOS must use native SwiftUI controls with the same offered scopes, consent rules, exact receipts, terminal states, host-scoped cache and fallback. Android is built; iOS is not built yet.
 
 ### Files
