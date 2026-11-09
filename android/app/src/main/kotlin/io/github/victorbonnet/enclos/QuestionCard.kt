@@ -17,6 +17,7 @@ import io.github.victorbonnet.enclos.ui.*
 /** Typed native questions only; readable history stays the fallback for older hosts. */
 @Composable
 fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
+    if (question.approval != null) return
     val p = palette
     var selected by rememberSaveable(question.host, question.id) { mutableStateOf(emptyList<Int>()) }
     var other by rememberSaveable(question.host, question.id) { mutableStateOf(false) }
@@ -57,6 +58,7 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
                 QuestionState.Skipped -> "Skipped"
                 QuestionState.Expired -> "Expired · ask the agent for a new question."
                 QuestionState.Cancelled -> "Cancelled"
+                QuestionState.Resolved -> "Resolved in the runtime"
                 QuestionState.Pending -> ""
             }, style = Type.small, color = p.textMuted)
             if (confirmed is QuestionAnswer.Choices) {

@@ -16,6 +16,8 @@ Agents can have [shared display names](docs/spec.md#agent-display-names), saved 
 
 Supporting agents ask [questions with native choices](docs/spec.md#questions): single or multiple selection, Other, free text and Skip inside the conversation. Submitting answers the exact waiting question. Hermes uses its existing `clarify` tool, guided by a bundled channel skill. This needs an updated bridge and channel; ordinary numbered messages remain text.
 
+[Runtime approvals](docs/spec.md#runtime-approvals) have native scope buttons too: review the complete command and reason, then Allow once, Allow for session, Always allow or Deny when offered. The exact native request stays with the runtime; approving it changes no enclos sandbox policy. Updated Hermes APIs, bridge and channel are required; older combinations retain typed approval commands. Android is implemented; the spec and ADR define matching iOS behaviour.
+
 ## Build
 
 Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK and NDK, JDK 17 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).
