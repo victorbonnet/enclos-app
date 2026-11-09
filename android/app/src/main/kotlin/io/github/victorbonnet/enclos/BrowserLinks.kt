@@ -8,11 +8,12 @@ import android.widget.Toast
 import androidx.browser.customtabs.CustomTabsClient
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.browser.customtabs.CustomTabsService
+import androidx.core.net.toUri
 
 /** The browser owns web pages; private HTML attachments stay in the offline viewer. */
 fun openWebLink(context: Context, url: String) {
     if (!WebLinks.accepts(url)) return
-    val uri = Uri.parse(url)
+    val uri = url.toUri()
     try {
         val candidates = context.packageManager.queryIntentServices(
             Intent(CustomTabsService.ACTION_CUSTOM_TABS_CONNECTION), 0,
@@ -23,7 +24,6 @@ fun openWebLink(context: Context, url: String) {
             return
         }
         val tab = CustomTabsIntent.Builder().setShowTitle(true)
-            .setInitialNavigationAllowedToLeaveBrowser(false)
             .setSendToExternalDefaultHandlerEnabled(false)
             .build()
         tab.intent.setPackage(provider)
@@ -38,7 +38,7 @@ fun openWebLink(context: Context, url: String) {
 /** Mail keeps the usual native handler, independent of the browser. */
 fun openMailLink(context: Context, url: String) {
     if (!url.startsWith("mailto:", ignoreCase = true)) return
-    openWithHandler(context, Uri.parse(url), "No mail app is available to open this link.")
+    openWithHandler(context, url.toUri(), "No mail app is available to open this link.")
 }
 
 private fun openWithHandler(context: Context, uri: Uri, unavailable: String) {
