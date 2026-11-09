@@ -1,5 +1,22 @@
 package io.github.victorbonnet.enclos
 
+import java.net.URI
+
+/** Admission shared by message links and a page's deliberate navigation. */
+object WebLinks {
+    fun accepts(url: String): Boolean = runCatching {
+        val uri = URI(url)
+        if (uri.scheme?.lowercase() !in setOf("http", "https") || uri.isOpaque) return@runCatching false
+        // URL's host accepts international names, which URI.host leaves null.
+        val web = uri.toURL()
+        !web.host.isNullOrEmpty() && web.userInfo == null && web.port in -1..65535
+    }.getOrDefault(false)
+
+    fun opensFromPage(url: String, documentUrl: String, mainFrame: Boolean, hasGesture: Boolean, redirect: Boolean) =
+        mainFrame && hasGesture && !redirect && accepts(url) &&
+            !URI(url).toURL().host.trimEnd('.').equals(URI(documentUrl).host.trimEnd('.'), ignoreCase = true)
+}
+
 /**
  * A pairing link as the core reads it, `enclos://pair?…`, from what the
  * person scanned, typed or pasted: that link, or the https link to a
