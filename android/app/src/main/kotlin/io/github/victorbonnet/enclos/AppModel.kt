@@ -94,8 +94,27 @@ data class Conversation(
      * conversation with one agent. A group's [agent] is its sandbox.
      */
     val members: List<String> = emptyList(),
+    /** Kept out of the active inbox until its owner explicitly unarchives it. */
+    val archived: Boolean = false,
+    /** The bridge's order for metadata, independent of message sequence numbers. */
+    val revision: Long = 0,
 ) {
     val group: Boolean get() = members.isNotEmpty()
+}
+
+/** A delayed broadcast or sync must not overwrite newer metadata from the same host. */
+fun acceptsConversationMetadata(current: Conversation?, incoming: Conversation): Boolean =
+    incoming.revision >= 0 && (current == null || current.host != incoming.host || current.id != incoming.id || incoming.revision >= current.revision)
+
+/** A dialog may hold an older row: naming changes only the current row's title fields. */
+internal fun renameConversationLocally(conversations: MutableList<Conversation>, id: String, title: String) {
+    val at = conversations.indexOfFirst { it.id == id }
+    if (at >= 0) {
+        conversations[at] = conversations[at].copy(
+            title = title.ifEmpty { null },
+            titledBy = if (title.isEmpty()) null else "person",
+        )
+    }
 }
 
 /**
@@ -163,6 +182,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     )
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
+    private data class ArchiveKey(val host: String, val conversation: String)
+    private val archiveRequests = mutableMapOf<String, ArchiveKey>()
+    private val archivePending = mutableStateMapOf<ArchiveKey, Boolean>()
+    private val archiveProblems = mutableStateMapOf<ArchiveKey, String>()
 
     /**
      * Whether what the phone kept for the first screens is read. Until then
@@ -360,8 +383,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         conversationsOf(address).filter { working(it.id) }.sortedByDescending { lines[it.id]?.lastOrNull()?.time ?: 0L }
 
     /** The time of the newest message in any conversation of the agent at [address]; null before the first. */
-    fun lastAt(address: String): Long? =
-        conversationsOf(address).mapNotNull { c -> lines[c.id]?.lastOrNull()?.time?.takeIf { it > 0 } }.maxOrNull()
+    fun lastAt(address: String, archived: Boolean? = null): Long? =
+        conversationsOf(address).filter { archived == null || it.archived == archived }
+            .mapNotNull { c -> lines[c.id]?.lastOrNull()?.time?.takeIf { it > 0 } }.maxOrNull()
 
     /** What the agent is doing in [conversation] now: the tool it runs, if it said which. */
     fun doing(conversation: String): String? =
@@ -544,6 +568,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
+        clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         agentImages.ended(host.name)
         approvalsFresh[host.name] = false
         policyFresh.keys.filter { it.startsWith("${host.name}/") }.forEach { policyFresh[it] = false; policyReviews.remove(it) }
@@ -663,12 +688,17 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     m.optString("titled_by").ifBlank { null },
                     home = m.optBoolean("home"),
                     members = m.optJSONArray("members")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),
+                    archived = m.optBoolean("archived", false),
+                    revision = m.optLong("revision", 0),
                 )
                 val at = conversations.indexOfFirst { it.id == id }
+                if (!acceptsConversationMetadata(conversations.getOrNull(at), known)) return
                 if (at < 0 || conversations[at] != known) {
                     if (at < 0) conversations.add(known) else conversations[at] = known
                     save { conversation(known) }
                 }
+                val key = ArchiveKey(host.name, id)
+                archiveProblems.remove(key)
                 // How far the person read it, on any of their devices: what
                 // is before is not unread here. Read further here (offline,
                 // say): the bridge is told.
@@ -782,7 +812,26 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     now
                 }
             }
+            "ack" -> {
+                val request = m.optString("of")
+                val archive = archiveRequests[request]?.takeIf { it.host == host.name }
+                if (archive != null) {
+                    // The bridge sends canonical metadata directly before this ack.
+                    // It was applied, or ignored because a newer revision already won.
+                    // The receipt finishes saving; it never supplies the archive flag.
+                    archiveRequests.remove(request)
+                    archivePending.remove(archive)
+                }
+            }
             "error" -> {
+                val request = m.optString("of")
+                val archive = archiveRequests[request]?.takeIf { it.host == host.name }
+                if (archive != null) {
+                    archiveRequests.remove(request)
+                    archivePending.remove(archive)
+                    archiveProblems[archive] = m.optString("message").ifBlank { "The archive state could not be changed." }
+                    return
+                }
                 if (agentImages.failure(m.optString("of"), m.optString("message"))) return
                 val policyAddress = policyRequests.remove(m.optString("of"))
                 if (policyAddress != null) {
@@ -979,19 +1028,49 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     fun rename(conversation: Conversation, title: String) {
         val name = title.trim()
-        val at = conversations.indexOfFirst { it.id == conversation.id }
-        if (at >= 0) {
-            conversations[at] = conversation.copy(
-                title = name.ifEmpty { null },
-                titledBy = if (name.isEmpty()) null else "person",
-            )
-        }
+        renameConversationLocally(conversations, conversation.id, name)
         // A draft's name stays here: the bridge does not know the
         // conversation yet, and is given the name with its first message.
         if (conversation.id in drafts) return
         connections[conversation.host]?.send(
             message("conversation.rename", "conversation" to conversation.id, "title" to name),
         )
+    }
+
+    /** What prevents a server-confirmed archive change; nothing is queued offline. */
+    fun archiveUnavailable(conversation: Conversation): String? = when {
+        archivePending.containsKey(ArchiveKey(conversation.host, conversation.id)) -> "Saving archive state…"
+        conversation.id in drafts -> "Send the first message before archiving."
+        !connected(conversation.host) -> "Connect to ${conversation.host} to change archive state."
+        else -> null
+    }
+
+    fun archiving(conversation: Conversation) = archivePending.containsKey(ArchiveKey(conversation.host, conversation.id))
+    fun archiveError(conversation: Conversation) = archiveProblems[ArchiveKey(conversation.host, conversation.id)]
+
+    /** The bridge owns archive state; only its conversation echo updates the phone. */
+    fun archive(conversation: Conversation, archived: Boolean): Boolean {
+        val key = ArchiveKey(conversation.host, conversation.id)
+        if (archiveUnavailable(conversation) != null) return false
+        val connection = connections[conversation.host] ?: return false
+        val command = message("conversation.archive", "conversation" to conversation.id, "archived" to archived)
+        archiveProblems.remove(key)
+        if (!connection.send(command)) {
+            archiveProblems[key] = "Not saved: the connection ended. Reconnect to check the archive state."
+            return false
+        }
+        archiveRequests[command.getString("id")] = key
+        archivePending[key] = archived
+        return true
+    }
+
+    private fun clearArchiveRequests(host: String, problem: String? = null) {
+        val keys = archivePending.keys.filter { it.host == host }
+        keys.forEach { key ->
+            archivePending.remove(key)
+            if (problem != null) archiveProblems[key] = problem
+        }
+        archiveRequests.entries.removeAll { it.value.host == host }
     }
 
     /** By conversation: what the person wrote and has not sent yet, kept while the app runs. */
@@ -1076,6 +1155,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
+        archiveRequests.clear(); archivePending.clear(); archiveProblems.clear()
         agentImages.clear(paired.map { it.name })
         sandboxPolicies.clear(); policyBusy.clear(); policyFresh.clear(); policyErrors.clear(); policyReviews.clear(); policyRequests.clear()
         saving.execute { policyCache.edit { clear() } }
@@ -1112,6 +1192,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
+        clearArchiveRequests(host)
+        archiveProblems.keys.filter { it.host == host }.forEach { archiveProblems.remove(it) }
         agentImages.forget(host)
         forgetPolicy(host)
         val ids = conversations.filter { it.host == host }.map { it.id }.toSet()

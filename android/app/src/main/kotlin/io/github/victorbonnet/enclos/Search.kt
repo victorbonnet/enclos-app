@@ -12,6 +12,10 @@ sealed interface InboxFilter {
 /** A conversation the inbox shows, and the message that matched, when only a message did. */
 data class Found(val conversation: Conversation, val match: Line?)
 
+/** The inbox's two independent, restorable views; neither drops any history or read state. */
+fun inboxConversations(conversations: List<Conversation>, archived: Boolean = false): List<Conversation> =
+    conversations.filter { it.archived == archived }
+
 /**
  * The inbox's search: a conversation matches when every word of [query]
  * is in its name, its agent's address, or one of its messages (the
@@ -25,9 +29,10 @@ fun search(
     unread: (String) -> Int,
     query: String,
     filter: InboxFilter,
+    archived: Boolean = false,
 ): List<Found> {
     val words = fold(query).split(' ').filter { it.isNotEmpty() }
-    return conversations.mapNotNull { c ->
+    return inboxConversations(conversations, archived).mapNotNull { c ->
         when (filter) {
             InboxFilter.All -> Unit
             InboxFilter.Unread -> if (unread(c.id) == 0) return@mapNotNull null
