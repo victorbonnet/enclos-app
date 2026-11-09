@@ -174,6 +174,8 @@ Section 2. Full screen, with a back arrow. The viewfinder is the logo: the Home 
 
 ## 5. Messages
 
+**Bubble width.** Messages grow with their content up to 90% of the available conversation width, capped at 640 dp/pt on large screens. The conversation keeps its side padding, and every bubble leaves a visible gap on its opposite side. Short messages keep their natural width. Android is built; iOS follows the same limit when implemented.
+
 An agent's message is markdown ([ADR 0002](adr/0002-messages-are-markdown-drawn-by-the-app.md)): CommonMark, with GitHub's tables, strikethrough and bare links. The app draws it itself:
 
 | Markdown | Drawn as |

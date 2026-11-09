@@ -22,6 +22,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -380,6 +381,8 @@ fun StatusLine(text: String, time: String) {
  * `surface` with a hairline at the left; 16dp corners but the speaker's
  * bottom one, which stays square, the logo's corner. A message the agent
  * sent on its own (a cron job's, say) carries [header] above its text.
+ * Long messages use at most 90% of the chat width, capped at 640dp;
+ * short messages keep their natural width.
  */
 @Composable
 fun Bubble(
@@ -404,9 +407,9 @@ fun Bubble(
                 Text(speaker, style = Type.meta.copy(fontWeight = FontWeight.SemiBold), color = p.textMuted)
             }
         }
-    Box(Modifier.fillMaxWidth(), contentAlignment = if (outgoing) Alignment.CenterEnd else Alignment.CenterStart) {
+    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = if (outgoing) Alignment.CenterEnd else Alignment.CenterStart) {
         val shape = if (outgoing) Shapes.bubbleOut else Shapes.bubbleIn
-        val base = Modifier.widthIn(max = 300.dp).clip(shape)
+        val base = Modifier.widthIn(max = (maxWidth * 0.9f).coerceAtMost(640.dp)).clip(shape)
         val look = if (outgoing) base.background(p.buttonBg) else base.background(p.surface).border(BorderStroke(1.dp, p.line), shape)
         Column(look.padding(horizontal = 12.dp, vertical = 9.dp)) {
             if (header != null) {
