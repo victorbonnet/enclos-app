@@ -158,7 +158,7 @@ Nothing in a message is fetched or run:
 
 - an image (`![alt](url)`) shows as its alt text and `↗`, a link to it; the app never loads it;
 - HTML shows as its literal text;
-- a link opens, in the browser, only when it is `http`, `https` or `mailto`; any other scheme is plain text.
+- tapping an `http` or `https` link opens the preferred browser's Custom Tab on Android; `mailto` uses the system mail handler. Any other scheme is plain text. The browser handles the opened website with its normal state and capabilities. A system URL handler is the fallback when Custom Tabs are unavailable; no handler or a refused launch produces a native notice. Nothing is prewarmed or prefetched.
 
 The person's own messages are not markdown: they show as typed. Previews (inbox, and later notifications) are the words without the marks.
 
@@ -166,9 +166,11 @@ The person's own messages are not markdown: they show as typed. Previews (inbox,
 
 **Static HTML artefacts.** A self-contained UTF-8 HTML attachment opens as an artefact ([ADR 0005](adr/0005-static-html-artefacts-open-in-a-separate-viewer.md), proposed). An attachment whose media type is `text/html` has a card with its name and size that offers to open the page; a `.html` name alone does not make another media type an artefact. The viewer fills the screen, with a native bar for Back, its name and Share, and a scrollable page below. Loading and a failure to read the page are shown there; Back and Share stay available. A page larger than the attachment limit of 25 MiB or with invalid UTF-8 is refused. Sharing explicitly hands the original HTML file to another app, whose rendering is outside this viewer's controls.
 
-The page may use HTML, inline CSS and data images or fonts. JavaScript, storage, network requests, file and content access, forms, outgoing navigation and native bridges are unavailable; relative resources do not load. A link to an anchor in the same page may scroll there; every other navigation is refused. Opening a page never opens another app or a browser. It receives no keys or app state. These controls are written for Android; platform probes remain in [To verify](#to-verify). HTML in message text stays literal, as above. Interactive pages, external assets and multi-file sites are not part of this version. The file uses enclos's existing attachment delivery, cache and ownership checks; there is no separate artefact service or history.
+The page may use HTML, inline CSS and data images or fonts. JavaScript, storage, network requests, file and content access, forms, automatic outgoing navigation and native bridges are unavailable; relative resources do not load. A link to an anchor in the same page may scroll there. A deliberate tap on a main-frame `http` or `https` link opens it through the same browser handoff as a conversation link; the private page stays in its viewer. Subframes, redirects, navigation without a user gesture and other schemes cannot start a browser from the artefact. The opened website uses the browser's normal network access, cookies and site permissions, outside the private viewer's controls. The private page receives no keys or app state. These controls are written for Android; platform probes remain in [To verify](#to-verify). HTML in message text stays literal, as above. Interactive pages, external assets and multi-file sites are not part of this version. The file uses enclos's existing attachment delivery, cache and ownership checks; there is no separate artefact service or history.
 
 The runtime's plugin tells the agent what the app draws, so that it formats when it helps (Hermes: the plugin's `platform_hint`, in enclos).
+
+An initial static-viewer probe on an Android 17 / API 37 emulator, Google WebView 145.0.7632.218, rendered inline CSS, Unicode text and an embedded data PNG. The script did not execute; a frame reported `ERR_BLOCKED_BY_CSP`; external styles, images, frames and script fetches never reached a local request counter that a separate emulator request proved reachable. Form submission and file/content link taps left the page in place. The browser-link handoff and remaining platform probes are listed below.
 
 ## 6. Motion
 
@@ -224,7 +226,8 @@ It is off until the person turns it on in Settings, Security, which needs a scre
 | Animations off | Remove animations (animator duration scale 0) | Reduce Motion |
 | Conversations kept | SQLite, the platform's (`SQLiteOpenHelper`), `conversations.db`, written off the main thread | SQLite, the platform's, in Application Support, excluded from backup |
 | Files | cache `attachments/<id>/<name>`; shared through a `FileProvider` and `ACTION_SEND` | Caches directory; shared through `ShareLink` / `UIActivityViewController` |
-| Static HTML artefacts | a separate full-screen Compose surface around a WebView; in-memory document, restrictive response CSP, JavaScript and storage disabled, resource requests and navigation refused | a native full-screen viewer with equivalent offline rendering controls (not built) |
+| Static HTML artefacts | a separate full-screen Compose surface around a WebView; in-memory document, restrictive response CSP, JavaScript and storage disabled, resource requests and automatic navigation refused; deliberate main-frame HTTP(S) link taps open Custom Tabs | a native full-screen viewer with equivalent offline controls and an explicit web-link handoff (not built) |
+| Web links | HTTP(S) in conversation markdown and deliberate main-frame links in artefacts open the preferred browser's Custom Tabs, with a system URL-handler fallback; `mailto` in markdown uses the system handler | a native browser surface for HTTP(S) and the system mail handler (not built) |
 | App lock | the platform's `BiometricPrompt` (Android 11+: a weak or strong biometric or the screen lock; 10: the same, `setDeviceCredentialAllowed`), the screen-lock page on Android 9; `setRecentsScreenshotEnabled(false)` on Android 13+ | LocalAuthentication, `deviceOwnerAuthentication` (Face ID, Touch ID or the passcode); the app's snapshot blurred while in the background |
 | Push (not built) | FCM, one notification channel per agent | FCM through APNs, the conversation as thread identifier |
 
@@ -234,7 +237,7 @@ Push notifications (the bridge encrypts a preview for the device; the app decryp
 
 ## To verify
 
-- **Static HTML artefacts on Android**: show HTML, inline CSS and data images or fonts, then probe scripts, remote and local resources, forms, redirects, outgoing navigation and app-data access. Code settings alone do not establish that these restrictions hold on each WebView version. Check Back, Share, loading errors and reopening after leaving the viewer too.
+- **Static HTML artefacts and web links on Android**: verify deliberate HTTP(S) link taps open a Custom Tab, while forms, redirects, subframes and navigation without a user gesture stay blocked in the private page; check links in conversation markdown, browser fallback and missing-handler notices too. Repeat the offline resource probes against the final build after the browser-link change. Embedded data fonts, app-data access, Back, Share, loading errors, unavailable WebView and reopening still need device coverage. Code settings alone do not establish these restrictions on each WebView version.
 - **Transfer to a new phone** excludes the app's data: the rules say so, but no transfer was run (Android).
 - **iOS** equivalents in the table above: none is built.
 - **The app lock on Android 9 and 10**: its older calls are written as the platform documents them, but run on Android 11 and later only. Before Android 13 the recent apps may still show a picture of the app.

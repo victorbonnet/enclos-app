@@ -7,6 +7,13 @@
     <!-- The app lock's prompt: a fingerprint or a face, else the screen lock -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
+    <!-- Select the person's supporting browser for Custom Tabs on Android 11+. -->
+    <queries>
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
+    </queries>
+
     <!-- No backup and no transfer to a new phone: the app holds device keys
          and will hold conversations. allowBackup="false" and
          fullBackupContent cover Android 11 and older; dataExtractionRules

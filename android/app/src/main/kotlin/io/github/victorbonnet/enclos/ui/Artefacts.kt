@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -32,14 +33,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
 import io.github.victorbonnet.enclos.ArtefactDocument
 import io.github.victorbonnet.enclos.Attachment
+import io.github.victorbonnet.enclos.WebLinks
+import io.github.victorbonnet.enclos.openWebLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
@@ -56,6 +63,14 @@ fun ArtefactViewer(a: Attachment, file: File, close: () -> Unit) {
         value = withContext(Dispatchers.IO) { runCatching { ArtefactDocument.read(file) } }
     }
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        val view = LocalView.current
+        val lightBars = p.bg.luminance() > 0.5f
+        LaunchedEffect(view, lightBars) {
+            (view.parent as? DialogWindowProvider)?.window?.let { window ->
+                WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = lightBars
+                WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = lightBars
+            }
+        }
         Column(Modifier.fillMaxSize().background(p.bg).windowInsetsPadding(WindowInsets.safeDrawing)) {
             Row(
                 Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
@@ -140,8 +155,14 @@ private fun StaticPage(document: ArtefactDocument) {
                     return WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(byteArrayOf()))
                 }
 
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
-                    !document.isAnchor(request.url.toString())
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    val target = request.url.toString()
+                    if (document.isAnchor(target)) return false
+                    if (WebLinks.opensFromPage(target, document.url, request.isForMainFrame, request.hasGesture(), request.isRedirect)) {
+                        openWebLink(context, target)
+                    }
+                    return true
+                }
 
                 @Deprecated("Called by older WebView versions")
                 override fun shouldOverrideUrlLoading(view: WebView, url: String) = !document.isAnchor(url)

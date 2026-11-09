@@ -16,10 +16,14 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -33,6 +37,9 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.victorbonnet.enclos.WebLinks
+import io.github.victorbonnet.enclos.openMailLink
+import io.github.victorbonnet.enclos.openWebLink
 import org.commonmark.ext.autolink.AutolinkExtension
 import org.commonmark.ext.gfm.strikethrough.Strikethrough
 import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
@@ -105,15 +112,23 @@ object Markdown {
     }
 
     /** Whether [url] may be opened from a message: the web and mail only. */
-    fun opens(url: String): Boolean = url.substringBefore(':').lowercase() in setOf("http", "https", "mailto")
+    fun opens(url: String): Boolean = WebLinks.accepts(url) || url.startsWith("mailto:", ignoreCase = true)
 }
 
 /** A message's markdown, as blocks: paragraphs, headings, lists, quotes, code and tables. */
 @Composable
 fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier) {
     val document = remember(text) { Markdown.parse(text) }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Blocks(document, color)
+    val context = LocalContext.current
+    val links = remember(context) { object : UriHandler {
+        override fun openUri(uri: String) {
+            if (WebLinks.accepts(uri)) openWebLink(context, uri) else openMailLink(context, uri)
+        }
+    } }
+    CompositionLocalProvider(LocalUriHandler provides links) {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Blocks(document, color)
+        }
     }
 }
 
