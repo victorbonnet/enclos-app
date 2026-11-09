@@ -252,7 +252,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
-            Text(agent?.agent ?: address, style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp), color = p.text, maxLines = 1)
+            Text(agent?.label ?: address, style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         }
         Hairline()
         if (agent == null) {
@@ -269,9 +269,10 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
             Column(Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 EditableAgentPhoto(model, agent, working)
                 Gap(14.dp)
-                Text(agent.agent, style = Type.heading, color = p.text)
+                Text(agent.label, style = Type.heading, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(agent.address, style = Type.code, color = p.textFaint)
             }
+            AgentNameControls(model, agent)
             AgentPhotoControls(model, agent)
             Section("Conversations") {
                 if (home != null) {
@@ -395,8 +396,8 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        MemberStack(handles, side = 32.dp, scope = "$host/$sandbox")
-                        Text(g.title ?: handles.joinToString(", "), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        MemberStack(handles, side = 32.dp, scope = "$host/$sandbox", label = { model.agentLabel("$host/$sandbox/$it") })
+                        Text(g.title ?: g.members.joinToString(", ") { model.agentLabel("$host/$it") }, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
                     }
                 }
@@ -458,21 +459,21 @@ private fun GroupPicker(
         Gap(12.dp)
         Hairline()
         agents.forEach { a ->
-            val ticked = a in members
+            val ticked = members.any { it.address == a.address }
             val allowed = first == null || (a.host == first.host && a.sandbox == first.sandbox)
             Row(
                 Modifier.fillMaxWidth()
                     .selectable(selected = ticked, enabled = allowed || ticked, role = Role.Checkbox) {
-                        if (ticked) members.remove(a) else if (members.size < 6) members.add(a)
+                        if (ticked) members.removeAll { it.address == a.address } else if (members.size < 6) members.add(a)
                     }
                     .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                AgentInitial(a.agent, side = 32.dp, address = a.address)
+                AgentInitial(a.label, side = 32.dp, address = a.address)
                 Column(Modifier.weight(1f)) {
-                    Text(a.agent, style = Type.name, color = if (allowed || ticked) p.text else p.textFaint)
-                    Text("${a.sandbox} · ${a.host}", style = Type.code, color = p.textFaint)
+                    Text(a.label, style = Type.name, color = if (allowed || ticked) p.text else p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("@${a.agent} · ${a.sandbox} · ${a.host}", style = Type.code, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Box(
                     Modifier.size(22.dp).clip(Shapes.control).border(1.5.dp, if (ticked) p.accent else p.lineStrong, Shapes.control)
@@ -522,7 +523,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
         AppBar {
             IconButton(Glyphs.clear, "Close", back)
             Box {
-                val agent = chosen
+                val agent = chosen?.let { selected -> model.agents.firstOrNull { it.address == selected.address } }
                 Row(
                     Modifier.clip(Shapes.pill).border(1.dp, p.line, Shapes.pill)
                         .clickable(onClickLabel = "Choose the agent", enabled = agents.size > 1) { picking = true }
@@ -531,11 +532,11 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     if (grouping) {
-                        MemberStack(members.map { it.agent }.ifEmpty { listOf("?") }, side = 28.dp, scope = members.firstOrNull()?.let { "${it.host}/${it.sandbox}" })
+                        MemberStack(members.map { it.agent }.ifEmpty { listOf("?") }, side = 28.dp, scope = members.firstOrNull()?.let { "${it.host}/${it.sandbox}" }, label = { h -> members.firstOrNull { it.agent == h }?.let { model.agentLabel(it.address) } ?: h })
                     } else if (agent != null) {
-                        AgentInitial(agent.agent, side = 28.dp, address = agent.address)
+                        AgentInitial(agent.label, side = 28.dp, address = agent.address)
                     }
-                    Text(if (grouping) "New group" else agent?.agent ?: "No agent", style = Type.name, color = p.text)
+                    Text(if (grouping) "New group" else agent?.label ?: "No agent", style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     // Pointing down: a list opens.
                     if (agents.size > 1) Box(Modifier.size(16.dp).rotate(90f), contentAlignment = Alignment.Center) {
                         Glyph(Glyphs.chevron, p.textMuted, size = 16.dp)
@@ -564,12 +565,12 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    AgentInitial(a.agent, side = 24.dp, address = a.address)
+                                    AgentInitial(a.label, side = 24.dp, address = a.address)
                                     Column(Modifier.weight(1f, fill = false)) {
-                                        Text(a.agent, style = Type.name, color = p.text)
-                                        Text("${a.sandbox} · ${a.host}", style = Type.code, color = p.textFaint)
+                                        Text(a.label, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("@${a.agent} · ${a.sandbox} · ${a.host}", style = Type.code, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
-                                    if (a == chosen) Glyph(Glyphs.check, p.accent, size = 18.dp)
+                                    if (a.address == chosen?.address) Glyph(Glyphs.check, p.accent, size = 18.dp)
                                 }
                             },
                             onClick = {
@@ -585,14 +586,14 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
         if (grouping) {
             GroupPicker(agents, members, name, { name = it }, Modifier.weight(1f))
         } else Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            val agent = chosen
+            val agent = chosen?.let { selected -> model.agents.firstOrNull { it.address == selected.address } }
             if (agent == null) {
                 Text("No agent yet: pair a host, or wait for it to list its agents.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(24.dp))
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    AgentInitial(agent.agent, model.workingOn(agent).isNotEmpty(), side = 64.dp, address = agent.address)
+                    AgentInitial(agent.label, model.workingOn(agent).isNotEmpty(), side = 64.dp, address = agent.address)
                     Gap(14.dp)
-                    Text(agent.agent, style = Type.heading, color = p.text)
+                    Text(agent.label, style = Type.heading, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Gap(4.dp)
                     Text("${agent.sandbox} · ${agent.runtime.replaceFirstChar { it.uppercase() }} · ${agent.host}", style = Type.small, color = p.textMuted)
                     val count = model.commands[agent.address]?.size ?: 0
@@ -606,7 +607,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
         Composer(
             text,
             { text = it },
-            if (grouping) "Message the group, @ to address" else "Message ${agent?.agent ?: ""}".trim(),
+            if (grouping) "Message the group, @ to address" else "Message ${agent?.let { model.agentLabel(it.address) } ?: ""}".trim(),
             canSend = live && enough,
             notice = when {
                 agent != null && !live -> "Not connected to ${agent.host}: send once it's back."

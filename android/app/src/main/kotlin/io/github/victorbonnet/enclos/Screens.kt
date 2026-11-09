@@ -52,6 +52,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -309,7 +310,7 @@ fun InboxScreen(
     val sorted = inboxConversations(model.conversations.filter(model::listed), archivedOnly)
         .sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: 0L }
     val filter = if (unreadOnly) InboxFilter.Unread else InboxFilter.All
-    val found = search(sorted, { model.lines[it].orEmpty() }, model::unread, query, filter, archived = archivedOnly)
+    val found = search(sorted, { model.lines[it].orEmpty() }, model::unread, query, filter, archived = archivedOnly, agentNames = { c -> if (c.group) c.members.joinToString(" ") { model.agentLabel("${c.host}/$it") } else model.agentLabel("${c.host}/${c.agent}") })
     val requests = model.approvals.values.filter { a -> !archivedOnly && a.attention && (query.isBlank() || "${a.title} ${a.sandbox} ${a.host}".contains(query, ignoreCase = true)) }.sortedByDescending { it.time }
     val narrowed = archivedOnly || query.isNotBlank() || filter != InboxFilter.All
     // Groups have their own section; the agents' trees hold one-to-one conversations.
@@ -343,7 +344,7 @@ fun InboxScreen(
                             }
                             if (requestsShown) {
                                 items(requests, key = { "policy:${it.key}" }) { a ->
-                                    Arriving { PolicyRequestRow(a) { openApproval(a.key) } }
+                                    Arriving { PolicyRequestRow(a, agentLabel = model::agentLabel) { openApproval(a.key) } }
                                 }
                                 item(key = "policy-gap") { Gap(8.dp) }
                             }
@@ -448,10 +449,10 @@ private fun GroupRow(model: AppModel, c: Conversation, match: Line?, query: Stri
             Modifier.fillMaxWidth().then(action).padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            MemberStack(handles, side = 32.dp, scope = "${c.host}/${c.agent}")
+            MemberStack(handles, side = 32.dp, scope = "${c.host}/${c.agent}", label = { model.agentLabel("${c.host}/${c.agent}/$it") })
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(c.title ?: handles.joinToString(", "), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(c.title ?: c.members.joinToString(", ") { model.agentLabel("${c.host}/$it") }, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     when {
                         working -> WorkingWave(square = 4.dp, lift = 3.dp)
                         last != null -> Text(Times.ago(last.time, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint)
@@ -462,7 +463,7 @@ private fun GroupRow(model: AppModel, c: Conversation, match: Line?, query: Stri
                     val text = when {
                         last == null -> "${handles.size} agents: ${handles.joinToString(" ") { "@$it" }}"
                         last.from != "agent" -> "You: ${last.text}"
-                        else -> (last.agent?.substringAfterLast('/')?.let { "$it: " } ?: "") + remember(last.text) { words(last) }
+                        else -> (last.agent?.let { "${model.agentLabel(it)}: " } ?: "") + remember(last.text) { words(last) }
                     }
                     Text(
                         if (match != null) highlighted(text, query, p.accent) else AnnotatedString(text),
@@ -503,7 +504,7 @@ private fun Modifier.branch(color: Color, last: Boolean) = drawBehind {
 @Composable
 private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Long, archived: Boolean, branches: Boolean, menu: AgentMenu, onOpen: (() -> Unit)?) {
     val p = palette
-    val name = entry.address.substringAfterLast('/')
+    val name = model.agentLabel(entry.address)
     val haptics = LocalHapticFeedback.current
     var menuOpen by remember { mutableStateOf(false) }
     val working = model.workingOn(entry.address).filter { it.archived == archived }
@@ -920,7 +921,7 @@ private fun Doing(text: String, modifier: Modifier = Modifier) {
 private fun AgentRow(model: AppModel, entry: AgentEntry, query: String, onOpen: () -> Unit) {
     val p = palette
     val host = entry.address.substringBefore('/')
-    val name = entry.address.substringAfterLast('/')
+    val name = model.agentLabel(entry.address)
     val home = entry.home
     val all = home?.let { model.lines[it.id] }.orEmpty()
     val last = all.lastOrNull { !it.status } ?: all.lastOrNull()
@@ -1036,7 +1037,7 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
         return
     }
     val words = fold(query).split(' ').filter { it.isNotEmpty() }
-    val shown = model.agents.filter { a -> words.all { it in fold("${a.address} ${a.runtime}") } }
+    val shown = model.agents.filter { a -> words.all { it in fold("${a.label} ${a.address} ${a.runtime}") } }
     LazyColumn(Modifier.fillMaxSize()) {
         model.paired.forEach { host ->
             val live = model.connected(host.name)
@@ -1083,14 +1084,14 @@ internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () 
     val p = palette
     val working = model.workingOn(agent)
     Row(
-        Modifier.fillMaxWidth().clickable(onClickLabel = "Open ${agent.agent}", onClick = onClick)
+        Modifier.fillMaxWidth().clickable(onClickLabel = "Open ${agent.label}", onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        AgentInitial(agent.agent, working.isNotEmpty(), side = 32.dp, address = agent.address)
+        AgentInitial(agent.label, working.isNotEmpty(), side = 32.dp, address = agent.address)
         Column(Modifier.weight(1f)) {
-            Text(agent.agent, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(agent.label, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (working.isNotEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     WorkingWave(square = 4.dp, lift = 3.dp)
@@ -1254,12 +1255,16 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val p = palette
     val conversation = model.conversations.firstOrNull { it.id == id } ?: return
     val lines = model.lines[id].orEmpty()
-    val agent = conversation.agent.substringAfter('/')
+    val scope = "${conversation.host}/${conversation.agent}"
+    val agent = if (conversation.group) conversation.members.joinToString(", ") { model.agentLabel("${conversation.host}/$it") } else model.agentLabel(scope)
     val live = model.connected(conversation.host)
     // A group's members by handle, and where its discussion is.
     val handles = conversation.members.map { it.substringAfterLast('/') }
     val status = model.groups[id]
-    val turnOf = status?.turns?.firstOrNull { it.second == "working" }?.first?.substringAfterLast('/')
+    val turnOf = status?.turns?.firstOrNull { it.second == "working" }?.first?.substringAfterLast('/')?.let { h ->
+        val name = model.agentLabel("$scope/$h")
+        if (name == h) "@$h" else "$name (@$h)"
+    }
     val working = if (conversation.group) status?.state == "working" else model.working(id)
     // What the person writes, kept when they leave and come back.
     val draft = model.unsent[id].orEmpty()
@@ -1293,7 +1298,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
-            if (conversation.group) MemberStack(handles, side = 30.dp, scope = "${conversation.host}/${conversation.agent}") else AgentAvatar(agent, live, small = true, address = "${conversation.host}/${conversation.agent}")
+            if (conversation.group) MemberStack(handles, side = 30.dp, scope = scope, label = { model.agentLabel("$scope/$it") }) else AgentAvatar(agent, live, small = true, address = "${conversation.host}/${conversation.agent}")
             // Its name, and the agent under it; tap to rename.
             Column(Modifier.weight(1f).clickable(onClickLabel = "Rename the conversation") { renaming = true }) {
                 Text(
@@ -1357,7 +1362,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             time = Times.clock(line.time),
                             outgoing = line.from != "agent",
                             header = if (line.kind == "notify" && !conversation.group) ON_ITS_OWN else null,
-                            speaker = line.agent?.substringAfterLast('/'),
+                            speaker = line.agent?.let(model::agentLabel),
                             speakerAddress = line.agent,
                             files = line.attachments.takeIf { it.isNotEmpty() }?.let { attached ->
                                 { Files(attached, model.files) { model.fetch(conversation.host, it) } }
@@ -1381,8 +1386,9 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         }
         if (conversation.group) {
             // Members to address, as the person types `@`.
-            val members = remember(handles, draft) { mentionsFor(handles, draft) }
-            MentionSuggestions(members, "${conversation.host}/${conversation.agent}") { model.unsent[id] = mentioned(draft, it) }
+            val labels = handles.associateWith { model.agentLabel("$scope/$it") }
+            val members = remember(handles, draft, labels) { mentionsFor(handles, draft) { labels[it] ?: it } }
+            MentionSuggestions(members, scope, label = { labels[it] ?: it }) { model.unsent[id] = mentioned(draft, it) }
             if (status != null) GroupStrip(status, turnOf) { model.stopGroup(conversation) }
         } else {
             // The agent's commands that match what is typed after `/`; picking one puts it in the field.
@@ -1406,7 +1412,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
 
 /** A group's members' avatars, overlapping, at most three. */
 @Composable
-internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.Dp = 32.dp, scope: String? = null) {
+internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.Dp = 32.dp, scope: String? = null, label: (String) -> String = { it }) {
     val shown = handles.take(3)
     val step = side * 0.55f
     Box(Modifier.size(width = side + step * (shown.size - 1).coerceAtLeast(0), height = side)) {
@@ -1414,7 +1420,7 @@ internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.D
             Box(
                 Modifier.padding(start = step * i).size(side).clip(androidx.compose.foundation.shape.CircleShape)
                     .background(palette.bg).padding(1.5.dp),
-            ) { AgentInitial(h, side = side - 3.dp, address = scope?.let { "$it/$h" }) }
+            ) { AgentInitial(label(h), side = side - 3.dp, address = scope?.let { "$it/$h" }) }
         }
     }
 }
@@ -1425,7 +1431,7 @@ internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.D
  * it in the field.
  */
 @Composable
-private fun MentionSuggestions(offered: List<String>, scope: String, onPick: (String) -> Unit) {
+private fun MentionSuggestions(offered: List<String>, scope: String, label: (String) -> String, onPick: (String) -> Unit) {
     val p = palette
     AnimatedVisibility(
         offered.isNotEmpty(),
@@ -1443,9 +1449,10 @@ private fun MentionSuggestions(offered: List<String>, scope: String, onPick: (St
                     if (h == "all") {
                         Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) { Glyph(Glyphs.inbox, p.textMuted, size = 20.dp) }
                     } else {
-                        AgentInitial(h, side = 26.dp, address = "$scope/$h")
+                        AgentInitial(label(h), side = 26.dp, address = "$scope/$h")
                     }
-                    Text("@$h", style = Type.code.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), color = p.text)
+                    if (h != "all" && label(h) != h) Text(label(h), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text("@$h", style = Type.code.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = if (h != "all" && label(h) != h) Modifier.widthIn(max = 160.dp) else Modifier)
                     if (h == "all") Text("everyone answers", style = Type.small, color = p.textMuted)
                 }
             }
@@ -1461,7 +1468,7 @@ private fun MentionSuggestions(offered: List<String>, scope: String, onPick: (St
 private fun GroupStrip(status: GroupStatus, turnOf: String?, onStop: () -> Unit) {
     val p = palette
     val text = when (status.state) {
-        "working" -> if (turnOf != null) "@$turnOf is answering · round ${status.round + 1} of ${status.maxRounds}" else "Working"
+        "working" -> if (turnOf != null) "$turnOf is answering · round ${status.round + 1} of ${status.maxRounds}" else "Working"
         "settled" -> "Settled"
         "bounded" -> if (status.reason == "max_replies") "Paused: reply limit reached" else "Paused after ${status.maxRounds} rounds"
         "stopped" -> "Stopped"

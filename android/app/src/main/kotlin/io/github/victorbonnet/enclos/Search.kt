@@ -30,6 +30,7 @@ fun search(
     query: String,
     filter: InboxFilter,
     archived: Boolean = false,
+    agentNames: (Conversation) -> String = { "" },
 ): List<Found> {
     val words = fold(query).split(' ').filter { it.isNotEmpty() }
     return inboxConversations(conversations, archived).mapNotNull { c ->
@@ -38,7 +39,7 @@ fun search(
             InboxFilter.Unread -> if (unread(c.id) == 0) return@mapNotNull null
         }
         if (words.isEmpty()) return@mapNotNull Found(c, null)
-        val about = fold("${c.title.orEmpty()} ${c.host}/${c.agent}")
+        val about = fold("${c.title.orEmpty()} ${c.host}/${c.agent} ${c.members.joinToString(" ")} ${agentNames(c)}")
         val said = lines(c.id).asReversed().map { it to fold(words(it)) }
         val all = (listOf(about) + said.map { it.second }).joinToString(" ")
         if (!words.all { it in all }) return@mapNotNull null

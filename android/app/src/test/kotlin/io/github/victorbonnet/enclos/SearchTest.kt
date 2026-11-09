@@ -32,6 +32,27 @@ class SearchTest {
     }
 
     @Test
+    fun shared_names_are_searchable_with_accents_while_addresses_stay_scoped_to_their_host() {
+        val named = Conversation("raspberry", "lab/comptoir-dev", "shared-name")
+        val sameHandle = Conversation("mac", "lab/comptoir-dev", "other-host")
+        val labels = mapOf("raspberry/lab/comptoir-dev" to "Gégé Commit")
+        fun query(text: String) = search(listOf(named, sameHandle), { emptyList() }, { 0 }, text, InboxFilter.All,
+            agentNames = { labels["${it.host}/${it.agent}"].orEmpty() })
+        assertEquals(listOf(named), query("gege commit").map { it.conversation })
+        assertEquals(listOf(named, sameHandle), query("comptoir-dev").map { it.conversation })
+        assertEquals("lab/comptoir-dev", query("gégé").single().conversation.agent)
+    }
+
+    @Test
+    fun group_search_finds_current_member_names_and_keeps_the_saved_group_title() {
+        val group = Conversation("raspberry", "lab", "group-name", title = "Our team", members = listOf("lab/comptoir-dev", "lab/reviewer"))
+        val found = search(listOf(group), { emptyList() }, { 0 }, "gege", InboxFilter.All, agentNames = { "Gégé Commit Reviewer" }).single()
+        assertEquals(group, found.conversation)
+        assertEquals("Our team", found.conversation.title)
+        assertEquals(listOf("lab/comptoir-dev", "lab/reviewer"), found.conversation.members)
+    }
+
+    @Test
     fun a_message_matches_without_accents_or_marks_and_is_shown() {
         val found = find("meteo")
         assertEquals(listOf("c-1"), found.map { it.conversation.id })

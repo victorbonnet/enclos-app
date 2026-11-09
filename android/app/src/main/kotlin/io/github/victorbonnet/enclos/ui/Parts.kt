@@ -14,6 +14,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import android.graphics.Bitmap
+import io.github.victorbonnet.enclos.firstAgentCharacter
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -160,7 +161,7 @@ fun AgentAvatar(name: String, live: Boolean, small: Boolean = false, working: Bo
         }
         Corners(if (live || working) palette.accent else palette.lineStrong, Modifier.size(side), stroke = stroke)
         Text(
-            name.take(1).lowercase(),
+            firstAgentCharacter(name).lowercase(),
             style = Type.code.copy(fontSize = if (small) 12.sp else 15.sp, fontWeight = FontWeight.SemiBold),
             color = palette.text,
         )
@@ -198,7 +199,9 @@ private fun agentColors(name: String): Pair<Color, Color> {
 @Composable
 fun AgentInitial(name: String, working: Boolean = false, side: Dp = 28.dp, address: String? = null) {
     val p = palette
-    val (from, to) = remember(name) { agentColors(name) }
+    // A display-name edit changes the letter, not the agent's established colours.
+    val identity = address?.substringAfterLast('/') ?: name
+    val (from, to) = remember(identity) { agentColors(identity) }
     Box(
         Modifier.size(side).then(if (working) Modifier.semantics { contentDescription = "$name is working" } else Modifier),
         contentAlignment = Alignment.Center,
@@ -227,7 +230,7 @@ fun AgentInitial(name: String, working: Boolean = false, side: Dp = 28.dp, addre
             val photo = address?.let { LocalAgentPictures.current[it] }
             if (photo != null) Image(photo.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(side))
             else Text(
-                name.take(1).uppercase(),
+                firstAgentCharacter(name).uppercase(),
                 style = Type.name.copy(fontSize = (side.value * 0.44f).coerceAtLeast(11f).sp, fontWeight = FontWeight.SemiBold),
                 color = Color.White,
             )

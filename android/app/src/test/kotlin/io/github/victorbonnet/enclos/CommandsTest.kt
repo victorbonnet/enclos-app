@@ -49,6 +49,17 @@ class CommandsTest {
     }
 
     @Test
+    fun display_names_find_members_without_becoming_routing_handles() {
+        val labels = mapOf("comptoir-dev" to "Gégé Commit", "reviewer" to "All")
+        val members = labels.keys.toList()
+        assertEquals(listOf("comptoir-dev"), mentionsFor(members, "ask @gege") { labels.getValue(it) })
+        assertEquals(listOf("comptoir-dev"), mentionsFor(members, "@Commit") { labels.getValue(it) })
+        assertEquals(listOf("comptoir-dev"), mentionsFor(members, "@comptoir") { labels.getValue(it) })
+        assertEquals("ask @comptoir-dev ", mentioned("ask @gege", "comptoir-dev"))
+        assertEquals(listOf("reviewer", "all"), mentionsFor(members, "@all") { labels.getValue(it) })
+    }
+
+    @Test
     fun picking_one_puts_its_name_and_a_space_in_the_field() {
         assertEquals("/new ", picked(new))
     }

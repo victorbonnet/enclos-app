@@ -30,9 +30,9 @@ private fun mentionWord(draft: String): String? =
  * `@`, whatever the case, in the group's order, then `all` if it matches.
  * Nothing otherwise.
  */
-fun mentionsFor(handles: List<String>, draft: String): List<String> {
-    val typed = mentionWord(draft)?.drop(1)?.lowercase() ?: return emptyList()
-    return (handles + "all").filter { it.lowercase().startsWith(typed) }
+fun mentionsFor(handles: List<String>, draft: String, label: (String) -> String = { it }): List<String> {
+    val typed = fold(mentionWord(draft)?.drop(1) ?: return emptyList())
+    return (handles + "all").distinct().filter { h -> fold(h).startsWith(typed) || (h != "all" && fold(label(h)).split(' ').any { it.startsWith(typed) }) }
 }
 
 /** What picking [handle] makes of [draft]: its `@` word replaced with `@handle` and a space. */
