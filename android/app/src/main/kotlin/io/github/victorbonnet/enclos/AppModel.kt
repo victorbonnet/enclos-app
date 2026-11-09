@@ -56,6 +56,8 @@ data class Line(
     val steps: List<Step> = emptyList(),
     /** In a group, the member who said it (`sandbox/agent`); none otherwise. */
     val agent: String? = null,
+    /** Typed native question metadata is delivered separately, before this message. */
+    val question: String? = null,
 )
 
 /** A file of a message, fetched from the bridge when it is shown. */
@@ -202,6 +204,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     )
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
+    val questions = QuestionClient(
+        send = { request -> connections[request.question.host]?.send(request.command()) == true },
+        connected = ::connected,
+        accepts = { question -> paired.any { it.name == question.host } && conversations.any(question::belongsTo) },
+        changed = { question -> save { question(question) } },
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+    )
     private data class ArchiveKey(val host: String, val conversation: String)
     private val archiveRequests = mutableMapOf<String, ArchiveKey>()
     private val archivePending = mutableStateMapOf<ArchiveKey, Boolean>()
@@ -236,6 +245,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 if (recent != null) {
                     agents.addAll(recent.agents.map(agentNames::listed))
                     conversations.addAll(recent.conversations)
+                    recent.questions.forEach { questions.merge(it, cached = true) }
                     lines.putAll(recent.lines)
                     kept.putAll(recent.kept)
                 }
@@ -569,6 +579,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun connect(host: Host) {
         agentNames.ended(host.name)
         routines.ended(host.name)
+        questions.ended(host.name)
         connections.remove(host.name)?.close()
         // While retrying, why the last attempt ended stays on screen.
         if (status[host.name]?.startsWith("connected") != false) status[host.name] = "connecting"
@@ -603,6 +614,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections.remove(host.name)
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         routines.ended(host.name)
+        questions.ended(host.name)
         agentNames.ended(host.name)
         agentImages.ended(host.name)
         approvalsFresh[host.name] = false
@@ -649,6 +661,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun received(host: Host, m: JSONObject) {
+        if (m.optString("type") in setOf("question", "question.result", "error") && questions.received(host.name, m)) return
         if (m.optString("type") in setOf("agent.name", "error") && agentNames.received(host.name, m)) return
         if (m.optString("type") in setOf("routine.response", "error") && routines.received(host.name, m)) return
         when (m.optString("type")) {
@@ -678,8 +691,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val json = JSONObject(m.toString()).put("host", host.name).toString()
                 saving.execute { approvalCache.edit { putString(request.key, json) } }
             }
-            "synced" -> { approvalsFresh[host.name] = true }
+            "synced" -> { approvalsFresh[host.name] = true; questions.synced(host.name) }
             "authenticated" -> {
+                questions.authenticated(host.name)
                 approvalsFresh[host.name] = false
                 approvals.keys.filter { approvals[it]?.host == host.name }.forEach { approvals.remove(it) }
                 saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("${host.name}/") }.forEach { remove(it) } } }
@@ -763,7 +777,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     val a = files!!.getJSONObject(it)
                     Attachment(a.getString("id"), a.optString("mime"), a.optString("name"), a.optLong("size"))
                 }
-                var line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached)
+                var line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached,
+                    question = (m.opt("question") as? String)?.takeIf { it.isNotBlank() })
                 // In a group, who of its members said it.
                 if (line.from == "agent" && conversations.firstOrNull { it.id == id }?.group == true) {
                     line = line.copy(agent = "${host.name}/${m.getString("agent")}")
@@ -1197,6 +1212,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
+        paired.forEach { questions.forget(it.name) }
         paired.forEach { agentNames.forget(it.name) }
         paired.forEach { routines.forget(it.name) }
         archiveRequests.clear(); archivePending.clear(); archiveProblems.clear()
@@ -1236,6 +1252,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
+        questions.forget(host)
         clearArchiveRequests(host)
         archiveProblems.keys.filter { it.host == host }.forEach { archiveProblems.remove(it) }
         agentImages.forget(host)

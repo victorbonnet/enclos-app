@@ -14,6 +14,8 @@ Supporting agents expose [Routines](docs/spec.md#routines): scheduled instructio
 
 Agents can have [shared display names](docs/spec.md#agent-display-names), saved by the host and synchronized across phones. `comptoir-dev` can appear as **Gégé Commit** while keeping its address and `@handle`. Renaming needs a supporting host; updating only the phone does not enable it.
 
+Supporting agents ask [questions with native choices](docs/spec.md#questions): single or multiple selection, Other, free text and Skip inside the conversation. Submitting answers the exact waiting question. Hermes uses its existing `clarify` tool, guided by a bundled channel skill. This needs an updated bridge and channel; ordinary numbered messages remain text.
+
 ## Build
 
 Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK and NDK, JDK 17 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).
