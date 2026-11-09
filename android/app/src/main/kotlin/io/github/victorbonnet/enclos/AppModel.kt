@@ -179,7 +179,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private val approvalCache = application.getSharedPreferences("policy-requests", Context.MODE_PRIVATE)
     val approvals = mutableStateMapOf<String, PolicyRequest>()
     val approvalsFresh = mutableStateMapOf<String, Boolean>()
-    val decidingApprovals = mutableStateMapOf<String, String>() // request key -> message id
+    val pendingApprovalActions = mutableStateMapOf<String, PendingPolicyRequestAction>()
+    val approvalCloseSupported = mutableStateMapOf<String, Boolean>()
     val approvalErrors = mutableStateMapOf<String, String>()
     val agents = mutableStateListOf<Agent>()
     val agentNames = AgentNames(
@@ -618,12 +619,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         agentNames.ended(host.name)
         agentImages.ended(host.name)
         approvalsFresh[host.name] = false
+        approvalCloseSupported.remove(host.name)
         policyFresh.keys.filter { it.startsWith("${host.name}/") }.forEach { policyFresh[it] = false; policyReviews.remove(it) }
         policyRequests.filterValues { it.startsWith("${host.name}/") }.keys.toList().forEach { id ->
             val address = policyRequests.remove(id)
             if (address != null) { policyBusy.remove(address); policyErrors[address] = "The connection ended. Refresh the policy to check the outcome before retrying." }
         }
-        decidingApprovals.keys.filter { it.startsWith("${host.name}/") }.forEach { decidingApprovals.remove(it) }
+        pendingApprovalActions.keys.filter { it.startsWith("${host.name}/") }.forEach { pendingApprovalActions.remove(it) }
         status[host.name] = why
         // Nothing will come over a closed connection: stop showing the agent at work.
         val ids = conversations.filter { it.host == host.name }.map { it.id }.toSet()
@@ -685,8 +687,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "approval" -> {
                 val request = PolicyRequest.from(host.name, m)
+                // Never let a delayed pre-close broadcast reopen the row or overwrite its cache.
+                if (newestPolicyRequest(approvals[request.key], request) !== request) return
                 approvals[request.key] = request
-                decidingApprovals.remove(request.key)
+                pendingApprovalActions.remove(request.key)
                 approvalErrors.remove(request.key)
                 val json = JSONObject(m.toString()).put("host", host.name).toString()
                 saving.execute { approvalCache.edit { putString(request.key, json) } }
@@ -695,6 +699,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             "authenticated" -> {
                 questions.authenticated(host.name)
                 approvalsFresh[host.name] = false
+                val capabilities = m.optJSONArray("capabilities")
+                approvalCloseSupported[host.name] = (0 until (capabilities?.length() ?: 0)).any { capabilities?.optString(it) == "approval.close" }
+                pendingApprovalActions.keys.filter { it.startsWith("${host.name}/") }.forEach { pendingApprovalActions.remove(it) }
                 approvals.keys.filter { approvals[it]?.host == host.name }.forEach { approvals.remove(it) }
                 saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("${host.name}/") }.forEach { remove(it) } } }
                 failures.remove(host.name)
@@ -896,10 +903,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     policyReviews.remove(policyAddress)
                     return
                 }
-                val approval = decidingApprovals.entries.firstOrNull { it.value == m.optString("of") }?.key
+                val approval = pendingApprovalActions.entries.firstOrNull { it.key.startsWith("${host.name}/") && it.value.messageId == m.optString("of") }?.key
                 if (approval != null) {
-                    decidingApprovals.remove(approval)
+                    pendingApprovalActions.remove(approval)
                     approvalErrors[approval] = m.optString("message")
+                    return
                 }
                 // An error about a file asked for fails that file; else it is the bridge's word.
                 val file = asked.remove(m.optString("of"))
@@ -1004,14 +1012,26 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         policyRequests.entries.removeAll { it.value.startsWith(prefix) }
     }
 
-    /** No offline queue or optimistic approval: the host confirms the saved decision. */
+    /** No offline queue or optimistic outcome: the host confirms each action. */
     fun decideApproval(request: PolicyRequest, approve: Boolean) {
-        if (!request.pending || !connected(request.host) || approvalsFresh[request.host] != true || request.key in decidingApprovals || (approve && !request.available)) return
-        val command = message("approval.decide", "request" to request.id, "revision" to request.revision, "approve" to approve)
+        sendApprovalAction(request, if (approve) PolicyRequestAction.Approve else PolicyRequestAction.Deny)
+    }
+
+    fun closeApproval(request: PolicyRequest): Boolean = sendApprovalAction(request, PolicyRequestAction.Close)
+
+    private fun sendApprovalAction(request: PolicyRequest, action: PolicyRequestAction): Boolean {
+        val current = approvals[request.key] ?: return false
+        if (!action.allowed(current, connected(request.host), approvalsFresh[request.host] == true,
+                approvalCloseSupported[request.host] == true, request.key in pendingApprovalActions)) return false
+        // Decisions retain the revision the person reviewed; the host rejects a stale one.
+        val command = message(action.type, *action.fields(request).toTypedArray())
         if (connections[request.host]?.send(command) == true) {
-            decidingApprovals[request.key] = command.getString("id")
+            pendingApprovalActions[request.key] = PendingPolicyRequestAction(command.getString("id"), action)
             approvalErrors.remove(request.key)
-        } else approvalErrors[request.key] = "The decision was not sent. Reconnect and try again."
+            return true
+        }
+        approvalErrors[request.key] = if (action == PolicyRequestAction.Close) "The close request was not sent. Reconnect and try again." else "The decision was not sent. Reconnect and try again."
+        return false
     }
 
     /** Stops group [conversation]'s discussion; what was said stays. */
@@ -1221,7 +1241,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         saving.execute { policyCache.edit { clear() } }
         approvals.clear()
         approvalsFresh.clear()
-        decidingApprovals.clear()
+        pendingApprovalActions.clear()
+        approvalCloseSupported.clear()
         approvalErrors.clear()
         saving.execute { approvalCache.edit { clear() } }
         conversations.clear()
@@ -1263,8 +1284,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         conversations.removeAll { it.host == host }
         ids.forEach { lines.remove(it) }
         agents.removeAll { it.host == host }
-        approvals.keys.filter { approvals[it]?.host == host }.forEach { approvals.remove(it); decidingApprovals.remove(it); approvalErrors.remove(it) }
+        approvals.keys.filter { approvals[it]?.host == host }.forEach { approvals.remove(it) }
+        pendingApprovalActions.keys.filter { it.startsWith("$host/") }.forEach { pendingApprovalActions.remove(it) }
+        approvalErrors.keys.filter { it.startsWith("$host/") }.forEach { approvalErrors.remove(it) }
         approvalsFresh.remove(host)
+        approvalCloseSupported.remove(host)
         saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("$host/") }.forEach { remove(it) } } }
         kept.remove(host)
         save { forget(host) }

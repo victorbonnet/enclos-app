@@ -8,6 +8,11 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -80,32 +85,63 @@ fun PolicyRequestRow(request: PolicyRequest, agentLabel: (String) -> String = { 
 }
 
 @Composable
-private fun PolicyDecisionButtons(model: AppModel, request: PolicyRequest) {
+private fun PolicyDecisionButtons(model: AppModel, request: PolicyRequest, onCloseStarted: () -> Unit) {
     val p = palette
-    val busy = request.key in model.decidingApprovals || request.state == "applying"
+    val operation = model.pendingApprovalActions[request.key]?.action
+    val closing = operation == PolicyRequestAction.Close
+    val busy = operation != null || request.state == "applying"
+    val deciding = busy && !closing
     val live = model.connected(request.host) && model.approvalsFresh[request.host] == true
-    if (request.pending || busy) {
+    if (request.pending || deciding) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) {
-                PrimaryButton(if (busy) "Saving decision…" else if (request.restart) "Approve & restart" else "Approve",
+                PrimaryButton(if (deciding) "Saving decision…" else if (request.restart) "Approve & restart" else "Approve",
                     enabled = live && !busy && request.available) { model.decideApproval(request, true) }
             }
-            Box(Modifier.weight(1f).height(48.dp).clip(Shapes.control).border(1.dp, p.lineStrong, Shapes.control)
-                .clickable(enabled = live && !busy, role = Role.Button) { model.decideApproval(request, false) }, contentAlignment = Alignment.Center) {
-                Text("Deny", style = Type.label, color = if (live && !busy) p.text else p.textFaint)
-            }
+            PolicyOutlineButton("Deny", live && !busy, Modifier.weight(1f)) { model.decideApproval(request, false) }
         }
-        if (!live) Text("Connect to ${request.host} and sync to decide.", style = Type.small, color = p.textFaint, modifier = Modifier.padding(top = 8.dp))
     } else {
-        Text(when (request.state) { "approved" -> "Approved · policy updated"; "denied" -> "Denied · policy unchanged"; "diagnostic" -> "Diagnostic probe · no approval needed"; "failed" -> "Decision needs review on the host"; else -> request.state }, style = Type.name, color = p.accent)
+        Text(when (request.state) { "approved" -> "Approved · policy updated"; "denied" -> "Denied · policy unchanged"; "closed" -> "Closed · no new decision"; "diagnostic" -> "Diagnostic probe · no approval needed"; "failed" -> "Decision needs review on the host"; else -> request.state }, style = Type.name, color = if (request.state == "closed") p.textMuted else p.accent)
+    }
+    if (request.pending || request.state == "failed" || closing) {
+        Gap(12.dp)
+        PolicyOutlineButton(if (closing) "Closing request…" else "Close request",
+            enabled = live && !busy && model.approvalCloseSupported[request.host] == true,
+            modifier = Modifier.fillMaxWidth()) {
+            if (model.closeApproval(request)) onCloseStarted()
+        }
+        Text("Closing only removes this request from the Inbox. It does not approve or deny access, undo earlier changes, or resume work.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(top = 8.dp))
+        val unavailable = when {
+            !live -> "Reconnect to ${request.host} and sync to respond."
+            model.approvalCloseSupported[request.host] != true -> "Update this host to close requests."
+            else -> null
+        }
+        unavailable?.let { Text(it, style = Type.small, color = p.textFaint, modifier = Modifier.padding(top = 8.dp)) }
+    } else if (deciding && !live) {
+        Text("Reconnect to ${request.host} and sync to check the decision.", style = Type.small, color = p.textFaint, modifier = Modifier.padding(top = 8.dp))
     }
     model.approvalErrors[request.key]?.let { Text(it, style = Type.small, color = p.textMuted, modifier = Modifier.padding(top = 8.dp)) }
+}
+
+@Composable
+private fun PolicyOutlineButton(label: String, enabled: Boolean, modifier: Modifier = Modifier, action: () -> Unit) {
+    val p = palette
+    Box(modifier.height(48.dp).clip(Shapes.control).border(1.dp, p.lineStrong, Shapes.control)
+        .clickable(enabled = enabled, role = Role.Button, onClick = action), contentAlignment = Alignment.Center) {
+        Text(label, style = Type.label, color = if (enabled) p.text else p.textFaint)
+    }
 }
 
 @Composable
 fun PolicyRequestScreen(model: AppModel, key: String, back: () -> Unit, openChat: (String) -> Unit) {
     val p = palette
     val request = model.approvals[key]
+    var closing by rememberSaveable(key) { mutableStateOf(false) }
+    val operation = model.pendingApprovalActions[key]?.action
+    LaunchedEffect(closing, request?.state, operation) {
+        if (closing && request?.state == "closed") back()
+        else if (closing && operation != PolicyRequestAction.Close) closing = false
+    }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
@@ -142,7 +178,7 @@ fun PolicyRequestScreen(model: AppModel, key: String, back: () -> Unit, openChat
                     Text("Open conversation →", style = Type.name, color = p.accent, modifier = Modifier.heightIn(min = 48.dp).clickable(role = Role.Button) { openChat(conversation) }.padding(vertical = 12.dp))
                 }
             }
-            Column(Modifier.padding(16.dp)) { PolicyDecisionButtons(model, request) }
+            Column(Modifier.padding(16.dp)) { PolicyDecisionButtons(model, request) { closing = true } }
         }
     }
 }
