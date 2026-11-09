@@ -48,6 +48,22 @@ class RuntimeApprovalsTest {
         assertTrue(runCatching { question.copy(multiple = true).validate() }.isFailure)
     }
 
+    @Test fun independent_native_actions_need_scope_semantics_without_inventing_session() {
+        val offered = listOf(RuntimeApprovalAction.Once, RuntimeApprovalAction.Always, RuntimeApprovalAction.Deny)
+        assertTrue(runCatching { approval.copy(actions = offered).validate() }.isFailure)
+        val scopes = RuntimeApprovalScopes("Always remembers exact argv and working directory.", "Use native request native-7.")
+        val native = question.copy(approval = approval.copy(actions = offered, scopes = scopes))
+        native.validate()
+        native.validateAnswer(QuestionAnswer.Approval(RuntimeApprovalAction.Always))
+        assertTrue(runCatching { native.validateAnswer(QuestionAnswer.Approval(RuntimeApprovalAction.Session)) }.isFailure)
+        assertTrue(runCatching { native.copy(approval = native.approval!!.copy(smartDenied = true)).validate() }.isFailure)
+        assertEquals(question, newestQuestion(question, question.copy(revision = 1, approval = approval.copy(scopes = scopes))))
+        assertEquals(native, newestQuestion(native, native.copy(revision = 1, approval = native.approval!!.copy(scopes = scopes.copy(description = "A different persistence target")))))
+        for (invalid in listOf(scopes.copy(description = ""), scopes.copy(fallback = "bad\u0000value"), scopes.copy(description = "x".repeat(8 * 1024)))) {
+            assertTrue(runCatching { invalid.validate() }.isFailure)
+        }
+    }
+
     @Test fun complete_literal_command_reason_and_encoded_bounds_are_validated_without_truncation() {
         val literal = approval.copy(command = "printf '<script> **text**'\nnext\targument")
         question.copy(approval = literal).validate()

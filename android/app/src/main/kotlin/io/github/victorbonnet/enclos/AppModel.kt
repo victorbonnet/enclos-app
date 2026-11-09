@@ -594,6 +594,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     "auth",
                     "device" to host.deviceId,
                     "sig" to encodeBytes(Keys.sign(host.keyAlias, session.handshakeHash())),
+                    "capabilities" to JSONArray(listOf(NATIVE_APPROVAL_SCOPES)),
                 )
             },
             // A connection [connect] replaced, or that Forget or Clear cache

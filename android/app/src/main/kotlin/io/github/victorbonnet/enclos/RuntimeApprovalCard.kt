@@ -33,14 +33,18 @@ fun RuntimeApprovalCard(client: QuestionClient, question: QuestionInfo) {
             }
         }
         SelectionContainer { Text(approval.reason, style = Type.body, color = p.text) }
-        if (RuntimeApprovalAction.Once in approval.actions) {
-            Text("Allow once applies only to this command request.", style = Type.small, color = p.textMuted)
-        }
-        if (RuntimeApprovalAction.Session in approval.actions) {
-            Text("Allow for session grants the runtime's command pattern for this session.", style = Type.small, color = p.textMuted)
-        }
-        if (RuntimeApprovalAction.Always in approval.actions) {
-            Text("Always allow saves that pattern grant in this runtime.", style = Type.small, color = p.textMuted)
+        if (approval.scopes != null) {
+            SelectionContainer { Text(approval.scopes.description, style = Type.small, color = p.textMuted) }
+        } else {
+            if (RuntimeApprovalAction.Once in approval.actions) {
+                Text("Allow once applies only to this command request.", style = Type.small, color = p.textMuted)
+            }
+            if (RuntimeApprovalAction.Session in approval.actions) {
+                Text("Allow for session grants the runtime's command pattern for this session.", style = Type.small, color = p.textMuted)
+            }
+            if (RuntimeApprovalAction.Always in approval.actions) {
+                Text("Always allow saves that pattern grant in this runtime.", style = Type.small, color = p.textMuted)
+            }
         }
         if (approval.smartDenied) {
             Text(if (approval.actions == listOf(RuntimeApprovalAction.Deny)) "Only Deny is available for this request." else "Only Allow once or Deny is available for this request.", style = Type.small, color = p.textMuted)
