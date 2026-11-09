@@ -26,9 +26,14 @@ fun addRoutineSelection(selected: List<String>, value: String): List<String> {
     return if (id in selected) selected else selected + id
 }
 
-data class RoutineOptions(val timezone: String, val features: Set<String>, val skills: List<RoutineChoice>, val models: List<RoutineModelChoice>, val toolsets: List<RoutineChoice>) {
+data class RoutineOptions(val timezone: String, val features: Set<String>, val skills: List<RoutineChoice>, val models: List<RoutineModelChoice>, val toolsets: List<RoutineChoice>, val operations: Set<String>? = null) {
+    /** Unknown controls never become available; missing metadata keeps legacy runtimes usable. */
+    fun allows(operation: String): Boolean {
+        if (operation !in setOf("get", "create", "update", "delete", "set_enabled", "run")) return false
+        return operations?.contains(operation) ?: (operation != "run" || "run" in features)
+    }
     companion object {
-        fun from(m: JSONObject): RoutineOptions = RoutineOptions(m.getString("timezone"), m.routineStrings("features").toSet(), choices(m.optJSONArray("skills")), m.optJSONArray("models")?.let { a -> (0 until a.length()).map { a.getJSONObject(it).let { model -> RoutineModelChoice(model.getString("id"), model.getString("label"), model.routineText("provider")) } } }.orEmpty(), choices(m.optJSONArray("toolsets")))
+        fun from(m: JSONObject): RoutineOptions = RoutineOptions(m.getString("timezone"), m.routineStrings("features").toSet(), choices(m.optJSONArray("skills")), m.optJSONArray("models")?.let { a -> (0 until a.length()).map { a.getJSONObject(it).let { model -> RoutineModelChoice(model.getString("id"), model.getString("label"), model.routineText("provider")) } } }.orEmpty(), choices(m.optJSONArray("toolsets")), if (m.isNull("operations")) null else m.getJSONArray("operations").let { a -> (0 until a.length()).map(a::getString).toSet() })
         fun choices(a: JSONArray?): List<RoutineChoice> = a?.let { (0 until it.length()).map { i -> it.getJSONObject(i).let { c -> RoutineChoice(c.getString("id"), c.getString("label")) } } }.orEmpty()
     }
 }
