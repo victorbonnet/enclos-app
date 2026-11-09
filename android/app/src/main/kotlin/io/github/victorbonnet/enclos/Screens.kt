@@ -617,9 +617,10 @@ private fun MenuRow(glyph: ImageVector, text: String, onClick: () -> Unit) {
     )
 }
 
-/** Every conversation kind uses the bridge's same archive operation. */
+/** Home stays active; a Home archived by an older version can still be restored. */
 @Composable
 private fun ArchiveMenuItem(model: AppModel, c: Conversation, dismiss: () -> Unit) {
+    if (c.home && !c.archived) return
     val p = palette
     val unavailable = model.archiveUnavailable(c)
     DropdownMenuItem(

@@ -1087,6 +1087,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** The bridge owns archive state; only its conversation echo updates the phone. */
     fun archive(conversation: Conversation, archived: Boolean): Boolean {
+        if (archived && conversation.home) return false
         val key = ArchiveKey(conversation.host, conversation.id)
         if (archiveUnavailable(conversation) != null) return false
         val connection = connections[conversation.host] ?: return false
