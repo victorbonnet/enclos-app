@@ -1,8 +1,6 @@
 package io.github.victorbonnet.enclos.ui
 
-import android.content.ClipData
 import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
@@ -59,10 +57,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
-import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import io.github.victorbonnet.enclos.Attachment
 import io.github.victorbonnet.enclos.FileState
+import io.github.victorbonnet.enclos.shareAttachment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -70,15 +68,18 @@ import java.io.File
 
 /**
  * A message's files: an image drawn in the bubble, which opens full screen
- * to share; HTML as a line opening a page, other files as a line sharing them.
+ * with Share; HTML opens a page, other files open a document viewer.
  * Each is fetched from the bridge when it is first shown.
  */
 @Composable
 fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: (Attachment) -> Unit) {
     var opened by remember { mutableStateOf<Pair<Attachment, File>?>(null) }
     opened?.let { (a, file) ->
-        if (a.artefact) ArtefactViewer(a, file) { opened = null }
-        else Viewer(a, file) { opened = null }
+        when {
+            a.artefact -> ArtefactViewer(a, file) { opened = null }
+            a.image -> Viewer(a, file) { opened = null }
+            else -> FileViewer(a, file) { opened = null }
+        }
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         attachments.forEach { a ->
@@ -137,19 +138,16 @@ private fun Placeholder(text: String, onClick: (() -> Unit)? = null) {
     ) { Text(text, style = Type.meta, color = p.textFaint) }
 }
 
-/** A file's name and size: HTML opens as a page; another file opens Share. */
+/** A file's name and size. Opening it never starts the share sheet. */
 @Composable
 private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit, open: (File) -> Unit) {
     val p = palette
-    val context = LocalContext.current
     Row(
         Modifier.fillMaxWidth().clip(Shapes.control).border(1.dp, p.line, Shapes.control)
             .clickable(role = Role.Button) {
                 when (state) {
-                    // Cleared by the system since: fetched again, not shared missing.
-                    is FileState.Ready -> if (state.file.isFile) {
-                        if (a.artefact) open(state.file) else share(context, a, state.file)
-                    } else retry()
+                    // Cleared by the system since: fetched again rather than opened missing.
+                    is FileState.Ready -> if (state.file.isFile) open(state.file) else retry()
                     is FileState.Failed -> retry()
                     else -> {}
                 }
@@ -165,7 +163,7 @@ private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit, open:
                 when (state) {
                     is FileState.Loading -> "${size(a.size)} · ${percent(state.done, state.size)}"
                     is FileState.Failed -> "Did not come: ${state.why}. Tap to try again."
-                    is FileState.Ready -> "${size(a.size)} · ${if (a.artefact) "open page" else "tap to share"}"
+                    is FileState.Ready -> "${size(a.size)} · ${if (a.artefact) "open page" else "tap to open"}"
                     null -> size(a.size)
                 },
                 style = Type.meta,
@@ -306,13 +304,7 @@ private fun Zoomable(bitmap: Bitmap, description: String, onTap: () -> Unit) {
 
 /** Hands the file to another app through the system's share sheet, readable by that app alone. */
 fun share(context: Context, a: Attachment, file: File) {
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-    val send = Intent(Intent.ACTION_SEND)
-        .setType(a.mime)
-        .putExtra(Intent.EXTRA_STREAM, uri)
-        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    send.clipData = ClipData.newRawUri(a.name, uri)
-    context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+    shareAttachment(context, a, file)
 }
 
 /** The image at [file], decoded at about [longest] pixels on its longest side, off the main thread. */

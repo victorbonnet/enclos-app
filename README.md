@@ -6,6 +6,8 @@ Status: a proposal being built, Android only. The app pairs with a host's bridge
 
 Agents can send [static HTML artefacts](docs/spec.md#5-messages): a self-contained page opens directly in the app, with Back and Share. Pages use inline CSS and embedded images or fonts; scripts, external resources and automatic navigation are unavailable. Tapping a web link opens it in the browser's Custom Tab where supported; the private page stays in its viewer. The channel tells the agent to write a UTF-8 `.html` file and send `MEDIA:/absolute/path/page.html`. HTML in a conversation's text still shows literally.
 
+[Attachments open in the app](docs/spec.md#5-messages) when tapped, with Share available from the viewer. Images keep their full-screen viewer; PDFs have native scrolling and zoom, and UTF-8 text files up to 1 MiB show as selectable text. Unsupported documents, password-protected PDFs and failed PDF or text previews show a notice with **Open in another app** and **Share**. Handing a file to another app is always an explicit action.
+
 Conversations can be [archived and restored](docs/spec.md#archived-conversations) across paired devices. Archived conversations stay searchable with their history intact; new activity leaves them archived. The bridge owns the flag, so Hermes and a future OpenClaw channel use the same behaviour without a runtime-specific archive command.
 
 Supporting agents expose [Routines](docs/spec.md#routines): scheduled instructions, delivery choices and advanced runtime settings, with edit, pause/resume, run and delete controls. The runtime keeps and executes them while the phone is closed. Routines use an optional generic channel contract; Hermes is the first implementation.

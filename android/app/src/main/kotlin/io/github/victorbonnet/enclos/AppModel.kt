@@ -60,9 +60,13 @@ data class Line(
 
 /** A file of a message, fetched from the bridge when it is shown. */
 data class Attachment(val id: String, val mime: String, val name: String, val size: Long) {
-    val image: Boolean get() = mime.startsWith("image/")
+    val mediaType: String get() = mime.substringBefore(';').trim().lowercase()
+    val image: Boolean get() = mediaType.startsWith("image/")
     /** A static HTML page, opened separately from the message's markdown. */
-    val artefact: Boolean get() = mime.substringBefore(';').trim().equals("text/html", ignoreCase = true)
+    val artefact: Boolean get() = mediaType == "text/html"
+    val pdf: Boolean get() = mediaType == "application/pdf"
+    /** Other text is drawn literally, without fetching resources or executing content. */
+    val text: Boolean get() = !artefact && (mediaType.startsWith("text/") || mediaType in setOf("application/json", "application/xml"))
 }
 
 /** Where a file stands on this phone. */
