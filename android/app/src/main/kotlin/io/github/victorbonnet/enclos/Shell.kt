@@ -91,7 +91,9 @@ fun HomeShell(
     pair: () -> Unit,
 ) {
     val p = palette
-    val view = View.entries[views.currentPage]
+    // The view settled on: the top bar's actions and the search's label
+    // change once a swipe ends, not half way through it.
+    val view = View.entries[views.settledPage]
     var query by rememberSaveable { mutableStateOf("") }
     var unreadOnly by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
@@ -99,7 +101,8 @@ fun HomeShell(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ViewSwitch(view, onView)
+            // The switch follows the finger: the view a swipe would settle on.
+            ViewSwitch(View.entries[views.targetPage], onView)
             Spacer(Modifier.weight(1f))
             if (view == View.Conversations && model.paired.isNotEmpty()) {
                 IconButton(

@@ -32,7 +32,7 @@ The pairing screen has three steps, always in this order: code read, device key 
 
 ## 4. Screens
 
-The first screen has two views, Inbox and Agents, chosen with the switch at the top. Swiping left on the main content opens Agents; swiping right returns to Inbox. The content follows the finger and settles on a view when released; there is no wrapping at either end. The switch stays in sync and can still be tapped. Vertical swipes scroll the current list. The search and compose controls stay in place below the content, with the same search text across both views. Settings and the other full screens (a conversation, pairing and a policy request) open over the first screen. Back from Agents returns to Inbox. Android is built; iOS follows when implemented. The app is in portrait only, for now, the QR scanner included.
+The first screen has two views, Inbox and Agents, chosen with the switch at the top. Swiping left on the main content opens Agents; swiping right returns to Inbox. The content follows the finger and settles on a view when released; there is no wrapping at either end. The switch shows the view a swipe would settle on and can still be tapped; the actions on the top line and the search field's label change once the swipe has settled. Vertical swipes scroll the current list. The search and compose controls stay in place below the content, with the same search text across both views. Settings and the other full screens (a conversation, pairing and a policy request) open over the first screen. Back from Agents returns to Inbox. Pairing a host lands on Agents. Android is built; iOS follows when implemented. The app is in portrait only, for now, the QR scanner included.
 
 ### Inbox
 

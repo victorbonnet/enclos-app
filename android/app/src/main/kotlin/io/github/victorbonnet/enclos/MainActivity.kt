@@ -240,8 +240,9 @@ private fun Screens(model: AppModel) {
     val opened = model.openedLink.value
     LaunchedEffect(opened) { if (opened != null) go(Route.Pair) }
 
-    // Back from the agents: to the conversations.
-    BackHandler(enabled = !onFullScreen && views.currentPage != View.Conversations.ordinal) { onView(View.Conversations) }
+    // Back from the agents: to the conversations. The settled page, so a
+    // swipe half way does not change what Back does.
+    BackHandler(enabled = !onFullScreen && views.settledPage != View.Conversations.ordinal) { onView(View.Conversations) }
 
     Box(Modifier.fillMaxSize().background(palette.bg).windowInsetsPadding(WindowInsets.statusBars)) {
         transition.AnimatedContent(transitionSpec = { routeMove(forward = targetState.depth > initialState.depth) }) { route ->
@@ -255,7 +256,10 @@ private fun Screens(model: AppModel) {
                 val start = { agent: Agent -> go(Route.Chat(model.newConversation(agent))) }
                 when (route) {
                     Route.Pair -> PairScreen(model, back = { go(Route.Tabs) }, done = {
-                        onView(View.Agents)
+                        // The pager is not laid out while pairing shows: set
+                        // its page at once, which its next layout applies,
+                        // rather than animate a pager that is not there.
+                        views.requestScrollToPage(View.Agents.ordinal)
                         go(Route.Tabs)
                     })
                     is Route.ApprovalPage -> PolicyRequestScreen(model, route.key, back = { go(Route.Tabs) }, openChat = { go(Route.Chat(it)) })
