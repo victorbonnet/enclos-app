@@ -61,6 +61,8 @@ data class Line(
 /** A file of a message, fetched from the bridge when it is shown. */
 data class Attachment(val id: String, val mime: String, val name: String, val size: Long) {
     val mediaType: String get() = mime.substringBefore(';').trim().lowercase()
+    /** The name as shown: without hidden characters: a right-to-left override (U+202E) before `fdp.apk` would make it read as `kpa.pdf`. */
+    val shownName: String get() = Visible.stripped(name).ifBlank { "file" }
     val image: Boolean get() = mediaType.startsWith("image/")
     /** A static HTML page, opened separately from the message's markdown. */
     val artefact: Boolean get() = mediaType == "text/html"

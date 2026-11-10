@@ -47,6 +47,7 @@ import io.github.victorbonnet.enclos.ArtefactDocument
 import io.github.victorbonnet.enclos.Attachment
 import io.github.victorbonnet.enclos.WebLinks
 import io.github.victorbonnet.enclos.openWebLink
+import io.github.victorbonnet.enclos.shareAttachment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
@@ -78,10 +79,10 @@ fun ArtefactViewer(a: Attachment, file: File, close: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 IconButton(Glyphs.back, "Back", close)
-                Text(a.name, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(a.shownName, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 Box(
-                    Modifier.height(44.dp).clickable(onClickLabel = "Share the page", role = Role.Button) {
-                        if (file.isFile) share(context, a, file) else shareMissing = true
+                    Modifier.height(48.dp).clickable(onClickLabel = "Share the page", role = Role.Button) {
+                        if (file.isFile) shareAttachment(context, a, file) else shareMissing = true
                     }
                         .padding(horizontal = 14.dp),
                     contentAlignment = Alignment.Center,

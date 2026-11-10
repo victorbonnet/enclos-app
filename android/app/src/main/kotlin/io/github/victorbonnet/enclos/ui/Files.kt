@@ -1,6 +1,5 @@
 package io.github.victorbonnet.enclos.ui
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
@@ -113,7 +112,7 @@ private fun ImageFile(a: Attachment, state: FileState?, retry: () -> Unit, open:
             } else {
                 Image(
                     image.asImageBitmap(),
-                    contentDescription = a.name,
+                    contentDescription = a.shownName,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxWidth().aspectRatio(image.width.toFloat() / image.height.coerceAtLeast(1))
                         .clip(shape).clickable(onClickLabel = "Open the image", role = Role.Image) { open(state.file) },
@@ -158,7 +157,7 @@ private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit, open:
     ) {
         Glyph(Glyphs.compose, p.accent, size = 18.dp)
         Column(Modifier.weight(1f)) {
-            Text(a.name, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(a.shownName, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 when (state) {
                     is FileState.Loading -> "${size(a.size)} · ${percent(state.done, state.size)}"
@@ -199,7 +198,7 @@ private fun Viewer(a: Attachment, file: File, close: () -> Unit) {
             }
         }
         Box(Modifier.fillMaxSize().background(ViewerGround)) {
-            bitmap?.let { Zoomable(it, a.name) { chrome = !chrome } }
+            bitmap?.let { Zoomable(it, a.shownName) { chrome = !chrome } }
             AnimatedVisibility(
                 chrome,
                 enter = fadeIn(Motion.enter(Motion.SHORT)),
@@ -215,9 +214,9 @@ private fun Viewer(a: Attachment, file: File, close: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(Glyphs.back, "Back", close, tint = ViewerText)
-                    Text(a.name, style = Type.small, color = ViewerText.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(a.shownName, style = Type.small, color = ViewerText.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     Box(
-                        Modifier.height(44.dp).clip(Shapes.control).clickable(onClickLabel = "Share the image", role = Role.Button) { share(context, a, file) }
+                        Modifier.height(48.dp).clip(Shapes.control).clickable(onClickLabel = "Share the image", role = Role.Button) { shareAttachment(context, a, file) }
                             .padding(horizontal = 14.dp),
                         contentAlignment = Alignment.Center,
                     ) { Text("Share", style = Type.label, color = ViewerText) }
@@ -300,11 +299,6 @@ private fun Zoomable(bitmap: Bitmap, description: String, onTap: () -> Unit) {
             },
         )
     }
-}
-
-/** Hands the file to another app through the system's share sheet, readable by that app alone. */
-fun share(context: Context, a: Attachment, file: File) {
-    shareAttachment(context, a, file)
 }
 
 /** The image at [file], decoded at about [longest] pixels on its longest side, off the main thread. */
