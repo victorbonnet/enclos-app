@@ -22,7 +22,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -36,6 +35,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -407,9 +407,14 @@ fun Bubble(
                 Text(speaker, style = Type.meta.copy(fontWeight = FontWeight.SemiBold), color = p.textMuted)
             }
         }
-    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = if (outgoing) Alignment.CenterEnd else Alignment.CenterStart) {
+        // At most 90% of the width, capped at 640dp, without a measuring
+        // pass of its own (BoxWithConstraints subcomposes each message):
+        // a 90% slot whose content wraps, at its side, up to the cap.
         val shape = if (outgoing) Shapes.bubbleOut else Shapes.bubbleIn
-        val base = Modifier.widthIn(max = (maxWidth * 0.9f).coerceAtMost(640.dp)).clip(shape)
+        val base = Modifier.fillMaxWidth(0.9f)
+            .wrapContentWidth(if (outgoing) Alignment.End else Alignment.Start)
+            .widthIn(max = 640.dp)
+            .clip(shape)
         val look = if (outgoing) base.background(p.buttonBg) else base.background(p.surface).border(BorderStroke(1.dp, p.line), shape)
         Column(look.padding(horizontal = 12.dp, vertical = 9.dp)) {
             if (header != null) {
@@ -436,7 +441,6 @@ fun Bubble(
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
-    }
     }
 }
 
