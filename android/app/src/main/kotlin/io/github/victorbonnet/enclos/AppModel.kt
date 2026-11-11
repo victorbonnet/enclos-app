@@ -214,56 +214,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         applyTheme(getApplication(), choice)
     }
 
-    /** Whether the app lock is on: the person's choice, kept on this device. */
-    val lockOn = mutableStateOf(settings.getBoolean("lock", false))
-    /** Whether the app is locked now: from its start while the lock is on, and again after a minute away. */
-    val locked = mutableStateOf(lockOn.value)
-    /** Why the last unlock did not happen, as the system said: shown on the lock screen. */
-    val lockSaid = mutableStateOf<String?>(null)
-    /** When the app went to the background (elapsed time); none while it shows. */
-    private var leftAt: Long? = null
-    /** Whether the prompt is still to show on its own for this lock: once, so cancelling it does not bring it back. */
-    var promptDue = locked.value
-
-    /** Turns the app lock on or off; on only once the person proved it works ([AppLock], [Unlocker]). */
-    fun setLock(on: Boolean) {
-        lockOn.value = on
-        if (on) lockDropped.value = false
-        settings.edit(commit = true) { putBoolean("lock", on) }
-    }
-
-    /** The app went to the background now; not while an unlock prompt took the screen. */
-    fun left(now: Long) {
-        leftAt = now
-    }
-
-    /** Whether the lock turned itself off because the phone no longer has a screen lock: said in Status. */
-    val lockDropped = mutableStateOf(false)
-
-    /**
-     * The app is back: locked again when the lock is on and it was away
-     * long enough. A phone whose screen lock was removed has nothing left
-     * to unlock the app with: the lock turns off, rather than lock the
-     * person out, and Status says so.
-     */
-    fun returned(now: Long) {
-        if (lockOn.value && !AppLock.available(getApplication())) {
-            setLock(false)
-            locked.value = false
-            lockDropped.value = true
-        }
-        if (AppLock.locksOnReturn(lockOn.value, leftAt, now)) {
-            locked.value = true
-            lockSaid.value = null
-            promptDue = true
-        }
-        leftAt = null
-    }
-
-    fun unlocked(ok: Boolean, why: String?) {
-        if (ok) locked.value = false
-        lockSaid.value = if (ok) null else why
-    }
+    /** The app lock: on or off, kept on this device, and whether the app is locked now ([LockState]). */
+    val lock = LockState(
+        on = settings.getBoolean("lock", false),
+        screenLock = { AppLock.available(getApplication()) },
+        clock = android.os.SystemClock::elapsedRealtime,
+        // Written at once (commit), not later: a choice must survive the app being stopped right after.
+        keep = { on -> settings.edit(commit = true) { putBoolean("lock", on) } },
+    )
 
     /** The agents (`host/sandbox/agent`) whose conversations the inbox shows unfolded, while the app runs. */
     val unfolded = mutableStateListOf<String>()
@@ -322,6 +280,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Marks every message of [conversation] read. */
     fun markRead(conversation: String) {
+        // Locked, nobody has seen it: nothing of the app is composed then, and this holds should a caller forget.
+        if (lock.locked.value) return
         val last = lines[conversation]?.lastOrNull()?.seq ?: return
         if ((lastRead[conversation] ?: 0) >= last) return
         read(conversation, last)
