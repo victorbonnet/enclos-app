@@ -46,7 +46,7 @@ Every conversation with every agent of every host, the most recent first, each a
 
 Each agent has one Home conversation, which its host's bridge makes and keeps (enclos ADR 0044, `docs/protocol.md`, Home): the runtime's home channel. What belongs to no conversation lands there: a cron job that has no conversation of its own, a message the agent sends with no other place to go, the runtime's notices about itself. It is named Home, pinned first in the inbox and in its agent's group, listed even when empty ("Cron jobs and the agent's notices come here."), and the person may talk to the agent in it too. A cron job started in a conversation still answers in that conversation. Hermes's `/sethome` is answered by its plugin, not run: there is nothing to set.
 
-**Status lines.** The runtime's notices about itself (Hermes: the gateway online, shutting down, restarting) are not the agent speaking: they come as `status` and show as a quiet centred line, small and faint, with their time, never a bubble. They never count as unread, and the inbox previews the last other message when there is one.
+**Status lines.** The runtime's notices about itself (Hermes: the gateway online, shutting down, restarting) are not the agent speaking: they come as `status` and show as a quiet centred line, small and faint, with their time, never a bubble. They never count as unread, and the inbox previews the last other message when there is one. The plugin, in the sandbox, chooses a message's kind, so a status line is the sandbox's word, never the app's or the bridge's: it starts with the runtime's name (`hermes: gateway online · 14:02`), is cut to one line, and drops the characters that would reorder or hide part of it. One that carries files shows as a message, so its files show. Status lines coming only from the runtime's gateway, never from a turn, would have to be enforced on the bridge; the app does not.
 
 ### Names
 
@@ -58,7 +58,7 @@ Each paired host, with a filled square while connected (`connected · tailnet`) 
 
 ### Status
 
-Each paired host, its connection (who it is connected as, or why not), the bridge's last error, its address, Reconnect when it is not connected, and Forget this host; the [theme](#7-theme); what is kept on this phone, and Clear cache; Pair a host; the core's version. Nothing here acts on a sandbox.
+Each paired host, its connection (who it is connected as, or why not), the bridge's last error, its address, Reconnect when it is not connected, and Forget this host; the [theme](#7-theme); what is kept on this phone (and, when it could not be read, such as after going back to an older build, that it could not), and Clear cache; Pair a host; the core's version. Nothing here acts on a sandbox.
 
 - **Forget this host**, after a confirmation: connected, the app asks the bridge to unpair this phone (enclos `docs/protocol.md`, `device.forget`); not connected, the host keeps it listed until `enclos app unpair` there, which the confirmation says. Either way the phone deletes its device key and Noise key for that host, and everything it kept from it: agents, conversations, messages, files, how far they were read. The conversations stay on the host. Using it again means pairing again.
 - **Clear cache**, after a confirmation: deletes the conversations, messages, agents and files kept on this phone, then syncs everything again from each connected host. Pairings stay, and how far each conversation was read comes back from the bridges.

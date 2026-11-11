@@ -87,6 +87,12 @@ data class Conversation(
 /** A message the runtime sends about itself (gateway online, shutting down): a quiet line, never unread. */
 val Line.status: Boolean get() = kind == "status"
 
+/** The agent's messages among [lines] after [read]; a status line never counts. */
+internal fun unreadAmong(lines: List<Line>, read: Long): Int = lines.count { it.from == "agent" && !it.status && it.seq > read }
+
+/** Whether the inbox lists [conversation], whose messages are [lines]: once something was said in it, and an agent's Home always. */
+internal fun listedWith(conversation: Conversation, lines: List<Line>): Boolean = conversation.home || lines.isNotEmpty()
+
 /** The pairing in progress: what the link said, and how far it went. */
 data class Pairing(
     val host: String,
@@ -173,8 +179,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         store.query()
     } catch (e: android.database.SQLException) {
         android.util.Log.w("enclos", "could not read what the phone kept", e)
+        // Said on the Status screen: the app runs from the bridges alone.
+        ui { keptUnreadable.value = true }
         null
     }
+
+    /**
+     * Whether what the phone kept could not be read, such as a database a
+     * newer build of the app wrote (its version cannot go back).
+     */
+    val keptUnreadable = mutableStateOf(false)
 
     /** Keeps something on the phone; a failed write leaves it to the next sync from the bridge. */
     private fun save(write: Store.() -> Unit) = saving.execute {
@@ -234,8 +248,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** The agent's messages in [conversation] not read on this device yet. */
     fun unread(conversation: String): Int {
-        val read = lastRead[conversation] ?: 0
-        return lines[conversation].orEmpty().count { it.from == "agent" && !it.status && it.seq > read }
+        return unreadAmong(lines[conversation].orEmpty(), lastRead[conversation] ?: 0)
     }
 
     /** Marks every message of [conversation] read. */
@@ -577,7 +590,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Whether the inbox lists [conversation]: once something was said in it, and an agent's Home always. */
-    fun listed(conversation: Conversation) = conversation.home || !lines[conversation.id].isNullOrEmpty()
+    fun listed(conversation: Conversation) = listedWith(conversation, lines[conversation.id].orEmpty())
+
+    /** Who a status line of [conversation] is from: its agent's runtime, else the agent. */
+    fun statusSource(conversation: Conversation): String =
+        agents.firstOrNull { it.host == conversation.host && it.name == conversation.agent }?.runtime?.ifBlank { null }
+            ?: conversation.agent.substringAfter('/')
 
     /**
      * Names [conversation] (an empty [title] clears its name, and the agent
