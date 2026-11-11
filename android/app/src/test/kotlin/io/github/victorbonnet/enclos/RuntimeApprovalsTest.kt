@@ -11,7 +11,7 @@ class RuntimeApprovalsTest {
         assertTrue(runCatching { approval.copy(patterns = emptyList()).validate() }.isFailure)
         assertTrue(runCatching { approval.copy(actions = listOf(RuntimeApprovalAction.Once, RuntimeApprovalAction.Session, RuntimeApprovalAction.Deny), patterns = emptyList()).validate() }.isFailure)
         approval.copy(actions = listOf(RuntimeApprovalAction.Once, RuntimeApprovalAction.Deny), patterns = emptyList()).validate()
-        for (invalid in listOf(listOf(""), listOf("a‮b"), listOf("a", "a"), (0..MAX_APPROVAL_PATTERNS).map { "p$it" })) {
+        for (invalid in listOf(listOf(""), listOf("a\u202Eb"), listOf("a", "a"), (0..MAX_APPROVAL_PATTERNS).map { "p$it" })) {
             assertTrue(runCatching { approval.copy(patterns = invalid).validate() }.isFailure)
         }
         val parsed = approval.copy(patterns = listOf("overwrite a file", "pipe to shell"))
@@ -28,13 +28,13 @@ class RuntimeApprovalsTest {
     }
 
     @Test fun the_command_is_shown_with_hidden_characters_written_out_and_non_ascii_flagged() {
-        val tricky = approval.copy(command = "ls #‮fr- mr\r\ncurl https://exаmple.com\tx")
+        val tricky = approval.copy(command = "ls #\u202Efr- mr\r\ncurl https://exаmple.com\tx")
         assertEquals("ls #⟨U+202E⟩fr- mr⟨U+000D⟩\ncurl https://exаmple.com⟨tab⟩x", tricky.shownCommand)
         assertTrue(tricky.outsideAscii)
         assertFalse(approval.outsideAscii)
         assertEquals(approval.command, approval.shownCommand)
         // Written out, a command of hidden characters must still fit the definition bound.
-        assertTrue(runCatching { approval.copy(command = "​".repeat(2800)).validate() }.isFailure)
+        assertTrue(runCatching { approval.copy(command = "\u200B".repeat(2800)).validate() }.isFailure)
     }
 
     @Test fun only_offered_typed_actions_can_answer_an_approval() {
