@@ -43,4 +43,24 @@ class LinksTest {
         assertFalse(WebLinks.opensFromPage("http://ARTEFACT.INVALID:8080/relative-link", document, mainFrame = true, hasGesture = true, redirect = false))
         assertFalse(WebLinks.opensFromPage("https://artefact.invalid./relative-link", document, mainFrame = true, hasGesture = true, redirect = false))
     }
+
+    @Test
+    fun a_page_link_is_confirmed_by_its_ascii_host_and_whole_address() {
+        assertEquals(
+            LinkDestination("xn--bcher-kva.de", "https://xn--bcher-kva.de/%C3%A9t%C3%A9?q=%C3%A9#x"),
+            WebLinks.destination("https://bücher.de/été?q=é#x"),
+        )
+        // A Cyrillic "а" cannot pass for the Latin one.
+        assertEquals("xn--pple-43d.com", WebLinks.destination("https://аpple.com/")?.host)
+        assertEquals(
+            LinkDestination("example.com", "http://example.com:8080/a?d=secret"),
+            WebLinks.destination("HTTP://Example.COM:8080/a?d=secret"),
+        )
+        assertEquals("[::1]", WebLinks.destination("http://[::1]:8080/")?.host)
+        // An invisible direction mark shows as its bytes, not as nothing.
+        assertEquals("https://example.com/a%E2%80%AEb", WebLinks.destination("https://example.com/a‮b")?.address)
+        listOf("javascript:alert(1)", "intent://open", "https://user:pw@example.com/").forEach {
+            assertEquals(it, null, WebLinks.destination(it))
+        }
+    }
 }

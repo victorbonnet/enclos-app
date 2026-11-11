@@ -22,13 +22,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +48,7 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import io.github.victorbonnet.enclos.ArtefactDocument
 import io.github.victorbonnet.enclos.Attachment
+import io.github.victorbonnet.enclos.LinkDestination
 import io.github.victorbonnet.enclos.WebLinks
 import io.github.victorbonnet.enclos.openWebLink
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +63,9 @@ fun ArtefactViewer(a: Attachment, file: File, close: () -> Unit) {
     val context = LocalContext.current
     val p = palette
     var shareMissing by remember(file) { mutableStateOf(false) }
+    // A link the page asked to open, waiting for the person to confirm it.
+    var leaving by remember(file) { mutableStateOf<LinkDestination?>(null) }
+    var sharing by remember(file) { mutableStateOf(false) }
     val loaded by produceState<Result<ArtefactDocument>?>(null, file) {
         value = withContext(Dispatchers.IO) { runCatching { ArtefactDocument.read(file) } }
     }
@@ -81,7 +88,7 @@ fun ArtefactViewer(a: Attachment, file: File, close: () -> Unit) {
                 Text(a.name, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 Box(
                     Modifier.height(44.dp).clickable(onClickLabel = "Share the page", role = Role.Button) {
-                        if (file.isFile) share(context, a, file) else shareMissing = true
+                        if (file.isFile) sharing = true else shareMissing = true
                     }
                         .padding(horizontal = 14.dp),
                     contentAlignment = Alignment.Center,
@@ -98,9 +105,46 @@ fun ArtefactViewer(a: Attachment, file: File, close: () -> Unit) {
                         else -> "This page cannot be read. Close it and try fetching it again."
                     },
                 )
-                else -> StaticPage(result.getOrThrow())
+                else -> StaticPage(result.getOrThrow()) { leaving = it }
             }
         }
+        leaving?.let { destination ->
+            AlertDialog(
+                onDismissRequest = { leaving = null },
+                title = { Text("Open this website?") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(destination.host, style = Type.name, color = p.text)
+                        Text(destination.address, style = Type.code, color = p.textMuted)
+                        Text(
+                            "The link leaves this page for the browser. All of the address above goes to that website.",
+                            style = Type.small, color = p.textMuted,
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { leaving = null; openWebLink(context, destination.address) }) { Text("Open") }
+                },
+                dismissButton = { TextButton(onClick = { leaving = null }) { Text("Cancel") } },
+            )
+        }
+        if (sharing) AlertDialog(
+            onDismissRequest = { sharing = false },
+            title = { Text("Share the page's file?") },
+            text = {
+                Text(
+                    "The app you choose shows it its own way. It may run scripts the page holds and load what it links to, which this viewer does not.",
+                    style = Type.small, color = p.textMuted,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    sharing = false
+                    if (file.isFile) share(context, a, file) else shareMissing = true
+                }) { Text("Share") }
+            },
+            dismissButton = { TextButton(onClick = { sharing = false }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -117,8 +161,9 @@ private fun PageNotice(text: String) {
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun StaticPage(document: ArtefactDocument) {
+private fun StaticPage(document: ArtefactDocument, confirm: (LinkDestination) -> Unit) {
     val context = LocalContext.current
+    val ask by rememberUpdatedState(confirm)
     var opening by remember(document) { mutableStateOf(true) }
     var failed by remember(document) { mutableStateOf(false) }
     val created = remember(document, context) { runCatching {
@@ -158,8 +203,9 @@ private fun StaticPage(document: ArtefactDocument) {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     val target = request.url.toString()
                     if (document.isAnchor(target)) return false
+                    // Nothing leaves from here: the person sees where it goes and confirms first.
                     if (WebLinks.opensFromPage(target, document.url, request.isForMainFrame, request.hasGesture(), request.isRedirect)) {
-                        openWebLink(context, target)
+                        WebLinks.destination(target)?.let(ask)
                     }
                     return true
                 }
