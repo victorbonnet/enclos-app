@@ -5,7 +5,7 @@ package io.github.victorbonnet.enclos
  *
  * A control character, a bidirectional override or isolate, or a
  * zero-width character changes how the text around it reads without
- * showing itself: "‮niam" reads as "main", and a command can hide its
+ * showing itself: "\u202Eniam" reads as "main", and a command can hide its
  * tail. Names, labels and file names refuse or drop them; a command, which
  * must be shown exactly as it runs, shows them instead ([revealed]). The
  * same rule as enclos-protocol's `visible` module.
