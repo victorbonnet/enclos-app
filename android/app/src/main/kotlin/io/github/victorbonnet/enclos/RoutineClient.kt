@@ -71,7 +71,8 @@ class RoutineClient(
     fun act(address: String, routine: RoutineSummary, action: String, enabled: Boolean? = null): String? {
         if (!canChange(address) || !current(address, routine)) return null
         if (action == "run" && "run" !in lists[address]?.options?.features.orEmpty()) return null
-        if (action == "run" && !routine.enabled && !(routine.state == "paused" && "run_paused" in lists[address]?.options?.features.orEmpty())) return null
+        // The runtime runs only an enabled routine: a paused one is resumed first.
+        if (action == "run" && !routine.enabled) return null
         if (action !in setOf("run", "delete", "set_enabled")) return null
         val fields = mutableListOf<Pair<String, Any?>>("routine" to routine.id, "revision" to routine.revision)
         if (action == "set_enabled") fields += "enabled" to (enabled ?: return null)

@@ -399,7 +399,7 @@ fun InboxScreen(
                                             all = if (more) toggle else null,
                                             expanded = expanded,
                                             about = agent?.let { { openAgent(it) } },
-                                            routines = agent?.takeIf { "routines" in it.capabilities }?.let { { openRoutines(it) } },
+                                            routines = agent?.takeIf { it.offersRoutines }?.let { { openRoutines(it) } },
                                         ),
                                         onOpen = entry.home?.let { home -> { open(home.id) } } ?: if (more) toggle else null,
                                     )

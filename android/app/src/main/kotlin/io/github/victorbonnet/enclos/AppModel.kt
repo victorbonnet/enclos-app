@@ -22,7 +22,9 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 /** An agent of a host, as its bridge lists it: `name` is `<sandbox>/<agent>`. */
-data class Agent(val host: String, val name: String, val runtime: String, val capabilities: List<String>, val avatarRevision: Long = 0, val avatarVersion: String? = null, val canEditAvatar: Boolean = false, val supportsAvatars: Boolean = false) {
+data class Agent(val host: String, val name: String, val runtime: String, val capabilities: List<String>, val avatarRevision: Long = 0, val avatarVersion: String? = null, val canEditAvatar: Boolean = false, val supportsAvatars: Boolean = false, val canManageRoutines: Boolean = false) {
+    /** Routines are offered when the runtime has them and the host lets this person manage them: its own person only. */
+    val offersRoutines: Boolean get() = canManageRoutines && "routines" in capabilities
     val sandbox: String get() = name.substringBefore('/')
     val agent: String get() = name.substringAfter('/')
     /** `host/sandbox/agent`, as the app writes an agent's address. */
@@ -177,7 +179,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val routines = RoutineClient(
         send = { host, command -> connections[host]?.send(command) == true },
         connected = ::connected,
-        supported = { address -> agents.any { it.address == address && "routines" in it.capabilities } },
+        supported = { address -> agents.any { it.address == address && it.offersRoutines } },
         later = { wait, action -> main.postDelayed({ action() }, wait) },
     )
     val agentImages = AgentImages(application,
@@ -678,6 +680,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                             avatarVersion = a.optJSONObject("avatar")?.let { v -> v.optString("version").takeUnless { v.isNull("version") || it.isBlank() } },
                             canEditAvatar = a.optBoolean("can_edit_avatar"),
                             supportsAvatars = a.has("can_edit_avatar"),
+                            // Absent from an older host: no routine controls.
+                            canManageRoutines = a.optBoolean("can_manage_routines"),
                         ),
                     )
                 }

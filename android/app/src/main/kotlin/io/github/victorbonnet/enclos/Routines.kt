@@ -77,7 +77,7 @@ fun RoutinesScreen(model: AppModel, address: String, back: () -> Unit) {
                     RoutineStatus(routine)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         ActionButton(if (routine.editable) "Edit" else "Details", enabled = canChange, onClick = { selected = routine.id; client.get(address, routine.id) })
-                        if (list.options?.features?.contains("run") == true) ActionButton("Run now", enabled = canChange && routine.editable && (routine.enabled || (routine.state == "paused" && "run_paused" in list.options.features)), onClick = { client.act(address, routine, "run") })
+                        if (list.options?.features?.contains("run") == true) ActionButton("Run now", enabled = canChange && routine.editable && routine.enabled, onClick = { client.act(address, routine, "run") })
                         ActionButton("Delete", enabled = canChange && routine.editable, onClick = { deleting = routine })
                     }
                 }

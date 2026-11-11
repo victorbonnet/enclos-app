@@ -295,7 +295,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                     Text("$others other ${if (others == 1) "conversation" else "conversations"}, in the conversations view.", style = Type.small, color = p.textMuted)
                 }
             }
-            if ("routines" in agent.capabilities) {
+            if (agent.offersRoutines) {
                 Section("Routines") {
                     SettingRow(Modifier.clickable(onClickLabel = "Manage routines", onClick = openRoutines)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
