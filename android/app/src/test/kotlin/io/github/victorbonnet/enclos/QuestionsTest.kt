@@ -65,6 +65,24 @@ class QuestionsTest {
         }
     }
 
+    /** Written as code points, so the source holds no invisible character. */
+    private fun points(vararg c: Int) = buildString { c.forEach { appendCodePoint(it) } }
+
+    @Test fun persian_spelling_and_joined_emoji_are_text_a_joiner_beside_ascii_is_not() {
+        // "mi-khaham" with its zero-width non-joiner, and the shrug, man, emoji-style sequence.
+        val persian = points(0x0645, 0x06CC, 0x200C, 0x062E, 0x0648, 0x0627, 0x0647, 0x0645)
+        val shrug = points(0x1F937, 0x200D, 0x2642, 0xFE0F)
+        for (text in listOf(persian, shrug, "Fine $shrug\nthanks")) {
+            question.copy(text = "$text?").validate()
+            question.validateAnswer(QuestionAnswer.Text(text))
+        }
+        question.copy(choices = listOf(persian, shrug)).validate()
+        for (text in listOf("ok" + points(0x200D) + "ok", points(0x200C) + persian, persian + points(0x200C), "A" + points(0xFE0F))) {
+            assertTrue(text, runCatching { question.validateAnswer(QuestionAnswer.Text(text)) }.isFailure)
+            assertTrue(text, runCatching { question.copy(choices = listOf(text)).validate() }.isFailure)
+        }
+    }
+
     @Test fun the_cache_drops_questions_of_conversations_it_no_longer_keeps_and_unreadable_rows() {
         val kept = Conversation("mac", "lab/main", "c-1")
         // org.json is Android's: the rows' text stands for the parsed question here.
