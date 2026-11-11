@@ -26,7 +26,10 @@ if [ "$found" != "$ndk" ]; then
     echo "  install it: sdkmanager \"ndk;$ndk\"" >&2
     exit 1
 fi
-export ANDROID_NDK_HOME
+# cargo-ndk takes ANDROID_NDK_HOME first; ANDROID_NDK_ROOT (set to another
+# NDK on GitHub's runners) is set to the same, so no other NDK is in sight.
+ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+export ANDROID_NDK_HOME ANDROID_NDK_ROOT
 
 # The app's minSdk (android/app/build.gradle.kts)
 cargo ndk --platform 28 -t arm64-v8a -t x86_64 -o "$main/jniLibs" \
