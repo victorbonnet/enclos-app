@@ -32,6 +32,9 @@ data class PolicyRequest(val host: String, val id: String, val sandbox: String, 
     val retargeted get() = scopeLeadsElsewhere(kind, target, scope)
     val title get() = when (kind) { "network" -> "Connect to $shown"; "write" -> "Write to $shown"; "read" -> "Read $shown"; else -> Visible.stripped(action) }
     companion object {
+        /** The request [m] describes, or null when a field it needs is missing or malformed: such a request is dropped, never shown. */
+        fun parse(host: String, m: JSONObject): PolicyRequest? = runCatching { from(host, m) }.getOrNull()
+
         fun from(host: String, m: JSONObject): PolicyRequest {
             val a = m.getJSONObject("access")
             return PolicyRequest(host, m.getString("request"), m.getString("sandbox"), m.optString("agent"),

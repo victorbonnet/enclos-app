@@ -572,7 +572,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun received(host: Host, m: JSONObject) {
         when (m.optString("type")) {
             "approval" -> {
-                val request = PolicyRequest.from(host.name, m)
+                val request = PolicyRequest.parse(host.name, m) ?: run {
+                    android.util.Log.w("enclos", "a malformed sandbox policy request was dropped")
+                    return
+                }
                 approvals[request.key] = request
                 decidingApprovals.remove(request.key)
                 approvalErrors.remove(request.key)
