@@ -93,9 +93,10 @@ class QuestionClient(
     fun failure(host: String, of: String, reason: String, code: String = ""): Boolean {
         val request = requests[of]?.takeIf { it.question.host == host } ?: return false
         finish(request)
-        if (code == "agent_unavailable") {
-            // The bridge can time out before our timer, after native resolution
-            // has already happened. Its error is not proof that retrying is safe.
+        if (code !in REFUSED_BEFORE_SENDING) {
+            // `unconfirmed`: the bridge can time out before our timer, after native
+            // resolution has already happened. Its error is not proof that retrying is
+            // safe; nor is a code this app does not know.
             uncertain[request.question.key] = true
             errors[request.question.key] = reason.ifBlank { "The agent has not confirmed the outcome." } +
                 " The answer was not resent. Reconnect to check the outcome."
@@ -134,6 +135,14 @@ class QuestionClient(
         ended(host)
         questions.keys.filter { it.host == host }.forEach { key -> questions.remove(key); errors.remove(key); uncertain.remove(key); receipts.remove(key) }
         fresh.remove(host)
+    }
+
+    private companion object {
+        /**
+         * Codes with which the bridge refuses an answer before writing it to the agent
+         * (enclos `docs/protocol.md`, Errors): nothing was sent, and answering again is safe.
+         */
+        val REFUSED_BEFORE_SENDING = setOf("agent_unavailable", "bad_message", "conflict", "not_found", "unsupported", "not_allowed")
     }
 
     private fun finish(request: QuestionRequest) {

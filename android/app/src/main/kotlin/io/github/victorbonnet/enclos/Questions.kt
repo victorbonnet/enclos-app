@@ -3,6 +3,19 @@ package io.github.victorbonnet.enclos
 import org.json.JSONArray
 import org.json.JSONObject
 
+/*
+ * The rules of enclos-protocol's `question` module, rule for rule (docs/spec.md,
+ * Questions, says why they are copied here rather than called through the core).
+ * The tests hold the two together with the same cases.
+ */
+
+private const val MAX_CHOICES = 12
+private const val MAX_QUESTION_BYTES = 24 * 1024
+private const val MAX_ANSWER_BYTES = 8 * 1024
+private const val MAX_QUESTION_INFO_BYTES = 48 * 1024
+private const val MAX_ID_BYTES = 128
+private const val MAX_AGENT_BYTES = 512
+
 /** Question ids are scoped by the host which authenticated their origin. */
 data class QuestionKey(val host: String, val id: String)
 
@@ -30,53 +43,110 @@ data class QuestionInfo(
 ) {
     val key: QuestionKey get() = QuestionKey(host, id)
 
+    /** `QuestionInfo::validate`: identity, definition, state and answer, and the encoded sizes. */
     fun validate() {
-        require(questionIdValid(id) && questionIdValid(conversation) && agent.isNotEmpty() && agent.toByteArray(Charsets.UTF_8).size <= 512 &&
-            agent.codePoints().noneMatch { Character.isISOControl(it) || it in 0xD800..0xDFFF }) { "Invalid question identity." }
+        require(idValid(id) && idValid(conversation) && agentValid(agent)) { "Invalid question identity." }
         require(revision >= 0) { "Invalid question revision." }
-        require(questionTextValid(text) && choices.size <= 12 && choices.all(::questionTextValid)) { "Invalid question or choices." }
-        require(!multiple || choices.isNotEmpty()) { "Multiple selection requires choices." }
-        val definition = "{\"id\":${jsonString(id)},\"text\":${jsonString(text)},\"choices\":[${choices.joinToString(",", transform = ::jsonString)}],\"multiple\":$multiple}"
-        require(definition.toByteArray(Charsets.UTF_8).size <= 24 * 1024) { "This question is too large." }
+        validateDefinition()
         when (state) {
-            QuestionState.Pending, QuestionState.Skipped, QuestionState.Expired, QuestionState.Cancelled -> require(answer == null)
-            QuestionState.Answered -> { require(answer != null && answer != QuestionAnswer.Skip); validateAnswer(answer) }
+            QuestionState.Answered -> {
+                require(answer != null && answer != QuestionAnswer.Skip) { "Question state and answer disagree." }
+                validateAnswer(answer)
+            }
+            else -> require(answer == null) { "Question state and answer disagree." }
         }
-        val metadata = definition.dropLast(1) + ",\"conversation\":${jsonString(conversation)},\"agent\":${jsonString(agent)},\"state\":${jsonString(state.wire)},\"revision\":$revision" +
+        val metadata = definitionJson().dropLast(1) +
+            ",\"conversation\":${jsonString(conversation)},\"agent\":${jsonString(agent)}" +
+            ",\"state\":${jsonString(state.wire)},\"revision\":$revision" +
             (answer?.let { ",\"answer\":${answerJsonText(it)}" } ?: "") + "}"
-        require(metadata.toByteArray(Charsets.UTF_8).size <= 48 * 1024) { "This question metadata is too large." }
+        require(metadata.utf8Size() <= MAX_QUESTION_INFO_BYTES) { "This question metadata is too large." }
     }
 
+    /** `QuestionDefinition::validate`: text on any lines, labels on one line each and distinct. */
+    private fun validateDefinition() {
+        require(textValid(text, lines = true)) { "Invalid question text." }
+        require(choices.size <= MAX_CHOICES) { "A question supports at most $MAX_CHOICES choices." }
+        require(!multiple || choices.isNotEmpty()) { "Multiple selection requires choices." }
+        require(choices.all { textValid(it, lines = false) }) { "Invalid choice label." }
+        require(choices.distinct().size == choices.size) { "Choice labels must be distinct." }
+        require(definitionJson().utf8Size() <= MAX_QUESTION_BYTES) { "This question is too large." }
+    }
+
+    /** `QuestionAnswer::validate` against this question. */
     fun validateAnswer(value: QuestionAnswer) {
         when (value) {
-            is QuestionAnswer.Choices -> require(value.indices.isNotEmpty() && (multiple || value.indices.size == 1) &&
-                value.indices.distinct().size == value.indices.size && value.indices.all { it in choices.indices }) { "Choose an available answer." }
-            is QuestionAnswer.Text -> require(questionTextValid(value.text)) { "Enter an answer without control characters." }
+            is QuestionAnswer.Choices -> require(
+                value.indices.isNotEmpty() && (multiple || value.indices.size == 1) &&
+                    value.indices.distinct().size == value.indices.size && value.indices.all { it in choices.indices },
+            ) { "Choose an available answer." }
+            is QuestionAnswer.Text -> require(textValid(value.text, lines = true)) {
+                "Enter an answer without tabs or hidden characters."
+            }
             QuestionAnswer.Skip -> Unit
         }
-        require(answerJsonText(value).toByteArray(Charsets.UTF_8).size <= 8 * 1024) { "This answer is too long." }
+        require(answerJsonText(value).utf8Size() <= MAX_ANSWER_BYTES) { "This answer is too long." }
     }
 
-    fun belongsTo(c: Conversation): Boolean = host == c.host && conversation == c.id &&
-        if (c.group) agent in c.members else agent == c.agent
+    fun belongsTo(c: Conversation): Boolean =
+        host == c.host && conversation == c.id && if (c.group) agent in c.members else agent == c.agent
 
-    fun json(): JSONObject = JSONObject().put("id", id).put("text", text).put("choices", JSONArray(choices))
-        .put("multiple", multiple).put("conversation", conversation).put("agent", agent).put("state", state.wire)
-        .put("revision", revision).apply { answer?.let { put("answer", it.json()) } }
+    fun json(): JSONObject = JSONObject()
+        .put("id", id).put("text", text).put("choices", JSONArray(choices)).put("multiple", multiple)
+        .put("conversation", conversation).put("agent", agent).put("state", state.wire).put("revision", revision)
+        .apply { answer?.let { put("answer", it.json()) } }
+
+    /** The definition as serde writes it, for its size. */
+    private fun definitionJson(): String =
+        "{\"id\":${jsonString(id)},\"text\":${jsonString(text)}," +
+            "\"choices\":[${choices.joinToString(",", transform = ::jsonString)}],\"multiple\":$multiple}"
 
     companion object {
         fun from(host: String, json: JSONObject): QuestionInfo {
             fun string(key: String): String = (json.get(key) as? String) ?: throw IllegalArgumentException("Invalid $key")
-            val choices = json.optJSONArray("choices")?.let { a -> (0 until a.length()).map { (a.get(it) as? String) ?: throw IllegalArgumentException("Invalid choice") } }.orEmpty()
-            require(!json.has("choices") || json.get("choices") is JSONArray)
-            val multiple = if (json.has("multiple")) json.get("multiple") as? Boolean ?: throw IllegalArgumentException("Invalid multiple") else false
-            val rawRevision = json.get("revision")
-            require(rawRevision is Int || rawRevision is Long)
-            val state = QuestionState.entries.firstOrNull { it.wire == string("state") } ?: throw IllegalArgumentException("Invalid state")
-            return QuestionInfo(host, string("id"), string("text"), choices, multiple, string("conversation"), string("agent"), state,
-                (rawRevision as Number).toLong(), if (json.has("answer") && !json.isNull("answer")) answerFrom(json.getJSONObject("answer")) else null).also { it.validate() }.normalized()
+            require(!json.has("choices") || json.get("choices") is JSONArray) { "Invalid choices" }
+            val choices = json.optJSONArray("choices")?.let { array ->
+                (0 until array.length()).map { (array.get(it) as? String) ?: throw IllegalArgumentException("Invalid choice") }
+            }.orEmpty()
+            val multiple = if (json.has("multiple")) {
+                json.get("multiple") as? Boolean ?: throw IllegalArgumentException("Invalid multiple")
+            } else {
+                false
+            }
+            val revision = json.get("revision")
+            require(revision is Int || revision is Long) { "Invalid revision" }
+            val state = QuestionState.entries.firstOrNull { it.wire == string("state") }
+                ?: throw IllegalArgumentException("Invalid state")
+            val answer = if (json.has("answer") && !json.isNull("answer")) answerFrom(json.getJSONObject("answer")) else null
+            val info = QuestionInfo(
+                host, string("id"), string("text"), choices, multiple, string("conversation"), string("agent"), state,
+                (revision as Number).toLong(), answer,
+            )
+            info.validate()
+            return info.normalized()
         }
     }
+}
+
+/**
+ * The cached questions to keep, from `(host, id, info)` rows: valid, and of a conversation
+ * still kept. The keys of the others, which the cache drops.
+ */
+fun keptQuestions(
+    rows: List<Triple<String, String, String>>,
+    conversations: List<Conversation>,
+    parse: (host: String, info: String) -> QuestionInfo? = { host, info ->
+        runCatching { QuestionInfo.from(host, JSONObject(info)) }.getOrNull()
+    },
+): Pair<List<QuestionInfo>, List<QuestionKey>> {
+    val known = conversations.mapTo(HashSet()) { it.host to it.id }
+    val kept = mutableListOf<QuestionInfo>()
+    val stale = mutableListOf<QuestionKey>()
+    for ((host, id, info) in rows) {
+        val question = parse(host, info)
+        if (question != null && question.id == id && (host to question.conversation) in known) kept += question
+        else stale += QuestionKey(host, id)
+    }
+    return kept to stale
 }
 
 /** Immutable definitions and terminal results cannot be replaced by delayed sync/cache work. */
@@ -94,9 +164,16 @@ data class QuestionSelection(val indices: Set<Int> = emptySet(), val other: Bool
         indices = if (!multiple) setOf(index) else if (index in indices && !other) indices - index else indices + index,
         other = false,
     )
+
     fun chooseOther(): QuestionSelection = copy(indices = emptySet(), other = true)
+
+    /** The answer to submit, or none while the draft is not one. Line breaks are sent as plain newlines. */
     fun answer(question: QuestionInfo): QuestionAnswer? {
-        val value = if (other || question.choices.isEmpty()) QuestionAnswer.Text(text) else QuestionAnswer.Choices(indices.sorted())
+        val value = if (other || question.choices.isEmpty()) {
+            QuestionAnswer.Text(text.replace("\r\n", "\n").replace('\r', '\n'))
+        } else {
+            QuestionAnswer.Choices(indices.sorted())
+        }
         return value.takeIf { runCatching { question.validateAnswer(it) }.isSuccess }
     }
 }
@@ -106,10 +183,18 @@ internal fun QuestionAnswer.normalized(): QuestionAnswer = if (this is QuestionA
 internal fun QuestionInfo.normalized(): QuestionInfo = copy(answer = answer?.normalized())
 
 private fun answerFrom(json: JSONObject): QuestionAnswer = when (json.getString("kind")) {
-    "choices" -> QuestionAnswer.Choices(json.getJSONArray("indices").let { a -> (0 until a.length()).map { i ->
-        val value = a.get(i); require(value is Int || value is Long)
-        val index = (value as Number).toLong(); require(index in 0..Int.MAX_VALUE.toLong()); index.toInt()
-    } })
+    "choices" -> {
+        val array = json.getJSONArray("indices")
+        QuestionAnswer.Choices(
+            (0 until array.length()).map { i ->
+                val value = array.get(i)
+                require(value is Int || value is Long) { "Invalid index" }
+                val index = (value as Number).toLong()
+                require(index in 0..Int.MAX_VALUE.toLong()) { "Invalid index" }
+                index.toInt()
+            },
+        )
+    }
     "text" -> QuestionAnswer.Text((json.get("text") as? String) ?: throw IllegalArgumentException("Invalid text"))
     "skip" -> QuestionAnswer.Skip
     else -> throw IllegalArgumentException("Invalid answer")
@@ -121,15 +206,34 @@ private fun answerJsonText(answer: QuestionAnswer): String = when (answer) {
     QuestionAnswer.Skip -> "{\"kind\":\"skip\"}"
 }
 
-private fun questionIdValid(value: String): Boolean = value.isNotEmpty() && value.toByteArray(Charsets.UTF_8).size <= 128 &&
-    value.codePoints().noneMatch { Character.isISOControl(it) || it in 0xD800..0xDFFF }
+private fun String.utf8Size(): Int = toByteArray(Charsets.UTF_8).size
 
-private fun questionTextValid(value: String): Boolean = value.isNotBlank() && value.codePoints().noneMatch {
-    (Character.isISOControl(it) && it != 10 && it != 13 && it != 9) || it in 0xD800..0xDFFF
-}
+/** A lone surrogate is no character: Rust's strings cannot hold one. */
+private fun hasSurrogate(value: String): Boolean = value.codePoints().anyMatch { it in 0xD800..0xDFFF }
 
+/** `ids::check`: nonempty, at most 128 bytes, no control character. */
+private fun idValid(value: String): Boolean = value.isNotEmpty() && value.utf8Size() <= MAX_ID_BYTES &&
+    value.codePoints().noneMatch(Character::isISOControl) && !hasSurrogate(value)
+
+private fun agentValid(value: String): Boolean = value.isNotEmpty() && value.utf8Size() <= MAX_AGENT_BYTES &&
+    value.codePoints().noneMatch(Character::isISOControl) && !hasSurrogate(value)
+
+/** `question::text`: not blank, and no hidden character ([Visible]), newlines aside when [lines]. */
+private fun textValid(value: String, lines: Boolean): Boolean =
+    value.isNotBlank() && !Visible.hasHidden(value, lines) && !hasSurrogate(value)
+
+/** serde_json's escaping, for sizes: hidden characters are refused before, newlines aside. */
 private fun jsonString(value: String): String = buildString {
     append('"')
-    value.forEach { c -> when (c) { '"' -> append("\\\""); '\\' -> append("\\\\"); '\n' -> append("\\n"); '\r' -> append("\\r"); '\t' -> append("\\t"); else -> append(c) } }
+    value.forEach { c ->
+        when (c) {
+            '"' -> append("\\\"")
+            '\\' -> append("\\\\")
+            '\n' -> append("\\n")
+            '\r' -> append("\\r")
+            '\t' -> append("\\t")
+            else -> append(c)
+        }
+    }
     append('"')
 }

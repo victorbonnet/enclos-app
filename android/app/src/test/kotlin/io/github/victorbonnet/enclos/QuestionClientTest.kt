@@ -127,7 +127,7 @@ class QuestionClientTest {
     @Test fun bridge_timeout_before_local_timer_requires_fresh_reconnect_snapshot_before_retry() {
         val f = Fixture(); f.ready(question)
         val request = f.client.submit(question, QuestionAnswer.Skip)!!
-        assertTrue(f.client.failure("mac", request, "The agent did not confirm the answer.", "agent_unavailable"))
+        assertTrue(f.client.failure("mac", request, "The agent did not confirm the answer.", "unconfirmed"))
         assertFalse(question.key in f.client.pending)
         assertTrue(f.client.uncertain[question.key] == true)
         assertNull(f.client.submit(question, QuestionAnswer.Skip))
@@ -152,13 +152,24 @@ class QuestionClientTest {
     }
 
     @Test fun definitive_rejections_finish_without_an_ambiguous_outcome_lock() {
-        for (code in listOf("bad_message", "conflict", "unsupported")) {
+        // `agent_unavailable` included: the bridge refused before writing to the agent.
+        for (code in listOf("bad_message", "conflict", "unsupported", "not_found", "agent_unavailable")) {
             val f = Fixture(); f.ready(question)
             val request = f.client.submit(question, QuestionAnswer.Skip)!!
             assertTrue(f.client.failure("mac", request, "Answer rejected.", code))
             assertFalse(question.key in f.client.pending)
             assertFalse(question.key in f.client.uncertain)
             assertNotNull(f.client.submit(question, QuestionAnswer.Skip))
+        }
+    }
+
+    @Test fun an_unconfirmed_or_unknown_code_locks_until_a_fresh_sync() {
+        for (code in listOf("unconfirmed", "a_code_from_a_later_bridge", "")) {
+            val f = Fixture(); f.ready(question)
+            val request = f.client.submit(question, QuestionAnswer.Skip)!!
+            assertTrue(f.client.failure("mac", request, "Not confirmed.", code))
+            assertTrue(code, f.client.uncertain[question.key] == true)
+            assertNull(f.client.submit(question, QuestionAnswer.Skip))
         }
     }
 

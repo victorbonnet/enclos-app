@@ -112,10 +112,13 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         val kept = db.rawQuery("SELECT host, MAX(seq) FROM messages GROUP BY host", null).use { c ->
             generateSequence { if (c.moveToNext()) c else null }.associate { it.getString(0) to it.getLong(1) }
         }
-        val questions = db.rawQuery("SELECT host, info FROM questions", null).use { c ->
-            generateSequence { if (c.moveToNext()) c else null }.mapNotNull {
-                runCatching { QuestionInfo.from(it.getString(0), JSONObject(it.getString(1))) }.getOrNull()
-            }.toList()
+        val rows = db.rawQuery("SELECT host, id, info FROM questions", null).use { c ->
+            generateSequence { if (c.moveToNext()) c else null }.map { Triple(it.getString(0), it.getString(1), it.getString(2)) }.toList()
+        }
+        val (questions, stale) = keptQuestions(rows, conversations)
+        if (stale.isNotEmpty()) {
+            val write = writableDatabase
+            stale.forEach { write.delete("questions", "host = ? AND id = ?", arrayOf(it.host, it.id)) }
         }
         return Saved(agents, conversations, lines, kept, questions)
     }

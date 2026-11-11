@@ -14,6 +14,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.ui.*
 
+/** What every question card says first, in the app's words. */
+const val QUESTION_FRAME = "The agent asks · answering changes no access"
+
 /** Typed native questions only; readable history stays the fallback for older hosts. */
 @Composable
 fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
@@ -30,6 +33,9 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
     val indices = if (terminal) (confirmed as? QuestionAnswer.Choices)?.indices.orEmpty().toSet() else selection.indices
     val custom = if (terminal) confirmed is QuestionAnswer.Text else other
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // The agent wrote all that follows; this line is the app's, so an agent's
+        // question cannot pass for a sandbox access request.
+        Text(QUESTION_FRAME, style = Type.small, color = p.textMuted)
         SelectionContainer { MarkdownText(question.text, p.text) }
         if (question.choices.isNotEmpty()) {
             Text(if (question.multiple) "Choose one or more" else "Choose one", style = Type.small, color = p.textMuted)
@@ -67,6 +73,9 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
             }
         } else {
             val answer = selection.answer(question)
+            if (answer == null && (custom || question.choices.isEmpty()) && text.isNotBlank()) {
+                Text("Remove tabs or hidden characters to submit.", style = Type.small, color = p.textMuted)
+            }
             PrimaryButton("Submit", enabled = enabled && answer != null) { answer?.let { client.submit(question, it) } }
             ActionButton("Skip", enabled = enabled) { client.submit(question, QuestionAnswer.Skip) }
             unavailable?.let { Text(it, style = Type.small, color = p.textMuted) }

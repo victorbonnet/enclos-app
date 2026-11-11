@@ -46,8 +46,39 @@ class QuestionsTest {
             QuestionAnswer.Choices(listOf(0, 0)), QuestionAnswer.Text(" \n\t"), QuestionAnswer.Text("\u0000skipped"),
             QuestionAnswer.Text("answer\u001b[2J"), QuestionAnswer.Text("x".repeat(8192)), QuestionAnswer.Text("\uD800"),
         )) assertTrue(runCatching { question.validateAnswer(answer) }.isFailure)
-        question.validateAnswer(QuestionAnswer.Text("Line one\r\nLine two\twith detail"))
+        question.validateAnswer(QuestionAnswer.Text("Line one\nLine two with detail"))
         question.validateAnswer(QuestionAnswer.Skip)
+    }
+
+    /** The cases of enclos-protocol's `hidden_characters_and_duplicate_labels_are_refused`, with its verdicts. */
+    @Test fun hidden_characters_and_duplicate_labels_are_refused_as_the_protocol_refuses_them() {
+        for (choices in listOf(
+            listOf("Deny‮wolla", "Allow"), listOf("Allow​", "Allow"), listOf("Allow", "Allow"),
+            listOf("Two\nlines"), listOf("Tab\there"),
+        )) assertTrue(choices.toString(), runCatching { question.copy(choices = choices).validate() }.isFailure)
+        for (text in listOf("Which⁦?", "Which\r\n?", "Which\t?", "﻿Which?")) {
+            assertTrue(text, runCatching { question.copy(text = text).validate() }.isFailure)
+        }
+        question.copy(text = "Which one?\nPick carefully.").validate()
+        for (text in listOf("ok‍", "a\tb", "a\r\nb", "­")) {
+            assertTrue(text, runCatching { question.validateAnswer(QuestionAnswer.Text(text)) }.isFailure)
+        }
+    }
+
+    @Test fun the_cache_drops_questions_of_conversations_it_no_longer_keeps_and_unreadable_rows() {
+        val kept = Conversation("mac", "lab/main", "c-1")
+        // org.json is Android's: the rows' text stands for the parsed question here.
+        val parsed = mapOf("one" to question, "gone" to question.copy(id = "q-2", conversation = "c-gone"), "pi" to question.copy(host = "pi"))
+        val rows = listOf(Triple("mac", "q-1", "one"), Triple("mac", "q-2", "gone"), Triple("pi", "q-1", "pi"), Triple("mac", "q-3", "{not json"))
+        val (questions, stale) = keptQuestions(rows, listOf(kept)) { _, info -> parsed[info] }
+        assertEquals(listOf(question), questions)
+        assertEquals(listOf(QuestionKey("mac", "q-2"), QuestionKey("pi", "q-1"), QuestionKey("mac", "q-3")), stale)
+    }
+
+    @Test fun a_pasted_line_break_is_sent_as_a_newline_and_a_tab_is_not_sent() {
+        val textOnly = question.copy(choices = emptyList())
+        assertEquals(QuestionAnswer.Text("one\ntwo\nthree"), QuestionSelection(text = "one\r\ntwo\rthree").answer(textOnly))
+        assertNull(QuestionSelection(text = "one\ttwo").answer(textOnly))
     }
 
     @Test fun newer_terminal_metadata_wins_over_old_cache_and_can_never_reopen_or_change_definition() {
