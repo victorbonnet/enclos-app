@@ -65,7 +65,7 @@ class RuntimeApprovalsTest {
     }
 
     @Test fun a_native_scope_description_is_shown_with_its_hidden_characters_written_out() {
-        val scopes = RuntimeApprovalScopes("Always remembers ‮exact argv​.", "Use native request native-7.")
+        val scopes = RuntimeApprovalScopes("Always remembers \u202Eexact argv\u200B.", "Use native request native-7.")
         scopes.validate()
         assertEquals("Always remembers ⟨U+202E⟩exact argv⟨U+200B⟩.", scopes.shownDescription)
         assertEquals("Plain text.", RuntimeApprovalScopes("Plain text.", "Use native request.").shownDescription)
