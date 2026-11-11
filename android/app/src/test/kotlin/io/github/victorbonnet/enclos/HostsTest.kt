@@ -41,12 +41,14 @@ class HostsTest {
 
     @Test
     fun hosts_written_by_earlier_versions_still_read() {
-        // As android.util.Base64 with NO_WRAP wrote bytes: standard, padded, one line.
+        // As android.util.Base64 with NO_WRAP wrote bytes: standard alphabet
+        // (`+` and `/`, not `-` and `_`), padded, one line.
+        val old = mac.copy(bridgeKey = byteArrayOf(0xfb.toByte(), 0xff.toByte()))
         val earlier = JSONArray().put(
             JSONObject()
                 .put("name", "mac")
                 .put("url", "https://mac.tail1.ts.net")
-                .put("bridgeKey", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+                .put("bridgeKey", "+/8=")
                 .put("deviceId", "dev-1")
                 .put("noiseKey", "AQID")
                 .put("keyAlias", "enclos-device-mac-1")
@@ -54,7 +56,7 @@ class HostsTest {
         ).toString()
         val (hosts, migrated) = decodeHosts(earlier) { error("nothing to wrap") }
         assertFalse(migrated)
-        assertSameHost(mac, hosts.single())
+        assertSameHost(old, hosts.single())
         assertEquals(earlier, encodeHosts(hosts))
     }
 
