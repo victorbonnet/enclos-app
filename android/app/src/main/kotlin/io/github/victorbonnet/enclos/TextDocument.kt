@@ -57,4 +57,11 @@ internal object TextDocument {
         }
         return out
     }
+
+    /**
+     * Whether block [index] of [blocks] goes on with the line the block before
+     * it was cutting ([blocks] cut a line longer than a block): the viewer
+     * marks it, so a long line does not read as if it had line breaks.
+     */
+    fun continues(blocks: List<String>, index: Int): Boolean = index > 0 && !blocks[index - 1].endsWith('\n')
 }

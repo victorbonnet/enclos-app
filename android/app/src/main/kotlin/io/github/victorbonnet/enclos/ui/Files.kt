@@ -65,18 +65,22 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/** A file opened from a message: in the image viewer, or else by its type. */
+private data class Opened(val attachment: Attachment, val file: File, val asImage: Boolean)
+
 /**
  * A message's files: an image drawn in the bubble, which opens full screen
- * with Share; HTML opens a page, other files open a document viewer.
- * Each is fetched from the bridge when it is first shown.
+ * with Share; HTML opens a page, other files open a document viewer, as
+ * does an image the phone cannot decode. Each is fetched from the bridge
+ * when it is first shown.
  */
 @Composable
 fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: (Attachment) -> Unit) {
-    var opened by remember { mutableStateOf<Pair<Attachment, File>?>(null) }
-    opened?.let { (a, file) ->
+    var opened by remember { mutableStateOf<Opened?>(null) }
+    opened?.let { (a, file, asImage) ->
         when {
             a.artefact -> ArtefactViewer(a, file) { opened = null }
-            a.image -> Viewer(a, file) { opened = null }
+            asImage -> Viewer(a, file) { opened = null }
             else -> FileViewer(a, file) { opened = null }
         }
     }
@@ -90,33 +94,48 @@ fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: 
                 if (state == null || gone) fetch(a)
             }
             if (a.image) {
-                ImageFile(a, state, { fetch(a) }) { opened = a to it }
+                ImageFile(a, state, { fetch(a) }, openFile = { opened = Opened(a, it, asImage = false) }) { opened = Opened(a, it, asImage = true) }
             } else {
-                OtherFile(a, state, { fetch(a) }) { opened = a to it }
+                OtherFile(a, state, { fetch(a) }) { opened = Opened(a, it, asImage = false) }
             }
         }
     }
 }
 
+/** An image file as the bubble found it: drawn, gone from the cache, or not something this phone decodes. */
+private sealed interface Decoded {
+    data class Drawn(val bitmap: Bitmap) : Decoded
+    data object Missing : Decoded
+    data object Undecodable : Decoded
+}
+
 @Composable
-private fun ImageFile(a: Attachment, state: FileState?, retry: () -> Unit, open: (File) -> Unit) {
-    val p = palette
+private fun ImageFile(a: Attachment, state: FileState?, retry: () -> Unit, openFile: (File) -> Unit, open: (File) -> Unit) {
     val shape = Shapes.control
     when (state) {
         is FileState.Ready -> {
-            val bitmap by produceState<Bitmap?>(null, state.file) { value = decode(state.file, 1080) }
-            val image = bitmap
-            if (image == null) {
+            val decoded by produceState<Decoded?>(null, state.file) {
+                value = withContext(Dispatchers.IO) {
+                    if (!state.file.isFile) Decoded.Missing
+                    else runCatching { decode(state.file, 1080) }.getOrNull()?.let { Decoded.Drawn(it) } ?: Decoded.Undecodable
+                }
+            }
+            when (val d = decoded) {
                 // Decoding, or the file was cleared: a tap fetches it again.
-                Placeholder("Opening the image", retry)
-            } else {
-                Image(
-                    image.asImageBitmap(),
-                    contentDescription = a.shownName,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth().aspectRatio(image.width.toFloat() / image.height.coerceAtLeast(1))
-                        .clip(shape).clickable(onClickLabel = "Open the image", role = Role.Image) { open(state.file) },
-                )
+                null, Decoded.Missing -> Placeholder("Opening the image", retry)
+                // A corrupt file, or a format this Android does not decode: its line opens the
+                // document viewer, with its notice and Share.
+                Decoded.Undecodable -> OtherFile(a, state, retry, openFile)
+                is Decoded.Drawn -> {
+                    val image = d.bitmap
+                    Image(
+                        image.asImageBitmap(),
+                        contentDescription = a.shownName,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxWidth().aspectRatio(image.width.toFloat() / image.height.coerceAtLeast(1))
+                            .clip(shape).clickable(onClickLabel = "Open the image", role = Role.Image) { open(state.file) },
+                    )
+                }
             }
         }
         is FileState.Failed -> Placeholder("The image did not come: ${state.why}. Tap to try again.", retry)

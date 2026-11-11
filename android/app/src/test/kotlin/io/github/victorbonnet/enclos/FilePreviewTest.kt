@@ -1,5 +1,6 @@
 package io.github.victorbonnet.enclos
 
+import android.content.Intent
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.charset.CharacterCodingException
@@ -81,6 +82,54 @@ class FilePreviewTest {
         assertTrue(TextDocument.blocks(lines).dropLast(1).all { it.endsWith("\n") })
         assertEquals(listOf("ab\n", "cd"), TextDocument.blocks("ab\ncd", max = 4))
         assertEquals(listOf("abcd", "ef"), TextDocument.blocks("abcdef", max = 4))
+    }
+
+    @Test fun only_images_the_platform_decodes_are_drawn_in_the_bubble() {
+        listOf("image/png", "image/jpeg", "image/gif", "image/webp", "image/heic", "image/heif", "image/bmp", "IMAGE/PNG; q=1").forEach {
+            assertTrue(it, Attachment("id", it, "a", 1).image)
+        }
+        // Drawn as a file line instead, which opens the document viewer and its Share.
+        listOf("image/svg+xml", "image/tiff", "image/avif", "image/x-icon", "image/", "application/pdf").forEach {
+            assertFalse(it, Attachment("id", it, "a", 1).image)
+        }
+    }
+
+    @Test fun a_long_cached_name_keeps_its_extension() {
+        assertEquals("report.pdf", cachedFileName("report.pdf"))
+        assertEquals("_x_.pdf", cachedFileName("..\u00E9x\u202E.pdf"))
+        assertEquals("file", cachedFileName("..."))
+        val long = cachedFileName("a".repeat(120) + ".pdf")
+        assertEquals(80, long.length)
+        assertTrue(long.endsWith(".pdf"))
+        assertEquals("application/pdf", viewIntentType("application/pdf", long))
+        // No extension, or one too long to be one: cut as before.
+        assertEquals("b".repeat(80), cachedFileName("b".repeat(120)))
+        assertEquals(80, cachedFileName("c".repeat(60) + "." + "d".repeat(60)).length)
+    }
+
+    @Test fun a_handoff_names_the_action_and_type_and_grants_reading_only() {
+        val pdf = Attachment("id", "application/pdf", "report.pdf", 1)
+        val share = handoffOf(pdf, "report.pdf", sharing = true)!!
+        assertEquals(Intent.ACTION_SEND, share.action)
+        assertEquals("application/pdf", share.type)
+        val open = handoffOf(pdf, "report.pdf", sharing = false)!!
+        assertEquals(Intent.ACTION_VIEW, open.action)
+        assertEquals("application/pdf", open.type)
+        for (handoff in listOf(share, open)) {
+            assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, handoff.flags)
+            assertEquals(0, handoff.flags and (Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION))
+        }
+        // Not opened elsewhere: an unlisted type, or a listed one under another extension; Share still is.
+        assertNull(handoffOf(Attachment("id", "image/svg+xml", "chart.svg", 1), "chart.svg", sharing = false))
+        assertNull(handoffOf(pdf, "report.pdf.apk", sharing = false))
+        assertEquals("image/svg+xml", handoffOf(Attachment("id", "image/svg+xml", "chart.svg", 1), "chart.svg", sharing = true)?.type)
+        assertEquals("application/octet-stream", handoffOf(Attachment("id", "", "blob", 1), "blob", sharing = true)?.type)
+    }
+
+    @Test fun a_block_going_on_with_a_cut_line_is_marked() {
+        val blocks = TextDocument.blocks("abcdef\ngh", max = 4)
+        assertEquals(listOf("abcd", "ef\n", "gh"), blocks)
+        assertEquals(listOf(false, true, false), blocks.indices.map { TextDocument.continues(blocks, it) })
     }
 
     @Test fun text_preview_reads_only_up_to_its_limit() {

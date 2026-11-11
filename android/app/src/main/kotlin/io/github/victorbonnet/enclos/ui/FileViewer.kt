@@ -4,7 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -101,13 +102,26 @@ private fun TextPreview(file: File, elsewhere: String) {
         else -> SelectionContainer {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
                 // A block ending a line drops that break: the next block starts on a new line.
-                items(result.getOrThrow()) { block ->
-                    Text(block.removeSuffix("\n"), style = Type.code, color = palette.text)
+                // A block going on with a line too long for one is marked with a faint arrow,
+                // outside the selection, so the cut does not read as a line break.
+                val blocks = result.getOrThrow()
+                itemsIndexed(blocks) { index, block ->
+                    if (TextDocument.continues(blocks, index)) {
+                        Row {
+                            DisableSelection { Text(CONTINUED, style = Type.code, color = palette.textFaint) }
+                            Text(block.removeSuffix("\n"), style = Type.code, color = palette.text)
+                        }
+                    } else {
+                        Text(block.removeSuffix("\n"), style = Type.code, color = palette.text)
+                    }
                 }
             }
         }
     }
 }
+
+/** Before a block that goes on with the previous block's line. */
+private const val CONTINUED = "↪ "
 
 @Composable
 private fun FileNotice(text: String) {
