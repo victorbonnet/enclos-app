@@ -46,7 +46,7 @@ jobs:
       # The runner's own Android SDK and NDK
       - name: Build the Rust core and its Kotlin bindings
         run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" sh scripts/build-core-android.sh
-      - name: Build, test and lint the app
+      - name: Build and lint the app
         working-directory: android
         run: ./gradlew --no-daemon :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
       # A debug build to install on a phone or an emulator, to try a PR
