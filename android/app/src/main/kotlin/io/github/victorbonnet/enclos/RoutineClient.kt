@@ -21,6 +21,7 @@ class RoutineClient(
 
     fun available(address: String): Boolean = connected(address.substringBefore('/')) && supported(address)
     fun canChange(address: String): Boolean = available(address) && lists[address]?.fresh == true && address !in pending
+    fun canOperate(address: String, operation: String): Boolean = canChange(address) && lists[address]?.options?.allows(operation) == true
     fun key(address: String, id: String) = "$address/$id"
 
     private fun request(address: String, action: String, fields: List<Pair<String, Any?>> = emptyList(), routine: String? = null, cursor: String? = null): String? {
@@ -56,21 +57,20 @@ class RoutineClient(
     }
 
     fun get(address: String, id: String) {
-        if (!canChange(address)) return
+        if (!canOperate(address, "get")) return
         details.remove(key(address, id))
         request(address, "get", listOf("routine" to id), routine = id)
     }
 
     fun save(address: String, original: RoutineSummary?, definition: RoutineDefinition): String? {
-        if (!canChange(address) || definition.problem() != null) return null
+        if (!canOperate(address, if (original == null) "create" else "update") || definition.problem() != null) return null
         if (original == null) return request(address, "create", listOf("definition" to definition.json()))
         if (!current(address, original)) return null
         return request(address, "update", listOf("routine" to original.id, "revision" to original.revision, "definition" to definition.json()), routine = original.id)
     }
 
     fun act(address: String, routine: RoutineSummary, action: String, enabled: Boolean? = null): String? {
-        if (!canChange(address) || !current(address, routine)) return null
-        if (action == "run" && "run" !in lists[address]?.options?.features.orEmpty()) return null
+        if (!canOperate(address, action) || !current(address, routine)) return null
         if (action == "run" && !routine.enabled && !(routine.state == "paused" && "run_paused" in lists[address]?.options?.features.orEmpty())) return null
         if (action !in setOf("run", "delete", "set_enabled")) return null
         val fields = mutableListOf<Pair<String, Any?>>("routine" to routine.id, "revision" to routine.revision)

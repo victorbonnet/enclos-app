@@ -43,7 +43,7 @@ fun RoutinesScreen(model: AppModel, address: String, back: () -> Unit) {
             IconButton(Glyphs.back, "Back", back)
             Text("Routines", style = Type.name, color = p.text, modifier = Modifier.weight(1f))
             ActionButton("Refresh", enabled = live && !busy, onClick = { client.refresh(address) })
-            if (canChange && list?.options != null) IconButton(Glyphs.plus, "New routine", { creating = true })
+            if (client.canOperate(address, "create")) IconButton(Glyphs.plus, "New routine", { creating = true })
         }
         Hairline()
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
@@ -59,26 +59,26 @@ fun RoutinesScreen(model: AppModel, address: String, back: () -> Unit) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Nothing scheduled", style = Type.name, color = p.text)
                     Text("Routines this agent runs on a schedule appear here.", style = Type.small, color = p.textMuted)
-                    ActionButton("New routine", enabled = canChange, onClick = { creating = true })
+                    if (list.options?.allows("create") == true) ActionButton("New routine", enabled = client.canOperate(address, "create"), onClick = { creating = true })
                 }
             }
             list?.items?.forEach { routine ->
-                SettingRow(Modifier.clickable(enabled = canChange, onClickLabel = "Open ${routine.title}") { selected = routine.id; client.get(address, routine.id) }) {
+                SettingRow(Modifier.clickable(enabled = client.canOperate(address, "get"), onClickLabel = "Open ${routine.title}") { selected = routine.id; client.get(address, routine.id) }) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Column(Modifier.weight(1f)) {
                             Text(routine.title, style = Type.name, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(routine.schedule.label(), style = Type.small, color = p.textMuted)
                         }
-                        if (routine.enabled || routine.state == null || routine.state == "paused") AppSwitch(checked = routine.enabled, onCheckedChange = { client.act(address, routine, "set_enabled", it) }, enabled = canChange && routine.editable)
+                        if (routine.enabled || routine.state == null || routine.state == "paused") AppSwitch(checked = routine.enabled, onCheckedChange = { client.act(address, routine, "set_enabled", it) }, enabled = client.canOperate(address, "set_enabled") && routine.editable)
                     }
                     if (routine.name != null && routine.preview.isNotBlank()) Text(routine.preview, style = Type.small, color = p.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text("Send to: ${routine.delivery}", style = Type.code, color = p.textFaint)
-                    if (!routine.editable) Text("Managed outside enclos · read only", style = Type.small, color = p.textFaint)
+                    if (!routine.editable) Text("Read only in this app", style = Type.small, color = p.textFaint)
                     RoutineStatus(routine)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        ActionButton(if (routine.editable) "Edit" else "Details", enabled = canChange, onClick = { selected = routine.id; client.get(address, routine.id) })
-                        if (list.options?.features?.contains("run") == true) ActionButton("Run now", enabled = canChange && routine.editable && (routine.enabled || (routine.state == "paused" && "run_paused" in list.options.features)), onClick = { client.act(address, routine, "run") })
-                        ActionButton("Delete", enabled = canChange && routine.editable, onClick = { deleting = routine })
+                        if (list.options?.allows("get") == true) ActionButton(if (routine.editable && list.options.allows("update")) "Edit" else "Details", enabled = client.canOperate(address, "get"), onClick = { selected = routine.id; client.get(address, routine.id) })
+                        if (list.options?.allows("run") == true) ActionButton("Run now", enabled = client.canOperate(address, "run") && routine.editable && (routine.enabled || (routine.state == "paused" && "run_paused" in list.options.features)), onClick = { client.act(address, routine, "run") })
+                        if (list.options?.allows("delete") == true) ActionButton("Delete", enabled = client.canOperate(address, "delete") && routine.editable, onClick = { deleting = routine })
                     }
                 }
             }
@@ -108,7 +108,7 @@ fun RoutinesScreen(model: AppModel, address: String, back: () -> Unit) {
         discardSheet = false; editorDirty = false; creating = false; selected = null
     }
     deleting?.let { routine ->
-        ConfirmDialog("Delete routine?", "${routine.title} and its saved runtime output may be removed. Its previous conversation messages stay. An execution already running is not stopped.", "Delete", onDismiss = { deleting = null }, enabled = canChange) {
+        ConfirmDialog("Delete routine?", "${routine.title} and its saved runtime output may be removed. Its previous conversation messages stay. An execution already running is not stopped.", "Delete", onDismiss = { deleting = null }, enabled = client.canOperate(address, "delete")) {
             client.act(address, routine, "delete"); deleting = null
         }
     }
@@ -142,10 +142,10 @@ private fun RoutineEditor(model: AppModel, address: String, routine: Routine?, o
     var submitted by rememberSaveable(editKey) { mutableStateOf<String?>(null) }
     var cancelConfirm by remember { mutableStateOf(false) }
     val busy = address in client.pending
-    val editable = original?.editable != false
+    val editable = original?.editable != false && options.allows(if (original == null) "create" else "update")
     val revisionCurrent = original == null || sameRoutineRevision(client.lists[address]?.items?.firstOrNull { it.id == original.id }, original)
     val timezoneCurrent = editorTimezone == options.timezone
-    val enabled = client.canChange(address) && editable && revisionCurrent && timezoneCurrent
+    val enabled = client.canOperate(address, if (original == null) "create" else "update") && editable && revisionCurrent && timezoneCurrent
     val changed = draft != initial || schedule != initialSchedule
     SideEffect { dirty(changed && editable) }
     val requestDismiss = { if (changed && editable) cancelConfirm = true else dismiss() }
@@ -159,7 +159,7 @@ private fun RoutineEditor(model: AppModel, address: String, routine: Routine?, o
             ActionButton("Close", enabled = !busy, onClick = requestDismiss)
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            if (!editable) Text("This routine is managed outside enclos. Its schedule, delivery and other settings are read only.", style = Type.small, color = p.textMuted)
+            if (!editable) Text("This routine can be viewed here. Manage its changes in its runtime.", style = Type.small, color = p.textMuted)
             if (!client.canChange(address)) Text("Refresh the list before saving. An unconfirmed request will not be sent again automatically.", style = Type.small, color = p.textMuted)
             if (!revisionCurrent && !busy) Text("This routine changed or is no longer in the current list. Close and open it again to edit its current definition. Your draft is still here.", style = Type.small, color = p.textMuted)
             if (!timezoneCurrent) Text("The runtime's time zone changed from $editorTimezone to ${options.timezone}. Close and reopen the editor before saving with the new time zone.", style = Type.small, color = p.textMuted)
