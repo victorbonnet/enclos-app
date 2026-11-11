@@ -535,9 +535,10 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             model.said[conversation.host]?.let { item(key = "said") { Arriving { SystemLine("The bridge said: $it") } } }
             if (!live) item(key = "status") { Arriving { SystemLine(model.status[conversation.host] ?: "not connected") } }
             if (working) item(key = "working") { Arriving { WorkingBubble(agent) } }
-            // The tools it runs now, above the working bubble.
+            // The tools it runs now, above the working bubble; a turn that
+            // ended with no answer shows none.
             val running = model.steps[id].orEmpty()
-            if (running.isNotEmpty()) item(key = "steps-live") { Arriving { ToolSteps(running, live = true, expanded = true) {} } }
+            if (working && running.isNotEmpty()) item(key = "steps-live") { Arriving { ToolSteps(running, live = true, expanded = true) {} } }
             for (i in lines.indices.reversed()) {
                 val line = lines[i]
                 item(key = line.seq) {

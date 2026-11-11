@@ -355,28 +355,22 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     typing.remove(id)
                     awaiting.remove(id)
+                    // The turn ended: a step that never ended no longer runs.
+                    steps[id]?.let { steps[id] = settled(it) }
                 }
             }
             // A tool the agent starts, or ends: added, or marked done.
             "tool" -> {
                 val id = m.getString("conversation")
-                val call = m.getString("call")
-                val now = steps[id].orEmpty()
-                val at = now.indexOfFirst { it.call == call }
-                steps[id] = if (m.optString("phase") == "end") {
-                    val ended = { s: Step ->
-                        s.copy(
-                            done = true,
-                            ok = m.optBoolean("ok", true),
-                            durationMs = if (m.has("duration_ms")) m.getLong("duration_ms") else null,
-                        )
-                    }
-                    if (at >= 0) now.toMutableList().also { it[at] = ended(it[at]) } else now + ended(Step(call, m.getString("name"), null))
-                } else if (at < 0) {
-                    now + Step(call, m.getString("name"), m.optString("label").ifBlank { null })
-                } else {
-                    now
-                }
+                steps[id] = stepped(
+                    steps[id].orEmpty(),
+                    call = m.getString("call"),
+                    phase = m.optString("phase"),
+                    name = m.getString("name"),
+                    label = m.optString("label").ifBlank { null },
+                    ok = m.optBoolean("ok", true),
+                    durationMs = if (m.has("duration_ms")) m.getLong("duration_ms") else null,
+                )
             }
             "error" -> said[host.name] = m.optString("message")
         }
@@ -413,7 +407,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val sent = connections[conversation.host]?.send(
             message("message.send", "conversation" to conversation.id, "text" to text),
         ) == true
-        if (sent) awaiting[conversation.id] = true
+        if (sent) {
+            awaiting[conversation.id] = true
+            // A new turn: steps left by one that ended with no answer are not its own.
+            steps.remove(conversation.id)
+        }
     }
 
     fun reconnect(name: String) {
