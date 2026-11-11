@@ -14,7 +14,6 @@ import io.github.victorbonnet.enclos.core.decodeBytes
 import io.github.victorbonnet.enclos.core.encodeBytes
 import io.github.victorbonnet.enclos.core.generateNoiseKeypair
 import io.github.victorbonnet.enclos.core.pairingProof
-import io.github.victorbonnet.enclos.core.parsePairLink
 import io.github.victorbonnet.enclos.ui.ThemeChoice
 import io.github.victorbonnet.enclos.ui.applyTheme
 import org.json.JSONObject
@@ -240,21 +239,31 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Pairs with the host whose link was scanned or typed. */
     fun pair(link: String) {
         openedLink.value = null
-        val parsed = try {
-            parsePairLink(link)
-        } catch (e: Exception) {
-            pairLinkError.value = "Not an enclos pairing link: ${e.message}"
+        val read = readPairLink(link).getOrElse {
+            pairLinkError.value = "Not an enclos pairing link. ${it.message}"
             return
         }
+        val parsed = read.link
         pairLinkError.value = null
-        pairing.value = Pairing(parsed.host, parsed.url.removePrefix("https://"), parsed.expires.toLong())
+        pairing.value = Pairing(parsed.host, read.address, parsed.expires.toLong())
         val noise = generateNoiseKeypair()
         val alias = "enclos-device-${parsed.host}-${UUID.randomUUID()}"
         Keys.newDeviceKey(alias)
         pairing.value = pairing.value?.copy(keyMade = true)
+        // Set once the host accepted: a pairing that ends otherwise deletes the key it made.
+        val accepted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val keyKept = java.util.concurrent.atomic.AtomicBoolean(true)
+        fun dropKey() {
+            if (accepted.get() || !keyKept.getAndSet(false)) return
+            try {
+                Keys.deleteDeviceKey(alias)
+            } catch (e: java.security.KeyStoreException) {
+                android.util.Log.w("enclos", "the key of a pairing that ended was not deleted: ${e.javaClass.simpleName}")
+            }
+        }
         lateinit var connection: BridgeConnection
         connection = BridgeConnection(
-            url = parsed.url,
+            url = read.url,
             bridgeKey = parsed.key,
             noisePrivate = { noise.privateKey },
             first = { session ->
@@ -268,9 +277,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             onMessage = { m ->
                 when (m.optString("type")) {
                     "pair.accepted" -> {
+                        accepted.set(true)
                         val host = Host(
                             name = parsed.host,
-                            url = parsed.url,
+                            url = read.url,
                             bridgeKey = parsed.key,
                             deviceId = m.getString("device"),
                             noiseKeyWrapped = Keys.wrap(noise.privateKey),
@@ -289,13 +299,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                         ui { connect(host) }
                     }
                     "pair.refused" -> {
-                        Keys.deleteDeviceKey(alias)
+                        dropKey()
                         ui { pairing.value = pairing.value?.copy(stopped = "Refused on ${parsed.host}: ${m.optString("reason")}") }
                         connection.close()
                     }
                 }
             },
             onClosed = { why ->
+                // Refused, expired, or the connection lost: the key made for
+                // this pairing will never be used, and nothing else lists it.
+                dropKey()
                 ui {
                     val now = pairing.value
                     if (now != null && !now.paired && now.stopped == null) pairing.value = now.copy(stopped = "Not paired: $why")
@@ -321,12 +334,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     fun opened(link: String) {
         val now = pairing.value
-        if (now != null && !now.paired && now.stopped == null) return
-        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(link.toByteArray())
-            .joinToString("") { "%02x".format(it) }
+        val underWay = now != null && !now.paired && now.stopped == null
         val handled = settings.getString("pair.links.handled", "").orEmpty().split(' ').filter { it.isNotEmpty() }
-        if (hash in handled) return
-        settings.edit(commit = true) { putString("pair.links.handled", (handled.takeLast(19) + hash).joinToString(" ")) }
+        val kept = handledAfter(underWay, handled, linkHash(link)) ?: return
+        settings.edit(commit = true) { putString("pair.links.handled", kept.joinToString(" ")) }
         pairing.value = null
         pairLinkError.value = null
         openedLink.value = link

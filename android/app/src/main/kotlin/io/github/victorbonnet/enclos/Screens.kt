@@ -76,7 +76,6 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.google.zxing.client.android.Intents
 import io.github.victorbonnet.enclos.core.coreVersion
-import io.github.victorbonnet.enclos.core.parsePairLink
 import io.github.victorbonnet.enclos.ui.AgentAvatar
 import io.github.victorbonnet.enclos.ui.AppBar
 import io.github.victorbonnet.enclos.ui.Bubble
@@ -886,22 +885,23 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
 @Composable
 private fun OpenedLink(link: String, now: Long, pair: () -> Unit, dismiss: () -> Unit) {
     val p = palette
-    val read = remember(link) { runCatching { parsePairLink(link) } }
+    // Read as the pairing reads it: the same checks, the same address.
+    val read = remember(link) { readPairLink(link) }
     Column(Modifier.fillMaxWidth().border(1.dp, p.lineStrong, Shapes.control).padding(14.dp)) {
-        val parsed = read.getOrNull()
-        if (parsed == null) {
+        val ok = read.getOrNull()
+        if (ok == null) {
             Text("Not an enclos pairing link", style = Type.name, color = p.text)
-            // The core's reason, without what the title already says.
-            val why = read.exceptionOrNull()?.message.orEmpty().removePrefix("reason=").removePrefix("not an enclos pairing link: ")
-            Text(why, style = Type.small, color = p.textMuted)
+            // The app's own reason: never the link's text.
+            Text(read.exceptionOrNull()?.message.orEmpty(), style = Type.small, color = p.textMuted)
             TextLink("Dismiss", dismiss)
             return@Column
         }
+        val parsed = ok.link
         val left = (parsed.expires.toLong() - now).coerceAtLeast(0)
         Text("Pair with ${parsed.host}?", style = Type.name, color = p.text)
         Gap(2.dp)
         Text(
-            parsed.url.removePrefix("https://") + " · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired",
+            ok.address + " · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired",
             style = Type.code,
             color = p.textFaint,
         )
