@@ -31,7 +31,7 @@ class PolicyScopeTest {
     }
 
     @Test fun hidden_characters_are_shown_not_obeyed() {
-        val tricky = request("write", "/Users/me/a‮txt.exe", "")
+        val tricky = request("write", "/Users/me/a\u202Etxt.exe", "")
         assertFalse(Visible.hasHidden(tricky.shown))
     }
 }

@@ -17,13 +17,13 @@ class VisibleTest {
     fun newlinesCountOnlyWhenLinesAreRefused() {
         assertTrue(Visible.hasHidden("a\nb"))
         assertFalse(Visible.hasHidden("a\nb", lines = true))
-        assertTrue(Visible.hasHidden("a‮b", lines = true))
+        assertTrue(Visible.hasHidden("a\u202Eb", lines = true))
     }
 
     @Test
     fun strippedAndRevealed() {
-        assertEquals("niam", Visible.stripped("‮niam"))
-        assertEquals("ls⟨U+202E⟩ -la⟨tab⟩x\ny", Visible.revealed("ls‮ -la\tx\ny"))
+        assertEquals("niam", Visible.stripped("\u202Eniam"))
+        assertEquals("ls⟨U+202E⟩ -la⟨tab⟩x\ny", Visible.revealed("ls\u202E -la\tx\ny"))
         assertEquals("echo ok", Visible.revealed("echo ok"))
     }
 }
