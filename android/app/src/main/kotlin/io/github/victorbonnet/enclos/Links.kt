@@ -17,13 +17,20 @@ object WebLinks {
             !URI(url).toURL().host.trimEnd('.').equals(URI(documentUrl).host.trimEnd('.'), ignoreCase = true)
 
     /**
-     * What the person confirms before a page's link leaves the phone: its
-     * host as the network spells it (punycode, so `аpple.com` in Cyrillic
-     * cannot pass for `apple.com`), and the whole address, non-ASCII
-     * percent-encoded, with nothing a page can hide in it.
+     * The longest address the confirmation shows: a longer one is refused, not
+     * laid out on the main thread nor shown cut short while said to be whole.
+     */
+    const val MAX_ADDRESS = 2048
+
+    /**
+     * What the person confirms before a link leaves the phone: its host as
+     * the network spells it (punycode, so `аpple.com` in Cyrillic cannot
+     * pass for `apple.com`), and the whole address, non-ASCII
+     * percent-encoded, with nothing a page or a message can hide in it. Null
+     * for a link the app does not open, or one longer than [MAX_ADDRESS].
      */
     fun destination(url: String): LinkDestination? = runCatching {
-        if (!accepts(url)) return@runCatching null
+        if (url.length > MAX_ADDRESS || !accepts(url)) return@runCatching null
         val uri = URI(url)
         val web = uri.toURL()
         val host = if (web.host.startsWith('[')) web.host.lowercase()
@@ -33,7 +40,24 @@ object WebLinks {
         require(url.startsWith(authority))
         val port = if (web.port == -1) "" else ":${web.port}"
         LinkDestination(host, "${uri.scheme.lowercase()}://$host$port${ascii(url.substring(authority.length))}")
+            .takeIf { it.address.length <= MAX_ADDRESS }
     }.getOrNull()
+
+    /**
+     * What a tap on a message's web link to [url], reading [text], does. It
+     * opens at once only when the text is the very address that is sent; a
+     * label (`[the report](https://…?d=…)`), an image's alt text or an
+     * address the network spells otherwise is confirmed first, as a page's
+     * link is: what it carries leaves the phone, outside the sandbox's
+     * network policy.
+     */
+    fun fromMessage(text: String, url: String): MessageLink {
+        val destination = destination(url) ?: return MessageLink.Refused
+        val shown = text.trim().trimEnd('/')
+        val sent = destination.address.trimEnd('/')
+        val plain = url.trimEnd('/') == sent && (shown == sent || "http://$shown" == sent || "https://$shown" == sent)
+        return if (plain) MessageLink.Open(destination.address) else MessageLink.Confirm(destination)
+    }
 
     /** Non-ASCII characters percent-encoded as UTF-8; ASCII as it is. */
     private fun ascii(text: String) = buildString {
@@ -46,6 +70,13 @@ object WebLinks {
 
 /** A web link's host (ASCII) and full address (ASCII), as the confirmation shows them. */
 data class LinkDestination(val host: String, val address: String)
+
+/** What a tap on a message's web link does: open it, ask first, or refuse it. */
+sealed interface MessageLink {
+    data class Open(val address: String) : MessageLink
+    data class Confirm(val destination: LinkDestination) : MessageLink
+    data object Refused : MessageLink
+}
 
 /**
  * A pairing link as the core reads it, `enclos://pair?…`, from what the

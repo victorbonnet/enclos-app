@@ -2,6 +2,7 @@ package io.github.victorbonnet.enclos
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -62,5 +63,42 @@ class LinksTest {
         listOf("javascript:alert(1)", "intent://open", "https://user:pw@example.com/").forEach {
             assertEquals(it, null, WebLinks.destination(it))
         }
+    }
+
+    @Test
+    fun an_address_longer_than_the_confirmation_shows_is_refused() {
+        val path = "a".repeat(WebLinks.MAX_ADDRESS - "https://example.com/".length)
+        assertEquals("https://example.com/$path", WebLinks.destination("https://example.com/$path")?.address)
+        assertNull(WebLinks.destination("https://example.com/${path}a"))
+        assertNull(WebLinks.destination("https://example.com/?d=" + "x".repeat(2_000_000)))
+        // Percent-encoding makes the address longer than the link: what is shown counts.
+        assertNull(WebLinks.destination("https://example.com/" + "\u00E9".repeat(WebLinks.MAX_ADDRESS / 3)))
+    }
+
+    @Test
+    fun a_message_link_opens_at_once_only_when_its_text_is_the_address_sent() {
+        assertEquals(MessageLink.Open("https://enclos.dev/a?b=c"), WebLinks.fromMessage("https://enclos.dev/a?b=c", "https://enclos.dev/a?b=c"))
+        // A bare www link reads without its scheme.
+        assertEquals(MessageLink.Open("http://www.example.com"), WebLinks.fromMessage("www.example.com", "http://www.example.com"))
+        assertEquals(MessageLink.Open("https://example.com/"), WebLinks.fromMessage("https://example.com", "https://example.com/"))
+    }
+
+    @Test
+    fun a_message_link_whose_text_hides_its_address_is_confirmed_first() {
+        val leak = "https://collector.example/?d=what-it-read"
+        assertEquals(MessageLink.Confirm(LinkDestination("collector.example", leak)), WebLinks.fromMessage("Open the report", leak))
+        assertEquals(MessageLink.Confirm(LinkDestination("collector.example", leak)), WebLinks.fromMessage("https://example.com", leak))
+        // An image's alt text, and an address the network spells otherwise, are not the address either.
+        assertTrue(WebLinks.fromMessage("chart \u2197", "https://example.com/c.png") is MessageLink.Confirm)
+        assertEquals(
+            MessageLink.Confirm(LinkDestination("xn--pple-43d.com", "https://xn--pple-43d.com/")),
+            WebLinks.fromMessage("https://\u0430pple.com/", "https://\u0430pple.com/"),
+        )
+    }
+
+    @Test
+    fun a_message_link_the_confirmation_cannot_show_is_refused() {
+        assertEquals(MessageLink.Refused, WebLinks.fromMessage("report", "https://example.com/?d=" + "x".repeat(WebLinks.MAX_ADDRESS)))
+        assertEquals(MessageLink.Refused, WebLinks.fromMessage("x", "javascript:alert(1)"))
     }
 }
