@@ -8,13 +8,16 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
+import io.github.victorbonnet.enclos.core.PairLink
 import io.github.victorbonnet.enclos.core.decodeBytes
 import io.github.victorbonnet.enclos.core.encodeBytes
 import io.github.victorbonnet.enclos.core.generateNoiseKeypair
 import io.github.victorbonnet.enclos.core.pairingProof
 import io.github.victorbonnet.enclos.core.parsePairLink
+import org.json.JSONException
 import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.Executors
 
 /** An agent of a host, as its bridge lists it. */
 data class Agent(val host: String, val name: String, val runtime: String)
@@ -25,14 +28,21 @@ data class Line(val seq: Long, val from: String, val text: String, val kind: Str
 /** A conversation: its host, agent and id. */
 data class Conversation(val host: String, val agent: String, val id: String)
 
+/** A pairing link naming [old]'s name with another bridge: replaces [old] only once the person confirms. */
+data class Replacing(val link: PairLink, val old: Host)
+
 /** What the screens show, kept across the screens and updated on the main thread. */
 class AppModel(application: Application) : AndroidViewModel(application) {
     private val hosts = Hosts(application)
     private val main = Handler(Looper.getMainLooper())
+    /** Where the pairing keys are made: StrongBox can take seconds. */
+    private val work = Executors.newSingleThreadExecutor()
     /** By host: its connection while it is open or opening, none once it ended. */
     private val connections = mutableMapOf<String, BridgeConnection>()
     /** By host: failed attempts since it was last authenticated, for the backoff. */
     private val failures = mutableMapOf<String, Int>()
+    /** Hosts whose connection ended on a message the app cannot read: Reconnect or the next foreground retries them. */
+    private val unreadable = mutableSetOf<String>()
     /** Whether a screen of the app is visible: only then are ended connections retried. */
     private var foreground = false
 
@@ -46,8 +56,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     private fun ui(block: () -> Unit) = main.post(block)
 
+    /**
+     * A link that names a host already paired with another bridge, waiting
+     * for the person to confirm the replacement (docs/spec.md, Pairing).
+     */
+    val replacing = mutableStateOf<Replacing?>(null)
+
     /** Pairs with the host whose link was scanned or typed. */
     fun pair(link: String) {
+        replacing.value = null
         val parsed = try {
             parsePairLink(link)
         } catch (e: Exception) {
@@ -61,54 +78,102 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             pairing.value = "Not an enclos pairing link: its address, ${parsed.url}, names no host"
             return
         }
-        pairing.value = "Pairing with ${parsed.host}… confirm it in the host's terminal."
-        val noise = generateNoiseKeypair()
-        val alias = "enclos-device-${parsed.host}-${UUID.randomUUID()}"
-        Keys.newDeviceKey(alias)
-        lateinit var connection: BridgeConnection
-        connection = BridgeConnection(
-            url = parsed.url,
-            bridgeKey = parsed.key,
-            noisePrivate = noise.privateKey,
-            first = { session ->
-                message(
-                    "pair.request",
-                    "name" to Build.MODEL,
-                    "device_key" to encodeBytes(Keys.devicePublicKey(alias)),
-                    "proof" to encodeBytes(pairingProof(parsed.code, session.handshakeHash())),
-                )
-            },
-            onMessage = { m ->
-                when (m.optString("type")) {
-                    "pair.accepted" -> {
-                        val host = Host(
-                            name = parsed.host,
-                            url = parsed.url,
-                            bridgeKey = parsed.key,
-                            deviceId = m.getString("device"),
-                            noiseKeyWrapped = Keys.wrap(noise.privateKey),
-                            keyAlias = alias,
-                            pushKeyWrapped = Keys.wrap(decodeBytes(m.getString("push_key"))),
-                        )
-                        hosts.add(host)
-                        ui {
-                            paired.removeAll { it.name == host.name }
-                            paired.add(host)
-                            pairing.value = "Paired with ${host.name}."
+        // The link chooses the name it gives: a name already paired is
+        // replaced only by its own bridge, or once the person confirms.
+        when (val target = pairingTarget(paired, parsed.host, parsed.key)) {
+            PairingTarget.New -> start(parsed, null)
+            is PairingTarget.Again -> start(parsed, target.old)
+            is PairingTarget.Other -> {
+                pairing.value = null
+                replacing.value = Replacing(parsed, target.old)
+            }
+        }
+    }
+
+    /** The person confirmed the replacement [replacing] asked about. */
+    fun replace() {
+        val r = replacing.value ?: return
+        replacing.value = null
+        start(r.link, r.old)
+    }
+
+    /** The person declined the replacement: [Replacing.old] stays paired. */
+    fun keep() {
+        val r = replacing.value ?: return
+        replacing.value = null
+        pairing.value = "Not paired: ${r.old.name} stays paired with ${shownAddress(r.old.url)}."
+    }
+
+    /**
+     * Makes the keys, off the main thread (StrongBox can take seconds), then
+     * connects and asks the bridge to pair; in place of [old] once accepted.
+     */
+    private fun start(parsed: PairLink, old: Host?) {
+        val attempt = PairingAttempt(parsed.host, parsed.url, parsed.key, old, Keys, ::decodeBytes)
+        pairing.value = "Making the device key…"
+        work.execute {
+            val noise = try {
+                attempt.makeDeviceKey()
+                generateNoiseKeypair()
+            } catch (e: Exception) {
+                attempt.ended()
+                ui { pairing.value = "Not paired: the device key could not be made (${e.message})" }
+                return@execute
+            }
+            ui { pairing.value = "Pairing with ${parsed.host}… confirm it in the host's terminal." }
+            lateinit var connection: BridgeConnection
+            connection = BridgeConnection(
+                url = parsed.url,
+                bridgeKey = parsed.key,
+                noisePrivate = noise.privateKey,
+                first = { session ->
+                    message(
+                        "pair.request",
+                        "name" to Build.MODEL,
+                        "device_key" to encodeBytes(Keys.devicePublicKey(attempt.alias)),
+                        "proof" to encodeBytes(pairingProof(parsed.code, session.handshakeHash())),
+                    )
+                },
+                // A field missing here ends the connection (BridgeConnection),
+                // and with it the attempt.
+                onMessage = { m ->
+                    when (m.optString("type")) {
+                        "pair.accepted" -> {
+                            val host = attempt.host(m, noise.privateKey)
+                            hosts.add(host)
+                            attempt.kept()
+                            ui { pairedWith(host, old) }
+                            connection.close()
                         }
-                        connection.close()
-                        ui { connect(host) }
+                        "pair.refused" -> {
+                            ui { pairing.value = "Refused: ${m.optString("reason")}" }
+                            connection.close()
+                        }
                     }
-                    "pair.refused" -> {
-                        Keys.deleteDeviceKey(alias)
-                        ui { pairing.value = "Refused: ${m.optString("reason")}" }
-                        connection.close()
-                    }
-                }
-            },
-            onClosed = { why -> ui { if (pairing.value?.startsWith("Pairing") == true) pairing.value = "Not paired: $why" } },
-        )
-        connection.open()
+                },
+                onClosed = { why ->
+                    attempt.ended()
+                    ui { if (pairing.value?.startsWith("Pairing") == true) pairing.value = "Not paired: $why" }
+                },
+            )
+            connection.open()
+        }
+    }
+
+    /** [host] was paired, in place of [old] if it replaced it. */
+    private fun pairedWith(host: Host, old: Host?) {
+        paired.removeAll { it.name == host.name }
+        paired.add(host)
+        // Another bridge under the same name: nothing of the old one stays.
+        if (old != null && !old.bridgeKey.contentEquals(host.bridgeKey)) {
+            agents.removeAll { it.host == host.name }
+            conversations.filter { it.host == host.name }.forEach { lines.remove(it.id) }
+            conversations.removeAll { it.host == host.name }
+            status.remove(host.name)
+        }
+        failures.remove(host.name)
+        pairing.value = "Paired with ${host.name}."
+        connect(host)
     }
 
     /**
@@ -131,7 +196,19 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     "sig" to encodeBytes(Keys.sign(host.keyAlias, session.handshakeHash())),
                 )
             },
-            onMessage = { m -> ui { received(host, m) } },
+            // A message the app cannot read ends this connection, not the app:
+            // the two repositories release separately.
+            onMessage = { m ->
+                ui {
+                    try {
+                        received(host, m)
+                    } catch (e: JSONException) {
+                        // Not retried on its own: the next connection would get the same.
+                        if (connections[host.name] === connection) unreadable += host.name
+                        connection.fail("the bridge sent what the app cannot read: ${e.message}")
+                    }
+                }
+            },
             // A connection [connect] replaced says nothing of the new one.
             onClosed = { why -> ui { if (connections[host.name] === connection) ended(host, why) } },
         )
@@ -147,11 +224,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
         status[host.name] = why
-        if (!foreground) return
+        if (unreadable.remove(host.name) || !foreground) return
         val n = failures.getOrDefault(host.name, 0)
         failures[host.name] = n + 1
-        val wait = minOf(60_000L, 2_000L shl minOf(n, 5))
-        main.postDelayed({ if (foreground && host.name !in connections) reopen(host.name) }, wait)
+        main.postDelayed({ if (foreground && host.name !in connections) reopen(host.name) }, backoff(n))
     }
 
     /** The app came to the foreground: opens the connection of every host that has none. */
@@ -178,19 +254,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 connections[host.name]?.send(message("sync", "since" to 0))
             }
             "agents.list" -> {
+                val list = agentsIn(host.name, m)
                 agents.removeAll { it.host == host.name }
-                val list = m.getJSONArray("agents")
-                for (i in 0 until list.length()) {
-                    val a = list.getJSONObject(i)
-                    agents.add(Agent(host.name, a.getString("agent"), a.optString("runtime")))
-                }
+                agents.addAll(list)
             }
             "message" -> {
                 val id = m.getString("conversation")
+                val line = lineIn(m)
                 if (conversations.none { it.id == id }) {
                     conversations.add(Conversation(host.name, m.getString("agent"), id))
                 }
-                val line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"))
                 val now = lines[id].orEmpty()
                 if (now.none { it.seq == line.seq }) lines[id] = (now + line).sortedBy { it.seq }
             }
@@ -223,5 +296,18 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         connections.values.forEach { it.close() }
+        work.shutdown()
     }
 }
+
+/** The agents an `agents.list` from [host] names; throws [JSONException] when a field is missing. */
+fun agentsIn(host: String, m: JSONObject): List<Agent> {
+    val list = m.getJSONArray("agents")
+    return (0 until list.length()).map { i ->
+        val a = list.getJSONObject(i)
+        Agent(host, a.getString("agent"), a.optString("runtime"))
+    }
+}
+
+/** The line a `message` holds; throws [JSONException] when a field is missing. */
+fun lineIn(m: JSONObject): Line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"))

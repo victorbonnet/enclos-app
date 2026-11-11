@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -146,8 +147,31 @@ private fun ColumnScope.PairScreen(model: AppModel, done: () -> Unit) {
     OutlinedTextField(link, { link = it }, Modifier.fillMaxWidth(), label = { Text("enclos://pair?…") })
     Button(onClick = { model.pair(link) }, Modifier.fillMaxWidth(), enabled = link.isNotBlank()) { Text("Pair") }
     model.pairing.value?.let { Text(it, Modifier.padding(top = 8.dp)) }
+    model.replacing.value?.let { Replace(it, model::replace, model::keep) }
     Spacer(Modifier.weight(1f))
     OutlinedButton(onClick = done, Modifier.fillMaxWidth()) { Text("Back") }
+}
+
+/**
+ * A link names a host already paired with another bridge: the person sees
+ * both addresses and chooses. Nothing connects, and no key is made, before
+ * Replace.
+ */
+@Composable
+private fun Replace(r: Replacing, replace: () -> Unit, keep: () -> Unit) {
+    val name = r.old.name
+    Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Replace $name?", style = MaterialTheme.typography.titleMedium)
+            Text("This phone is already paired with $name, at ${shownAddress(r.old.url)}.")
+            Text("This link pairs with another bridge under the same name, at ${shownAddress(r.link.url)}.")
+            Text("Replacing ends the pairing with ${shownAddress(r.old.url)} on this phone, and what it shows of it.")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = keep) { Text("Keep $name") }
+                Button(onClick = replace) { Text("Replace") }
+            }
+        }
+    }
 }
 
 @Composable
