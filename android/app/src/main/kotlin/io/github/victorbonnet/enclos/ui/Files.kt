@@ -62,7 +62,9 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import io.github.victorbonnet.enclos.Attachment
+import io.github.victorbonnet.enclos.Attachments
 import io.github.victorbonnet.enclos.FileState
+import io.github.victorbonnet.enclos.Images
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -71,7 +73,8 @@ import java.io.File
 /**
  * A message's files: an image drawn in the bubble, which opens full screen
  * to share; another file as a line with its name and size, which shares it.
- * Each is fetched from the bridge when it is first shown.
+ * Each is fetched from the bridge when it is first shown, or when tapped
+ * once larger than [Attachments.FETCH_ON_TAP].
  */
 @Composable
 fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: (Attachment) -> Unit) {
@@ -82,9 +85,11 @@ fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: 
             val state = states[a.id]
             // Fetched when first shown, and again when the system cleared
             // the cache since it was here: each time the message is shown.
+            // A large one waits for a tap, so an agent cannot make the
+            // phone pull megabytes over mobile data unasked.
             LaunchedEffect(a.id, state) {
                 val gone = state is FileState.Ready && !withContext(Dispatchers.IO) { state.file.isFile }
-                if (state == null || gone) fetch(a)
+                if (a.size <= Attachments.FETCH_ON_TAP && (state == null || gone)) fetch(a)
             }
             if (a.image) {
                 ImageFile(a, state, { fetch(a) }) { opened = a to it }
@@ -101,25 +106,36 @@ private fun ImageFile(a: Attachment, state: FileState?, retry: () -> Unit, open:
     val shape = Shapes.control
     when (state) {
         is FileState.Ready -> {
-            val bitmap by produceState<Bitmap?>(null, state.file) { value = decode(state.file, 1080) }
-            val image = bitmap
-            if (image == null) {
-                // Decoding, or the file was cleared: a tap fetches it again.
-                Placeholder("Opening the image", retry)
-            } else {
-                Image(
-                    image.asImageBitmap(),
+            val decoded by produceState<Decoded>(Decoded.Pending, state.file) {
+                value = decode(state.file, 1080)?.let { Decoded.Drawn(it) } ?: Decoded.Unreadable
+            }
+            when (val d = decoded) {
+                Decoded.Pending -> Placeholder("Opening the image")
+                // Not an image Android can draw (an SVG chart, a damaged file),
+                // or cleared since: a file like any other, to share or fetch again.
+                Decoded.Unreadable -> OtherFile(a, state, retry)
+                is Decoded.Drawn -> Image(
+                    d.bitmap.asImageBitmap(),
                     contentDescription = a.name,
                     contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth().aspectRatio(image.width.toFloat() / image.height.coerceAtLeast(1))
+                    // Its own shape within 1:3 and 3:1: a thin, tall image is
+                    // drawn inside that box, never taller than three widths.
+                    modifier = Modifier.fillMaxWidth().aspectRatio(Images.ratio(d.bitmap.width, d.bitmap.height))
                         .clip(shape).clickable(onClickLabel = "Open the image", role = Role.Image) { open(state.file) },
                 )
             }
         }
         is FileState.Failed -> Placeholder("The image did not come: ${state.why}. Tap to try again.", retry)
         is FileState.Loading -> Placeholder("Loading the image · ${percent(state.done, state.size)}")
-        null -> Placeholder("Loading the image")
+        null -> if (a.size > Attachments.FETCH_ON_TAP) Placeholder("Image · ${size(a.size)} · tap to load it", retry) else Placeholder("Loading the image")
     }
+}
+
+/** An image's bitmap for the screen: being decoded, drawn, or not one Android can draw. */
+private sealed interface Decoded {
+    data object Pending : Decoded
+    data object Unreadable : Decoded
+    data class Drawn(val bitmap: Bitmap) : Decoded
 }
 
 @Composable
@@ -146,7 +162,9 @@ private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit) {
                     // Cleared by the system since: fetched again, not shared missing.
                     is FileState.Ready -> if (state.file.isFile) share(context, a, state.file) else retry()
                     is FileState.Failed -> retry()
-                    else -> {}
+                    // A large file, not fetched until asked.
+                    null -> retry()
+                    is FileState.Loading -> {}
                 }
             }
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -161,7 +179,7 @@ private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit) {
                     is FileState.Loading -> "${size(a.size)} · ${percent(state.done, state.size)}"
                     is FileState.Failed -> "Did not come: ${state.why}. Tap to try again."
                     is FileState.Ready -> "${size(a.size)} · tap to share"
-                    null -> size(a.size)
+                    null -> if (a.size > Attachments.FETCH_ON_TAP) "${size(a.size)} · tap to load it" else size(a.size)
                 },
                 style = Type.meta,
                 color = p.textFaint,
@@ -310,13 +328,28 @@ fun share(context: Context, a: Attachment, file: File) {
     context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
 }
 
-/** The image at [file], decoded at about [longest] pixels on its longest side, off the main thread. */
+/**
+ * The image at [file], off the main thread: at most [longest] pixels on its
+ * longest side and [Images.MOST_BYTES] in memory, whatever the file says
+ * ([Images.sampleSize]); null when Android cannot decode it, or it would
+ * still be too large to draw.
+ */
 private suspend fun decode(file: File, longest: Int): Bitmap? = withContext(Dispatchers.IO) {
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(file.path, bounds)
-    var sample = 1
-    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= longest) sample *= 2
-    BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+    try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
+        val sample = Images.sampleSize(bounds.outWidth, bounds.outHeight, longest)
+        val bitmap = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+        if (bitmap != null && !Images.drawable(bitmap.allocationByteCount.toLong())) {
+            bitmap.recycle()
+            null
+        } else {
+            bitmap
+        }
+    } catch (e: OutOfMemoryError) {
+        null
+    }
 }
 
 private fun percent(done: Long, size: Long) = if (size > 0) "${(done * 100 / size).coerceIn(0, 100)} %" else "…"
