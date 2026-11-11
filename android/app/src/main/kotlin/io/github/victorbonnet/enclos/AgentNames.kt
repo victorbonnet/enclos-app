@@ -11,7 +11,8 @@ fun normalizeAgentName(value: String): String {
     var index = 0
     while (index < value.length) {
         val point = value.codePointAt(index)
-        require(!Character.isISOControl(point) && point != 0x2028 && point != 0x2029 && point !in 0xD800..0xDFFF) { "Names cannot contain control characters or line breaks." }
+        // An override or a zero-width character would let a name read as another agent's (U+202E then "niam" shows as "main").
+        require(!Visible.isHidden(point) && point != 0x2028 && point != 0x2029 && point !in 0xD800..0xDFFF) { "Names cannot contain control characters, invisible characters or line breaks." }
         index += Character.charCount(point)
     }
     val name = value.trim()

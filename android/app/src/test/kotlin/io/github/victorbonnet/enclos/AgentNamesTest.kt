@@ -29,6 +29,14 @@ class AgentNamesTest {
         }
     }
 
+    @Test fun names_that_hide_characters_are_refused_and_a_listed_one_falls_back_to_the_handle() {
+        for (value in listOf("\u202Eniam", "main\u2066", "ma\u200Bin", "\uFEFFmain", "ma\u00ADin", "a\u200Db")) {
+            assertNotNull(value, agentNameProblem(value))
+        }
+        val listed = agent(name = runCatching { normalizeAgentName("\u202Eniam") }.getOrNull(), revision = 2)
+        assertEquals("comptoir-dev", listed.label)
+    }
+
     @Test fun current_names_are_scoped_by_full_host_and_agent_identity() {
         val mac = agent(name = "Gégé Commit", revision = 3)
         val pi = agent(host = "pi", name = "Comptoir", revision = 1)
