@@ -35,6 +35,25 @@ data class SandboxPolicy(val address: String, val version: Int, val base: String
 data class PolicyEdit(val field: String, val before: String?, val after: String?) {
     fun json() = JSONObject().put("field", field).put("before", before ?: JSONObject.NULL).put("after", after ?: JSONObject.NULL)
 }
+
+/**
+ * The edit setting [field] from [before] to the value the person typed, trimmed as it is sent; null
+ * when there is nothing to send: an empty value, the same value, or one holding a hidden character,
+ * which would make the review read as one value while the host saves another.
+ */
+fun policyEdit(field: String, before: String?, typed: String): PolicyEdit? {
+    val after = typed.trim()
+    if (after.isEmpty() || after == before || Visible.hasHidden(after)) return null
+    return PolicyEdit(field, before, after)
+}
+
+/** Whether a policy may be edited now: a live host, a fresh editable policy from it, and no request waiting. */
+fun policyEditable(live: Boolean, policy: SandboxPolicy?, fresh: Boolean, busy: Boolean): Boolean =
+    live && policy?.editable == true && fresh && !busy
+
+/** Whether [review] may be saved: an editable policy now, and the review made against its current base. */
+fun policyReviewSavable(review: PolicyReview, policy: SandboxPolicy?, live: Boolean, fresh: Boolean, busy: Boolean): Boolean =
+    policyEditable(live, policy, fresh, busy) && review.base == policy?.base
 /**
  * Whether the host refused a policy request because this person is not the
  * host's own (enclos's bridge says "Only the host's person can manage
@@ -66,12 +85,13 @@ fun SandboxPolicySummary(model: AppModel, address: String, open: () -> Unit) {
     }
 }
 
-private fun policyValueLabel(field: String, value: String): String = when {
+/** How a policy value reads: a known setting in words, anything else with its hidden characters written out. */
+fun policyValueLabel(field: String, value: String): String = when {
     field == "mode" && value == "public" -> "Public web and listed destinations"
     field == "mode" -> "Listed destinations only"
     field == "listen" && value == "true" -> "Allowed"
     field == "listen" -> "Blocked"
-    else -> value
+    else -> Visible.revealed(value)
 }
 
 private data class EditingPolicy(val field: PolicyField, val value: PolicyValue?)
@@ -83,7 +103,8 @@ fun SandboxPolicyScreen(model: AppModel, address: String, back: () -> Unit) {
     LaunchedEffect(address, live) { if (live) model.loadPolicy(address) }
     val policy = model.sandboxPolicies[address]
     val busy = address in model.policyBusy
-    val allowed = live && policy?.editable == true && model.policyFresh[address] == true && !busy
+    val fresh = model.policyFresh[address] == true
+    val allowed = policyEditable(live, policy, fresh, busy)
     var editing by remember(address) { mutableStateOf<EditingPolicy?>(null) }
     var value by remember { mutableStateOf("") }
     val expanded = remember(address) { mutableStateMapOf<String, Boolean>() }
@@ -130,12 +151,16 @@ fun SandboxPolicyScreen(model: AppModel, address: String, back: () -> Unit) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (edit.field.choices.isEmpty()) OutlinedTextField(value, { value = it }, label = { Text(if (edit.field.multiple) "Path or destination" else "Value") }, singleLine = true)
+                    if (Visible.hasHidden(value.trim())) Text("This value holds hidden characters, which the review would not show: ${Visible.revealed(value.trim())}. Type it again without them.", style = Type.small)
                     else edit.field.choices.forEach { choice -> TextButton(onClick = { value = choice }) { Text((if (value == choice) "✓ " else "") + policyValueLabel(edit.field.key, choice)) } }
                     Text("The host will show exactly what changes before you save.", style = Type.small)
                     model.policyErrors[address]?.let { Text(it, style = Type.small) }
                 }
             },
-            confirmButton = { TextButton(enabled = allowed && value.isNotBlank() && value != edit.value?.value, onClick = { model.previewPolicy(address, PolicyEdit(edit.field.key, edit.value?.value, value.trim())) }) { Text("Review change") } },
+            confirmButton = {
+                val change = policyEdit(edit.field.key, edit.value?.value, value)
+                TextButton(enabled = allowed && change != null, onClick = { change?.let { model.previewPolicy(address, it) } }) { Text("Review change") }
+            },
             dismissButton = {
                 Row {
                     if (edit.field.multiple && edit.value != null) TextButton(enabled = allowed, onClick = { model.previewPolicy(address, PolicyEdit(edit.field.key, edit.value.value, null)) }) { Text("Remove") }
@@ -149,12 +174,12 @@ fun SandboxPolicyScreen(model: AppModel, address: String, back: () -> Unit) {
         title = { Text("Review policy change") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                review.changes.forEach { Text(it, style = Type.small) }
+                review.changes.forEach { Text(Visible.revealed(it), style = Type.small) }
                 if (review.restart) Text("All running work in this sandbox will stop. Its services restart under the updated policy.", style = Type.small)
                 Text("Every agent will learn the active policy after it is saved.", style = Type.small)
             }
         },
-        confirmButton = { TextButton(enabled = allowed && review.base == policy.base, onClick = { model.applyPolicy(address, review) }) { Text(if (busy) "Saving…" else if (review.restart) "Save & restart" else "Save policy") } },
+        confirmButton = { TextButton(enabled = policyReviewSavable(review, policy, live, fresh, busy), onClick = { model.applyPolicy(address, review) }) { Text(if (busy) "Saving…" else if (review.restart) "Save & restart" else "Save policy") } },
         dismissButton = { TextButton(enabled = !busy, onClick = { model.policyReviews.remove(address) }) { Text("Cancel") } },
     )
 }

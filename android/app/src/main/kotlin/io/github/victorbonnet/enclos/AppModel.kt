@@ -537,11 +537,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
         approvalsFresh[host.name] = false
-        policyFresh.keys.filter { it.startsWith("${host.name}/") }.forEach { policyFresh[it] = false; policyReviews.remove(it) }
-        policyRequests.filterValues { it.startsWith("${host.name}/") }.keys.toList().forEach { id ->
-            val address = policyRequests.remove(id)
-            if (address != null) { policyBusy.remove(address); policyErrors[address] = "The connection ended. Refresh the policy to check the outcome before retrying." }
-        }
+        policyConnectionEnded(host.name)
         decidingApprovals.keys.filter { it.startsWith("${host.name}/") }.forEach { decidingApprovals.remove(it) }
         status[host.name] = why
         // Nothing will come over a closed connection: stop showing the agent at work.
@@ -610,6 +606,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             "synced" -> { approvalsFresh[host.name] = true }
             "authenticated" -> {
                 approvalsFresh[host.name] = false
+                // A connection that replaced another without ending it: what the old one said is not fresh.
+                policyConnectionEnded(host.name)
                 approvals.keys.filter { approvals[it]?.host == host.name }.forEach { approvals.remove(it) }
                 saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("${host.name}/") }.forEach { remove(it) } } }
                 failures.remove(host.name)
@@ -842,6 +840,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Sandboxes whose host said this person is not its own: only the host's person manages a policy. */
     val notPolicyOwner = mutableStateListOf<String>()
 
+    /** [host]'s connection ended or was replaced: its policies are no longer fresh, and no answer will come to what was asked. */
+    private fun policyConnectionEnded(host: String) {
+        policyFresh.keys.filter { it.startsWith("$host/") }.forEach { policyFresh[it] = false; policyReviews.remove(it) }
+        policyRequests.filterValues { it.startsWith("$host/") }.keys.toList().forEach { id ->
+            val address = policyRequests.remove(id)
+            if (address != null) { policyBusy.remove(address); policyErrors[address] = "The connection ended. Refresh the policy to check the outcome before retrying." }
+        }
+    }
+
     private fun policyCommand(address: String, command: JSONObject) {
         val host = address.substringBefore('/')
         if (!connected(host) || address in policyBusy) return
@@ -869,11 +876,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
     fun previewPolicy(address: String, edit: PolicyEdit) {
         val policy = sandboxPolicies[address] ?: return
-        if (policyFresh[address] != true || !policy.editable) return
+        if (!policyEditable(true, policy, policyFresh[address] == true, false) || (edit.after != null && Visible.hasHidden(edit.after))) return
         policyCommand(address, message("sandbox.policy.preview", "sandbox" to address.substringAfter('/'), "base" to policy.base, "change" to edit.json()))
     }
     fun applyPolicy(address: String, review: PolicyReview) {
-        if (policyFresh[address] != true || sandboxPolicies[address]?.base != review.base) return
+        if (!policyReviewSavable(review, sandboxPolicies[address], true, policyFresh[address] == true, false)) return
         policyCommand(address, message("sandbox.policy.apply", "sandbox" to address.substringAfter('/'), "base" to review.base, "revision" to review.revision, "change" to review.edit.json()))
     }
     private fun forgetPolicy(host: String) {
