@@ -53,14 +53,14 @@ class QuestionsTest {
     /** The cases of enclos-protocol's `hidden_characters_and_duplicate_labels_are_refused`, with its verdicts. */
     @Test fun hidden_characters_and_duplicate_labels_are_refused_as_the_protocol_refuses_them() {
         for (choices in listOf(
-            listOf("Deny‮wolla", "Allow"), listOf("Allow​", "Allow"), listOf("Allow", "Allow"),
+            listOf("Deny\u202Ewolla", "Allow"), listOf("Allow\u200B", "Allow"), listOf("Allow", "Allow"),
             listOf("Two\nlines"), listOf("Tab\there"),
         )) assertTrue(choices.toString(), runCatching { question.copy(choices = choices).validate() }.isFailure)
-        for (text in listOf("Which⁦?", "Which\r\n?", "Which\t?", "﻿Which?")) {
+        for (text in listOf("Which\u2066?", "Which\r\n?", "Which\t?", "\uFEFFWhich?")) {
             assertTrue(text, runCatching { question.copy(text = text).validate() }.isFailure)
         }
         question.copy(text = "Which one?\nPick carefully.").validate()
-        for (text in listOf("ok‍", "a\tb", "a\r\nb", "­")) {
+        for (text in listOf("ok\u200D", "a\tb", "a\r\nb", "\u00AD")) {
             assertTrue(text, runCatching { question.validateAnswer(QuestionAnswer.Text(text)) }.isFailure)
         }
     }
