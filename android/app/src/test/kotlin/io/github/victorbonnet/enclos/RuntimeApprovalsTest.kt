@@ -64,6 +64,13 @@ class RuntimeApprovalsTest {
         }
     }
 
+    @Test fun a_native_scope_description_is_shown_with_its_hidden_characters_written_out() {
+        val scopes = RuntimeApprovalScopes("Always remembers ‮exact argv​.", "Use native request native-7.")
+        scopes.validate()
+        assertEquals("Always remembers ⟨U+202E⟩exact argv⟨U+200B⟩.", scopes.shownDescription)
+        assertEquals("Plain text.", RuntimeApprovalScopes("Plain text.", "Use native request.").shownDescription)
+    }
+
     @Test fun complete_literal_command_reason_and_encoded_bounds_are_validated_without_truncation() {
         val literal = approval.copy(command = "printf '<script> **text**'\nnext\targument")
         question.copy(approval = literal).validate()

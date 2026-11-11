@@ -34,7 +34,7 @@ fun RuntimeApprovalCard(client: QuestionClient, question: QuestionInfo) {
         }
         SelectionContainer { Text(approval.reason, style = Type.body, color = p.text) }
         if (approval.scopes != null) {
-            SelectionContainer { Text(approval.scopes.description, style = Type.small, color = p.textMuted) }
+            SelectionContainer { Text(approval.scopes.shownDescription, style = Type.small, color = p.textMuted) }
         } else {
             if (RuntimeApprovalAction.Once in approval.actions) {
                 Text("Allow once applies only to this command request.", style = Type.small, color = p.textMuted)

@@ -11,6 +11,10 @@ data class RuntimeApprovalScopes(val description: String, val fallback: String) 
         require(jsonText().toByteArray(Charsets.UTF_8).size <= 8 * 1024) { "Native approval scope information is too large." }
     }
     internal fun jsonText(): String = "{\"description\":${jsonString(description)},\"fallback\":${jsonString(fallback)}}"
+
+    /** The runtime's explanation as shown: hidden characters written out, so it cannot read as something else. */
+    val shownDescription: String get() = Visible.revealed(description)
+
     companion object {
         fun from(json: JSONObject): RuntimeApprovalScopes = RuntimeApprovalScopes(
             json.get("description") as? String ?: throw IllegalArgumentException("Invalid scope description"),
