@@ -147,13 +147,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             ui {
                 val known = conversations.mapTo(HashSet()) { it.id }
                 all.forEach { (id, older) ->
-                    // What is shown is the newest of [older], then what came
-                    // since, which is newer than all of it: older first, then that.
                     if (id !in known) return@forEach
                     val now = lines[id].orEmpty()
-                    if (now.size >= older.size && now.firstOrNull()?.seq == older.first().seq) return@forEach
-                    val last = older.last().seq
-                    lines[id] = older + now.filter { it.seq > last }
+                    val both = merged(older, now)
+                    if (both !== now) lines[id] = both
                 }
             }
         }
@@ -167,12 +164,35 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         null
     }
 
-    /** Keeps something on the phone; a failed write leaves it to the next sync from the bridge. */
+    /**
+     * Keeps something on the phone. A conversation or the agents not kept
+     * come again at the next sync, which sends them all; a message goes
+     * through [keep] instead.
+     */
     private fun save(write: Store.() -> Unit) = saving.execute {
         try {
             store.write()
         } catch (e: android.database.SQLException) {
             // Its type only: nothing of what was said goes to logcat.
+            android.util.Log.w("enclos", "not kept on the phone: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /** Which messages may still be kept this run; used on [saving]'s thread only. */
+    private val gaps = Gaps()
+
+    /**
+     * Keeps a message of [host]. `sync` starts after the newest message kept,
+     * so one that could not be written (a full disk) must not be followed by
+     * a later one: after a failed write, no later message of that host is
+     * kept this run, and the next start syncs from before the one that failed.
+     */
+    private fun keep(host: String, conversation: String, line: Line) = saving.execute {
+        if (!gaps.keeps(host, line.seq)) return@execute
+        try {
+            store.message(host, conversation, line)
+        } catch (e: android.database.SQLException) {
+            gaps.failed(host, line.seq)
             android.util.Log.w("enclos", "not kept on the phone: ${e.javaClass.simpleName}")
         }
     }
@@ -373,6 +393,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun received(host: Host, m: JSONObject) {
+        // A conversation is known by its id alone: one another host already
+        // has stays that host's, whatever this host's bridge sends about it.
+        if (ownedByAnother(conversations, host.name, m.optString("conversation"))) {
+            android.util.Log.w("enclos", "${m.optString("type")} for another host's conversation: ignored")
+            return
+        }
         when (m.optString("type")) {
             "authenticated" -> {
                 failures.remove(host.name)
@@ -444,8 +470,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val now = lines[id].orEmpty()
                 if (now.none { it.seq == line.seq }) {
                     lines[id] = (now + line).sortedBy { it.seq }
-                    val kept = line
-                    save { message(host.name, id, kept) }
+                    keep(host.name, id, line)
                 }
             }
             "typing" -> {
@@ -602,6 +627,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         ids.forEach { lines.remove(it) }
         agents.removeAll { it.host == host }
         kept.remove(host)
+        saving.execute { gaps.clear(host) }
         save { forget(host) }
     }
 
@@ -609,5 +635,41 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections.values.forEach { it.close() }
         // What is queued is still written.
         saving.shutdown()
+    }
+}
+
+/**
+ * [older], every message the phone kept of a conversation, merged with
+ * [now], what is shown: the newest of [older], then what came since, which
+ * is newer than all of it. [now] itself when it already holds them all.
+ */
+internal fun merged(older: List<Line>, now: List<Line>): List<Line> {
+    if (older.isEmpty()) return now
+    if (now.size >= older.size && now.firstOrNull()?.seq == older.first().seq) return now
+    val last = older.last().seq
+    return older + now.filter { it.seq > last }
+}
+
+/** Whether [id] is a conversation of a host other than [host]. */
+internal fun ownedByAnother(conversations: List<Conversation>, host: String, id: String) =
+    id.isNotEmpty() && conversations.any { it.id == id && it.host != host }
+
+/**
+ * By host, the lowest `seq` whose write failed this run. A later message of
+ * that host is not kept, so the newest message kept, which the next start's
+ * `sync` starts after, stays below the one missing.
+ */
+internal class Gaps {
+    private val lowest = mutableMapOf<String, Long>()
+
+    fun keeps(host: String, seq: Long) = lowest[host]?.let { seq < it } ?: true
+
+    fun failed(host: String, seq: Long) {
+        lowest[host] = minOf(seq, lowest[host] ?: seq)
+    }
+
+    /** [host] was forgotten: what it sends next starts from nothing. */
+    fun clear(host: String) {
+        lowest.remove(host)
     }
 }
