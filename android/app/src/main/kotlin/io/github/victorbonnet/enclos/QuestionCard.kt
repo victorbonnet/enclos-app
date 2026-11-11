@@ -79,6 +79,8 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
             PrimaryButton("Submit", enabled = enabled && answer != null) { answer?.let { client.submit(question, it) } }
             ActionButton("Skip", enabled = enabled) { client.submit(question, QuestionAnswer.Skip) }
             unavailable?.let { Text(it, style = Type.small, color = p.textMuted) }
+            // An unconfirmed outcome is settled by a fresh sync, not by reconnecting.
+            if (client.canCheckAgain(question)) ActionButton("Check again") { client.checkAgain(question) }
         }
         client.errors[question.key]?.let { Text(it, style = Type.small, color = p.textMuted) }
     }

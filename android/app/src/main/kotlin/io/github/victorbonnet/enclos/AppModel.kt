@@ -210,6 +210,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         accepts = { question -> paired.any { it.name == question.host } && conversations.any(question::belongsTo) },
         changed = { question -> save { question(question) } },
         later = { wait, action -> main.postDelayed({ action() }, wait) },
+        resync = { host -> connections[host]?.send(message("sync", "since" to since(host))) == true },
+        dropped = { why -> android.util.Log.d("enclos", "question not shown: $why") },
     )
     private data class ArchiveKey(val host: String, val conversation: String)
     private val archiveRequests = mutableMapOf<String, ArchiveKey>()

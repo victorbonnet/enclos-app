@@ -24,6 +24,10 @@ class QuestionClient(
     private val accepts: (QuestionInfo) -> Boolean,
     private val changed: (QuestionInfo) -> Unit,
     private val later: (Long, () -> Unit) -> Unit,
+    /** Asks the host for a fresh `sync` over its open connection; false when it could not be sent. */
+    private val resync: (String) -> Boolean = { false },
+    /** Why a question was not shown (never its text), for the log. */
+    private val dropped: (String) -> Unit = {},
 ) {
     val questions = mutableStateMapOf<QuestionKey, QuestionInfo>()
     val pending = mutableStateMapOf<QuestionKey, QuestionRequest>()
@@ -38,7 +42,8 @@ class QuestionClient(
 
     fun unavailable(question: QuestionInfo): String? = when {
         question.state != QuestionState.Pending -> "This question is ${question.state.wire}."
-        uncertain[question.key] == true -> "The outcome is unconfirmed. Reconnect to check it before answering again."
+        uncertain[question.key] == true && checking(question.host) -> "Checking the outcome with ${question.host}…"
+        uncertain[question.key] == true -> "The outcome is unconfirmed. Check again before answering again."
         question.key in pending -> "Waiting for the agent to confirm…"
         !connected(question.host) -> "Connect to ${question.host} to answer."
         fresh[question.host] != true -> "Waiting for the host to sync…"
@@ -46,7 +51,14 @@ class QuestionClient(
     }
 
     fun merge(incoming: QuestionInfo, cached: Boolean = false): Boolean {
-        if (!accepts(incoming) || runCatching { incoming.validate() }.isFailure) return false
+        if (!accepts(incoming)) {
+            dropped("question ${incoming.id} from ${incoming.host}: no kept conversation of a paired host")
+            return false
+        }
+        runCatching { incoming.validate() }.exceptionOrNull()?.let {
+            dropped("question ${incoming.id} from ${incoming.host}: ${it.message}")
+            return false
+        }
         if (!cached) syncing[incoming.host]?.add(incoming.key)
         val current = questions[incoming.key]
         val selected = newestQuestion(current, incoming.normalized())
@@ -72,7 +84,7 @@ class QuestionClient(
         later(30_000) {
             if (requests[request.id] == request) {
                 uncertain[current.key] = true
-                errors[current.key] = "The agent has not confirmed the outcome. The answer was not resent. Reconnect to check it."
+                errors[current.key] = "The agent has not confirmed the outcome. The answer was not resent. Check again to see it."
             }
         }
         return request.id
@@ -99,7 +111,7 @@ class QuestionClient(
             // safe; nor is a code this app does not know.
             uncertain[request.question.key] = true
             errors[request.question.key] = reason.ifBlank { "The agent has not confirmed the outcome." } +
-                " The answer was not resent. Reconnect to check the outcome."
+                " The answer was not resent. Check again to see the outcome."
         } else {
             uncertain.remove(request.question.key)
             errors[request.question.key] = reason.ifBlank { "The agent could not accept this answer. Check the current question." }
@@ -108,13 +120,44 @@ class QuestionClient(
     }
 
     fun received(host: String, message: JSONObject): Boolean = when (message.optString("type")) {
-        "question" -> { runCatching { QuestionInfo.from(host, message.getJSONObject("question")) }.getOrNull()?.let { merge(it) }; true }
-        "question.result" -> { runCatching { QuestionInfo.from(host, message.getJSONObject("question")) }.getOrNull()?.let { result(host, message.optString("of"), it) }; true }
+        "question" -> { parsed(host, message)?.let { merge(it) }; true }
+        "question.result" -> { parsed(host, message)?.let { result(host, message.optString("of"), it) }; true }
         "error" -> failure(host, message.optString("of"), message.optString("message"), message.optString("code"))
         else -> false
     }
 
+    private fun parsed(host: String, message: JSONObject): QuestionInfo? =
+        runCatching { QuestionInfo.from(host, message.getJSONObject("question")) }
+            .onFailure { dropped("${message.optString("type")} from $host could not be read: ${it.javaClass.simpleName}") }
+            .getOrNull()
+
     fun authenticated(host: String) { fresh[host] = false; syncing[host] = mutableSetOf() }
+
+    /** Whether a sync of [host]'s is still running over a live connection. */
+    private fun checking(host: String): Boolean = connected(host) && fresh[host] != true && host in syncing
+
+    /** Whether [question]'s unconfirmed outcome can be checked now, with [checkAgain]. */
+    fun canCheckAgain(question: QuestionInfo): Boolean = question.state == QuestionState.Pending &&
+        uncertain[question.key] == true && connected(question.host) && fresh[question.host] == true
+
+    /**
+     * Asks the host for a fresh `sync` over the open connection, so an unconfirmed outcome is
+     * settled without reconnecting: a sync sends every pending question again, and [synced]
+     * then clears the doubt of each one it sent. As at a reconnect, the sync now judges the
+     * outcome, not a late receipt. Nothing is resent to the agent.
+     */
+    fun checkAgain(question: QuestionInfo): Boolean {
+        if (!canCheckAgain(question)) return false
+        fresh[question.host] = false
+        syncing[question.host] = mutableSetOf()
+        if (resync(question.host)) {
+            pending[question.key]?.let(::finish)
+            return true
+        }
+        fresh[question.host] = true
+        syncing.remove(question.host)
+        return false
+    }
 
     fun synced(host: String) {
         fresh[host] = true
