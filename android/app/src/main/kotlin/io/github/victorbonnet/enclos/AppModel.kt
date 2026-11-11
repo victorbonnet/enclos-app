@@ -27,6 +27,8 @@ data class Agent(val host: String, val name: String, val runtime: String, val ca
     val agent: String get() = name.substringAfter('/')
     /** `host/sandbox/agent`, as the app writes an agent's address. */
     val address: String get() = "$host/$name"
+    /** Its photo's key: the host and the agent kept apart. */
+    val photoKey: PhotoKey get() = PhotoKey(host, name)
 }
 
 /**
@@ -158,7 +160,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val agentImages = AgentImages(application,
         send = { host, command -> connected(host) && connections[host]?.send(command) == true },
         connected = ::connected,
-        agent = { address -> agents.firstOrNull { it.address == address } },
+        agent = { key -> agents.firstOrNull { it.host == key.host && it.name == key.agent } },
         hostExists = { host -> paired.any { it.name == host } },
     )
     val conversations = mutableStateListOf<Conversation>()
@@ -648,7 +650,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 val listed = agents.filter { it.host == host.name }
-                agentImages.listed(listed)
+                agentImages.listed(host.name, listed)
                 save { agents(host.name, listed) }
             }
             // A conversation and its name: at each sync (so an empty one is

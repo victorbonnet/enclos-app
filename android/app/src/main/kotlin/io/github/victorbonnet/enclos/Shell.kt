@@ -359,7 +359,7 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        MemberStack(handles, side = 32.dp, scope = "$host/$sandbox")
+                        MemberStack(handles, side = 32.dp) { PhotoKey(host, "$sandbox/$it") }
                         Text(g.title ?: handles.joinToString(", "), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
                     }
@@ -433,7 +433,7 @@ private fun GroupPicker(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                AgentInitial(a.agent, side = 32.dp, address = a.address)
+                AgentInitial(a.agent, side = 32.dp, photo = a.photoKey)
                 Column(Modifier.weight(1f)) {
                     Text(a.agent, style = Type.name, color = if (allowed || ticked) p.text else p.textFaint)
                     Text("${a.sandbox} · ${a.host}", style = Type.code, color = p.textFaint)
@@ -495,9 +495,9 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     if (grouping) {
-                        MemberStack(members.map { it.agent }.ifEmpty { listOf("?") }, side = 28.dp, scope = members.firstOrNull()?.let { "${it.host}/${it.sandbox}" })
+                        MemberStack(members.map { it.agent }.ifEmpty { listOf("?") }, side = 28.dp, photoOf = members.firstOrNull()?.let { m -> { h: String -> PhotoKey(m.host, "${m.sandbox}/$h") } })
                     } else if (agent != null) {
-                        AgentInitial(agent.agent, side = 28.dp, address = agent.address)
+                        AgentInitial(agent.agent, side = 28.dp, photo = agent.photoKey)
                     }
                     Text(if (grouping) "New group" else agent?.agent ?: "No agent", style = Type.name, color = p.text)
                     // Pointing down: a list opens.
@@ -528,7 +528,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    AgentInitial(a.agent, side = 24.dp, address = a.address)
+                                    AgentInitial(a.agent, side = 24.dp, photo = a.photoKey)
                                     Column(Modifier.weight(1f, fill = false)) {
                                         Text(a.agent, style = Type.name, color = p.text)
                                         Text("${a.sandbox} · ${a.host}", style = Type.code, color = p.textFaint)
@@ -554,7 +554,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                 Text("No agent yet: pair a host, or wait for it to list its agents.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(24.dp))
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    AgentInitial(agent.agent, model.workingOn(agent).isNotEmpty(), side = 64.dp, address = agent.address)
+                    AgentInitial(agent.agent, model.workingOn(agent).isNotEmpty(), side = 64.dp, photo = agent.photoKey)
                     Gap(14.dp)
                     Text(agent.agent, style = Type.heading, color = p.text)
                     Gap(4.dp)

@@ -444,7 +444,7 @@ private fun GroupRow(model: AppModel, c: Conversation, match: Line?, query: Stri
         Modifier.fillMaxWidth().clickable(onClickLabel = "Open the group", onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        MemberStack(handles, side = 32.dp, scope = "${c.host}/${c.agent}")
+        MemberStack(handles, side = 32.dp) { PhotoKey(c.host, "${c.agent}/$it") }
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(c.title ?: handles.joinToString(", "), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -533,7 +533,7 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
             .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        AgentInitial(name, working.isNotEmpty(), side = 32.dp, address = entry.address)
+        AgentInitial(name, working.isNotEmpty(), side = 32.dp, photo = entry.photo)
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(name, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -873,7 +873,7 @@ private fun AgentRow(model: AppModel, entry: AgentEntry, query: String, onOpen: 
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            AgentAvatar(name, live = model.connected(host), working = working.isNotEmpty(), address = entry.address)
+            AgentAvatar(name, live = model.connected(host), working = working.isNotEmpty(), photo = entry.photo)
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(name, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -1026,7 +1026,7 @@ internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () 
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        AgentInitial(agent.agent, working.isNotEmpty(), side = 32.dp, address = agent.address)
+        AgentInitial(agent.agent, working.isNotEmpty(), side = 32.dp, photo = agent.photoKey)
         Column(Modifier.weight(1f)) {
             Text(agent.agent, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (working.isNotEmpty()) {
@@ -1230,7 +1230,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
-            if (conversation.group) MemberStack(handles, side = 30.dp, scope = "${conversation.host}/${conversation.agent}") else AgentAvatar(agent, live, small = true, address = "${conversation.host}/${conversation.agent}")
+            if (conversation.group) MemberStack(handles, side = 30.dp) { PhotoKey(conversation.host, "${conversation.agent}/$it") } else AgentAvatar(agent, live, small = true, photo = PhotoKey(conversation.host, conversation.agent))
             // Its name, and the agent under it; tap to rename.
             Column(Modifier.weight(1f).clickable(onClickLabel = "Rename the conversation") { renaming = true }) {
                 Text(
@@ -1285,7 +1285,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             outgoing = line.from != "agent",
                             header = if (line.kind == "notify" && !conversation.group) ON_ITS_OWN else null,
                             speaker = line.agent?.substringAfterLast('/'),
-                            speakerAddress = line.agent,
+                            // `host/sandbox/agent`, its host known here: the rest is the member.
+                            speakerPhoto = line.agent?.let { PhotoKey(conversation.host, it.removePrefix("${conversation.host}/")) },
                             files = line.attachments.takeIf { it.isNotEmpty() }?.let { attached ->
                                 { Files(attached, model.files) { model.fetch(conversation.host, it) } }
                             },
@@ -1309,7 +1310,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         if (conversation.group) {
             // Members to address, as the person types `@`.
             val members = remember(handles, draft) { mentionsFor(handles, draft) }
-            MentionSuggestions(members, "${conversation.host}/${conversation.agent}") { model.unsent[id] = mentioned(draft, it) }
+            MentionSuggestions(members, { PhotoKey(conversation.host, "${conversation.agent}/$it") }) { model.unsent[id] = mentioned(draft, it) }
             if (status != null) GroupStrip(status, turnOf) { model.stopGroup(conversation) }
         } else {
             // The agent's commands that match what is typed after `/`; picking one puts it in the field.
@@ -1333,7 +1334,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
 
 /** A group's members' avatars, overlapping, at most three. */
 @Composable
-internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.Dp = 32.dp, scope: String? = null) {
+internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.Dp = 32.dp, photoOf: ((String) -> PhotoKey)? = null) {
     val shown = handles.take(3)
     val step = side * 0.55f
     Box(Modifier.size(width = side + step * (shown.size - 1).coerceAtLeast(0), height = side)) {
@@ -1341,7 +1342,7 @@ internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.D
             Box(
                 Modifier.padding(start = step * i).size(side).clip(androidx.compose.foundation.shape.CircleShape)
                     .background(palette.bg).padding(1.5.dp),
-            ) { AgentInitial(h, side = side - 3.dp, address = scope?.let { "$it/$h" }) }
+            ) { AgentInitial(h, side = side - 3.dp, photo = photoOf?.invoke(h)) }
         }
     }
 }
@@ -1352,7 +1353,7 @@ internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.D
  * it in the field.
  */
 @Composable
-private fun MentionSuggestions(offered: List<String>, scope: String, onPick: (String) -> Unit) {
+private fun MentionSuggestions(offered: List<String>, photoOf: (String) -> PhotoKey, onPick: (String) -> Unit) {
     val p = palette
     AnimatedVisibility(
         offered.isNotEmpty(),
@@ -1370,7 +1371,7 @@ private fun MentionSuggestions(offered: List<String>, scope: String, onPick: (St
                     if (h == "all") {
                         Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) { Glyph(Glyphs.inbox, p.textMuted, size = 20.dp) }
                     } else {
-                        AgentInitial(h, side = 26.dp, address = "$scope/$h")
+                        AgentInitial(h, side = 26.dp, photo = photoOf(h))
                     }
                     Text("@$h", style = Type.code.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), color = p.text)
                     if (h == "all") Text("everyone answers", style = Type.small, color = p.textMuted)
