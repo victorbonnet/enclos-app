@@ -52,7 +52,7 @@ The agent's name and address in the bar. Messages bottom-up, anchored at the new
 
 - The person's messages: right, on `button-bg`, shown exactly as typed.
 - The agent's: left, on `surface` with a hairline, [markdown](#5-messages) drawn, selectable to copy. One the agent sent on its own (`kind: notify`, such as a cron job's) has an "on its own" header; the protocol does not say which job.
-- **The agent at work**: three squares rising in turn, a 900 ms wave, from the moment the person's message is sent until the agent answers, and whenever the runtime says it is typing. It stops when the connection ends.
+- **The agent at work**: three squares rising in turn, a 900 ms wave, from the moment the person's message is sent until the agent answers, and whenever the runtime says it is typing. It stops when the connection ends, when the bridge refuses the message (an `error` naming it, such as `agent_unavailable`), and after 10 minutes with no word from the agent.
 - Under the messages, why the host is not connected, or what the bridge said, when there is something to say.
 
 Opening a conversation marks it read: unread counts are the agent's messages after the last one read, kept on this device only.
@@ -73,7 +73,7 @@ An agent's message is markdown ([ADR 0002](adr/0002-messages-are-markdown-drawn-
 | lists, ordered or not, nested | a mono marker in `text-faint`, then the item |
 | `> quote` | a 2 dp `accent` bar, the text in `text-muted` |
 | fenced or indented code | mono on `panel-deep`, scrolling sideways |
-| table | columns as wide as their widest cell (up to 240), header bold, hairlines between rows, scrolling sideways |
+| table | columns as wide as their widest cell (up to 240), header bold, hairlines between rows, scrolling sideways; at most 12 columns and 50 rows, the header included, with a line above saying how much is shown when there are more |
 | `---` | a hairline |
 | a single newline | a line break (CommonMark would join the lines; chat is written line by line) |
 
@@ -81,7 +81,9 @@ Nothing in a message is fetched or run:
 
 - an image (`![alt](url)`) shows as its alt text and `↗`, a link to it; the app never loads it;
 - HTML shows as its literal text;
-- a link opens, in the browser, only when it is `http`, `https` or `mailto`; any other scheme is plain text.
+- a link opens, in the browser, only when it is `http` or `https` with a host and no user-info (`https://bank.example@evil.example` reads as the bank), or `mailto`; anything else is plain text;
+- a link's text drops hidden characters (bidirectional overrides, zero-width characters: the app's `Visible` rule), so it cannot read as another address;
+- a `mailto` link opens the mail app with the recipient, subject and body the agent wrote; the person still decides to send it.
 
 The person's own messages are not markdown: they show as typed. Previews (inbox, and later notifications) are the words without the marks.
 
@@ -91,7 +93,7 @@ The runtime's plugin tells the agent what the app draws, so that it formats when
 
 Short and functional, never decorative: something moves to show where it came from or went. Durations: 150 ms for a change in place, 250 ms for a screen or a message arriving, 150 ms for what leaves. Arriving decelerates, leaving accelerates.
 
-- A full screen arrives over the tabs: the tabs fade out drifting left, the screen fades in from a tenth of the width. Going back, the screen slides off to the right, opaque, the tabs drifting back under it; with the back gesture it follows the finger and goes or returns where it is let go.
+- A full screen arrives over the tabs: it slides in from the right edge, opaque, while the tabs drift a tenth of the width to the left under it. Going back is the same move reversed: the screen slides off to the right, uncovering the tabs drifting back. Both take 250 ms at an even pace, so a finger can drag the move: with the back gesture the screen follows the finger and goes or returns where it is let go.
 - Tabs fade through each other (200 ms); the corners close in on the tab chosen.
 - A message fades in while the others slide up; a conversation that moves to the top of the inbox slides there.
 - Badges, chips, pairing steps, the send button and the theme change smoothly.
