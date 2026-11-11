@@ -17,6 +17,21 @@ class AgentNamesTest {
         assertNotNull(agentNameProblem("😀".repeat(101)))
     }
 
+    @Test fun joined_emoji_and_scripts_that_need_a_joiner_are_names() {
+        // technologist (woman, ZWJ, laptop), a red heart with its emoji selector, Persian "mikhaham" with its ZWNJ
+        for (value in listOf("\uD83D\uDC69\u200D\uD83D\uDCBB Ops", "\u2764\uFE0F", "\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645")) {
+            assertNull(value, agentNameProblem(value))
+            assertEquals(value, normalizeAgentName(value))
+        }
+    }
+
+    @Test fun names_that_differ_only_by_joiners_read_alike() {
+        assertTrue(namesReadAlike("\uD83D\uDC69\u200D\uD83D\uDCBB", "\uD83D\uDC69\uD83D\uDCBB"))
+        assertTrue(namesReadAlike("coder", "coder"))
+        assertFalse(namesReadAlike("Coder", "coder"))
+        assertFalse(namesReadAlike("Gege", "coder"))
+    }
+
     @Test fun avatar_initials_keep_a_complete_unicode_character() {
         assertEquals("G", firstAgentCharacter("Gégé Commit"))
         assertEquals("😀", firstAgentCharacter("😀 Commit"))
@@ -30,7 +45,11 @@ class AgentNamesTest {
     }
 
     @Test fun names_that_hide_characters_are_refused_and_a_listed_one_falls_back_to_the_handle() {
-        for (value in listOf("\u202Eniam", "main\u2066", "ma\u200Bin", "\uFEFFmain", "ma\u00ADin", "a\u200Db")) {
+        for (value in listOf(
+            "\u202Eniam", "main\u2066", "ma\u200Bin", "\uFEFFmain", "ma\u00ADin", "a\u200Db",
+            // tags, deprecated format characters and blank fillers draw nothing either
+            "main\uDB40\uDC61", "ma\u206Ain", "\u3164", "main\uFFA0", "\u115Fmain", "main\uFE0F", "\u200D\uD83D\uDCBB",
+        )) {
             assertNotNull(value, agentNameProblem(value))
         }
         val listed = agent(name = runCatching { normalizeAgentName("\u202Eniam") }.getOrNull(), revision = 2)

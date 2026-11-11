@@ -1451,8 +1451,9 @@ private fun MentionSuggestions(offered: List<String>, scope: String, label: (Str
                     } else {
                         AgentInitial(label(h), side = 26.dp, address = "$scope/$h")
                     }
-                    if (h != "all" && label(h) != h) Text(label(h), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Text("@$h", style = Type.code.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = if (h != "all" && label(h) != h) Modifier.widthIn(max = 160.dp) else Modifier)
+                    val named = h != "all" && !namesReadAlike(label(h), h)
+                    if (named) Text(label(h), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text("@$h", style = Type.code.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = if (named) Modifier.widthIn(max = 160.dp) else Modifier)
                     if (h == "all") Text("everyone answers", style = Type.small, color = p.textMuted)
                 }
             }

@@ -8,18 +8,17 @@ data class SharedAgentName(val address: String, val displayName: String?, val re
 
 /** The same Unicode limits as the bridge; null is the only way to clear a name. */
 fun normalizeAgentName(value: String): String {
-    var index = 0
-    while (index < value.length) {
-        val point = value.codePointAt(index)
-        // An override or a zero-width character would let a name read as another agent's (U+202E then "niam" shows as "main").
-        require(!Visible.isHidden(point) && point != 0x2028 && point != 0x2029 && point !in 0xD800..0xDFFF) { "Names cannot contain control characters, invisible characters or line breaks." }
-        index += Character.charCount(point)
-    }
+    // An override or a zero-width character would let a name read as another agent's (U+202E then "niam" shows as "main").
+    // A joiner between two non-ASCII characters is text (a joined emoji, Persian spelling), so it is looked at in place.
+    require(!Visible.hasHidden(value) && value.codePoints().noneMatch { it in 0xD800..0xDFFF }) { "Names cannot contain control characters, invisible characters or line breaks." }
     val name = value.trim()
     require(name.isNotBlank()) { "Enter a name, or use the original name." }
     require(name.codePointCount(0, name.length) <= 100 && name.toByteArray(Charsets.UTF_8).size <= 400) { "Use at most 100 characters." }
     return name
 }
+
+/** Whether two names read the same: equal once the joiners, which change only how glyphs join, are dropped ([Visible.bare]). */
+fun namesReadAlike(a: String, b: String): Boolean = Visible.bare(a) == Visible.bare(b)
 
 /** A complete Unicode scalar, including an emoji, rather than half of a surrogate pair. */
 fun firstAgentCharacter(name: String): String = if (name.isEmpty()) "?" else name.substring(0, name.offsetByCodePoints(0, 1))
