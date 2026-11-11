@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -69,6 +70,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val typing = mutableStateMapOf<String, Boolean>()
     /** By conversation: a message was sent and the agent has not answered yet. */
     private val awaiting = mutableStateMapOf<String, Boolean>()
+    /** The messages behind [awaiting], by id: a refusal of one names it. */
+    private val unanswered = Awaiting()
     /** By conversation: the last message read on this device, kept across launches. */
     private val lastRead = mutableStateMapOf<String, Long>().apply {
         reads.all.forEach { (id, seq) -> if (seq is Long) put(id, seq) }
@@ -213,7 +216,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // Nothing will come over a closed connection: stop showing the agent at work.
         val ids = conversations.filter { it.host == host.name }.map { it.id }.toSet()
         typing.keys.filter { it in ids }.forEach { typing.remove(it) }
-        awaiting.keys.filter { it in ids }.forEach { awaiting.remove(it) }
+        ids.forEach { answered(it) }
         if (!foreground) return
         val n = failures.getOrDefault(host.name, 0)
         failures[host.name] = n + 1
@@ -268,7 +271,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"))
                 if (line.from == "agent") {
                     typing.remove(id)
-                    awaiting.remove(id)
+                    answered(id)
                     // The bridge learns what an agent's channel can do once it
                     // reached it, which an agent's message shows: ask again.
                     val agent = m.getString("agent")
@@ -285,10 +288,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     typing[id] = true
                 } else {
                     typing.remove(id)
-                    awaiting.remove(id)
+                    answered(id)
                 }
             }
-            "error" -> said[host.name] = m.optString("message")
+            "error" -> {
+                said[host.name] = m.optString("message")
+                // The bridge refused a message of the person's (the agent is
+                // not reachable, say): nothing will answer it now.
+                unanswered.refused(m.optString("of"))?.let { stillAwaiting(it) }
+            }
         }
     }
 
@@ -302,10 +310,22 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     fun send(conversation: Conversation, text: String) {
         said.remove(conversation.host)
-        val sent = connections[conversation.host]?.send(
-            message("message.send", "conversation" to conversation.id, "text" to text),
-        ) == true
-        if (sent) awaiting[conversation.id] = true
+        val m = message("message.send", "conversation" to conversation.id, "text" to text)
+        if (connections[conversation.host]?.send(m) != true) return
+        unanswered.sent(m.getString("id"), conversation.id, SystemClock.elapsedRealtime())
+        awaiting[conversation.id] = true
+        main.postDelayed({ stillAwaiting(conversation.id) }, unanswered.limit)
+    }
+
+    /** Stops showing the agent at work on [conversation] once no message of it waits. */
+    private fun stillAwaiting(conversation: String) {
+        if (!unanswered.waiting(conversation, SystemClock.elapsedRealtime())) awaiting.remove(conversation)
+    }
+
+    /** The agent answered in [conversation], its turn ended, or nothing more will come. */
+    private fun answered(conversation: String) {
+        unanswered.answered(conversation)
+        awaiting.remove(conversation)
     }
 
     fun reconnect(name: String) {
