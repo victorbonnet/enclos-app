@@ -11,6 +11,30 @@ enum class RuntimeApprovalAction(val wire: String, val label: String, val result
     Deny("deny", "Deny", "Denied"),
 }
 
+/** A run of at least this many spaces is shown as one marker that says how many. */
+internal const val MARKED_SPACES = 8
+
+/**
+ * [text] with each run of two or more blank lines (empty or spaces only) written as one
+ * line `⟨N blank lines⟩`, and each run of [MARKED_SPACES] or more spaces as `⟨N spaces⟩`:
+ * a stretch of nothing cannot push the start or the end of a command out of sight.
+ */
+internal fun markedBlanks(text: String): String {
+    val out = mutableListOf<String>()
+    var blanks = 0
+    fun flush() {
+        if (blanks == 1) out += "" else if (blanks > 1) out += "⟨$blanks blank lines⟩"
+        blanks = 0
+    }
+    for (line in text.split('\n')) {
+        if (line.all { it == ' ' }) { blanks++; continue }
+        flush()
+        out += Regex(" {$MARKED_SPACES,}").replace(line) { "⟨${it.value.length} spaces⟩" }
+    }
+    flush()
+    return out.joinToString("\n")
+}
+
 /** At most this many runtime patterns name what a session or always grant covers. */
 internal const val MAX_APPROVAL_PATTERNS = 16
 
@@ -25,15 +49,22 @@ data class RuntimeApprovalDefinition(
     /** Whether an offered action grants more than this one command. */
     val grantsPatterns: Boolean get() = RuntimeApprovalAction.Session in actions || RuntimeApprovalAction.Always in actions
 
-    /** The command as it is shown: whole, with each hidden character written out. */
-    val shownCommand: String get() = Visible.revealed(command)
+    /**
+     * The command as it is shown: whole, with each hidden character written out, and each run
+     * of blank lines or of spaces that would push the rest out of sight written as one marker
+     * ([markedBlanks]), so no part of it can hide below a stretch of nothing.
+     */
+    val shownCommand: String get() = markedBlanks(Visible.revealed(command))
+
+    /** How many lines the command runs to, as it is shown. */
+    val shownLines: Int get() = shownCommand.count { it == '\n' } + 1
 
     /** Whether the command holds a character outside ASCII, which may look like another. */
     val outsideAscii: Boolean get() = command.any { it.code > 0x7F }
 
     fun validate() {
         require(questionTextValid(command) && questionTextValid(reason)) { "An approval must show its complete command and reason." }
-        require(shownCommand.toByteArray(Charsets.UTF_8).size <= 24 * 1024) { "The command is too long to show in full." }
+        require(Visible.revealed(command).toByteArray(Charsets.UTF_8).size <= 24 * 1024) { "The command is too long to show in full." }
         require(RuntimeApprovalAction.Deny in actions && actions == actions.distinct().sortedBy { it.ordinal } &&
             (RuntimeApprovalAction.Once in actions || actions == listOf(RuntimeApprovalAction.Deny))) { "Invalid approval actions." }
         require(RuntimeApprovalAction.Always !in actions || RuntimeApprovalAction.Session in actions) { "Always allow requires the session scope." }
