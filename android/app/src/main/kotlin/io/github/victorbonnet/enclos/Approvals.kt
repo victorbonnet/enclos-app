@@ -11,7 +11,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -67,7 +66,7 @@ fun PolicyRequestRow(request: PolicyRequest, open: () -> Unit) {
             contentAlignment = Alignment.Center,
         ) {
             if (agent != null) AgentInitial(agent, side = 32.dp)
-            else SandboxMark(live = false, side = 32.dp, tint = Color.Gray)
+            else SandboxMark(live = false, side = 32.dp, tint = p.textFaint)
         }
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
