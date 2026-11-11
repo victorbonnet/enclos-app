@@ -58,7 +58,7 @@ class LinksTest {
         )
         assertEquals("[::1]", WebLinks.destination("http://[::1]:8080/")?.host)
         // An invisible direction mark shows as its bytes, not as nothing.
-        assertEquals("https://example.com/a%E2%80%AEb", WebLinks.destination("https://example.com/a‮b")?.address)
+        assertEquals("https://example.com/a%E2%80%AEb", WebLinks.destination("https://example.com/a\u202Eb")?.address)
         listOf("javascript:alert(1)", "intent://open", "https://user:pw@example.com/").forEach {
             assertEquals(it, null, WebLinks.destination(it))
         }
