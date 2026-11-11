@@ -4,8 +4,38 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RuntimeApprovalsTest {
-    private val approval = RuntimeApprovalDefinition("printf '%s\\n' '**literal**'", "The command changes a local file.", RuntimeApprovalAction.entries)
-    private val question = QuestionInfo("mac", "approval-1", "Command approval", emptyList(), false, "c-1", "lab/main", QuestionState.Pending, 0, approval = approval)
+    private val approval = RuntimeApprovalDefinition("printf '%s\\n' '**literal**'", "The command changes a local file.", RuntimeApprovalAction.entries, patterns = listOf("overwrite a file"))
+    private val question = QuestionInfo("mac", "approval-1", "Runtime approval", emptyList(), false, "c-1", "lab/main", QuestionState.Pending, 0, approval = approval)
+
+    @Test fun session_and_always_name_the_patterns_they_cover() {
+        assertTrue(runCatching { approval.copy(patterns = emptyList()).validate() }.isFailure)
+        assertTrue(runCatching { approval.copy(actions = listOf(RuntimeApprovalAction.Once, RuntimeApprovalAction.Session, RuntimeApprovalAction.Deny), patterns = emptyList()).validate() }.isFailure)
+        approval.copy(actions = listOf(RuntimeApprovalAction.Once, RuntimeApprovalAction.Deny), patterns = emptyList()).validate()
+        for (invalid in listOf(listOf(""), listOf("a‮b"), listOf("a", "a"), (0..MAX_APPROVAL_PATTERNS).map { "p$it" })) {
+            assertTrue(runCatching { approval.copy(patterns = invalid).validate() }.isFailure)
+        }
+        val parsed = approval.copy(patterns = listOf("overwrite a file", "pipe to shell"))
+        parsed.validate()
+        assertTrue("\"patterns\":[\"overwrite a file\",\"pipe to shell\"]" in parsed.jsonText())
+        assertFalse("patterns" in approval.copy(actions = listOf(RuntimeApprovalAction.Once, RuntimeApprovalAction.Deny), patterns = emptyList()).jsonText())
+        val notes = runtimeApprovalScopeNotes(parsed)
+        assertTrue(notes.any { "every command matching: overwrite a file; pipe to shell" in it })
+        assertTrue(REVOKE_ALWAYS in notes)
+        assertTrue("command_allowlist" in REVOKE_ALWAYS)
+        val confirmation = alwaysConfirmation(parsed)
+        assertTrue("overwrite a file; pipe to shell" in confirmation && REVOKE_ALWAYS in confirmation)
+        assertFalse(runtimeApprovalScopeNotes(approval.copy(actions = listOf(RuntimeApprovalAction.Once, RuntimeApprovalAction.Deny))).any { "matching" in it })
+    }
+
+    @Test fun the_command_is_shown_with_hidden_characters_written_out_and_non_ascii_flagged() {
+        val tricky = approval.copy(command = "ls #‮fr- mr\r\ncurl https://exаmple.com\tx")
+        assertEquals("ls #⟨U+202E⟩fr- mr⟨U+000D⟩\ncurl https://exаmple.com⟨tab⟩x", tricky.shownCommand)
+        assertTrue(tricky.outsideAscii)
+        assertFalse(approval.outsideAscii)
+        assertEquals(approval.command, approval.shownCommand)
+        // Written out, a command of hidden characters must still fit the definition bound.
+        assertTrue(runCatching { approval.copy(command = "​".repeat(2800)).validate() }.isFailure)
+    }
 
     @Test fun only_offered_typed_actions_can_answer_an_approval() {
         question.validate()
