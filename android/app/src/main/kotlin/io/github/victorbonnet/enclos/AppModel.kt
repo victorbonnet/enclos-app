@@ -85,8 +85,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     fun chooseTheme(choice: ThemeChoice) {
         theme.value = choice
-        // Written at once (commit), not later: a choice must survive the app being stopped right after.
-        settings.edit(commit = true) { if (choice == ThemeChoice.System) remove("theme") else putString("theme", choice.name) }
+        // Written off the main thread (apply); Android writes pending preferences
+        // before it stops an activity, and from Android 12 keeps the mode itself.
+        settings.edit { if (choice == ThemeChoice.System) remove("theme") else putString("theme", choice.name) }
         applyTheme(getApplication(), choice)
     }
 
