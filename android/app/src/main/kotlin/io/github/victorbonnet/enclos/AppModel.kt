@@ -591,12 +591,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             bridgeKey = host.bridgeKey,
             noisePrivate = { Keys.unwrap(host.noiseKeyWrapped) },
             first = { session ->
-                message(
-                    "auth",
-                    "device" to host.deviceId,
-                    "sig" to encodeBytes(Keys.sign(host.keyAlias, session.handshakeHash())),
-                    "capabilities" to JSONArray(listOf(NATIVE_APPROVAL_SCOPES)),
-                )
+                message("auth", *authFields(host.deviceId, encodeBytes(Keys.sign(host.keyAlias, session.handshakeHash()))))
             },
             // A connection [connect] replaced, or that Forget or Clear cache
             // closed, says nothing more: closing is asynchronous, and a late

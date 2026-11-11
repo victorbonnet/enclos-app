@@ -9,6 +9,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -25,12 +26,19 @@ private fun line(message: JSONObject) = (message.toString() + "\n").toByteArray(
 /** Whether [message] fits in one Noise message, the most that goes at once. */
 fun fits(message: JSONObject): Boolean = line(message).size <= MAX_PLAINTEXT
 
-/** A protocol message: `v`, a new `id`, its `type`, then [fields]. */
+/** A protocol message: `v`, a new `id`, its `type`, then [fields]; a list becomes a JSON array. */
 fun message(type: String, vararg fields: Pair<String, Any?>): JSONObject {
     val o = JSONObject().put("v", 1).put("id", UUID.randomUUID().toString()).put("type", type)
-    fields.forEach { (k, v) -> if (v != null) o.put(k, v) }
+    fields.forEach { (k, v) -> if (v != null) o.put(k, if (v is List<*>) JSONArray(v) else v) }
     return o
 }
+
+/** What this device declares in each connection's `auth`; the bridge keeps it for that connection only. */
+internal val DEVICE_CAPABILITIES = listOf(NATIVE_APPROVAL_SCOPES)
+
+/** The fields of the device's `auth`: its id, its signature of the handshake, and [DEVICE_CAPABILITIES]. */
+internal fun authFields(device: String, signature: String): Array<Pair<String, Any?>> =
+    arrayOf("device" to device, "sig" to signature, "capabilities" to DEVICE_CAPABILITIES)
 
 /**
  * One connection to a host's bridge (docs/protocol.md, The device leg): a
