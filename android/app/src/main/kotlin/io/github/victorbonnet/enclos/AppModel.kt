@@ -102,9 +102,22 @@ data class Conversation(
     val group: Boolean get() = members.isNotEmpty()
 }
 
-/** A delayed broadcast or sync must not overwrite newer metadata from the same host. */
+/**
+ * A delayed broadcast or sync must not overwrite newer metadata from the same host, and one
+ * host's conversation never replaces another's that has the same id: [current] is the row the
+ * phone keeps for [incoming]'s id, whatever its host.
+ */
 fun acceptsConversationMetadata(current: Conversation?, incoming: Conversation): Boolean =
-    incoming.revision >= 0 && (current == null || current.host != incoming.host || current.id != incoming.id || incoming.revision >= current.revision)
+    incoming.revision >= 0 && (current == null || (current.host == incoming.host && current.id == incoming.id && incoming.revision >= current.revision))
+
+/**
+ * Whether conversation [id] is kept for a host other than [host]. The phone keys conversations,
+ * their messages and its cache by id alone, and a Home's id (`home.<sandbox>.<agent>`) is the
+ * same on two hosts with the same sandbox and agent names: the second host's is refused rather
+ * than mixed into the first's.
+ */
+fun heldByAnotherHost(conversations: List<Conversation>, host: String, id: String): Boolean =
+    conversations.any { it.id == id && it.host != host }
 
 /** A dialog may hold an older row: naming changes only the current row's title fields. */
 internal fun renameConversationLocally(conversations: MutableList<Conversation>, id: String, title: String) {
@@ -691,6 +704,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     archived = m.optBoolean("archived", false),
                     revision = m.optLong("revision", 0),
                 )
+                if (heldByAnotherHost(conversations, host.name, id)) return refusedClash(host.name, id)
                 val at = conversations.indexOfFirst { it.id == id }
                 if (!acceptsConversationMetadata(conversations.getOrNull(at), known)) return
                 if (at < 0 || conversations[at] != known) {
@@ -712,6 +726,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "message" -> {
                 val id = m.getString("conversation")
+                if (heldByAnotherHost(conversations, host.name, id)) return refusedClash(host.name, id)
                 if (conversations.none { it.id == id }) {
                     val started = Conversation(host.name, m.getString("agent"), id)
                     conversations.add(started)
@@ -1064,6 +1079,18 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         return true
     }
 
+    /**
+     * Conversations of a host left out because another host's has the same id, by host:
+     * the person's other host keeps them, this phone shows the first one it was given.
+     */
+    val clashes = mutableStateMapOf<String, Set<String>>()
+
+    private fun refusedClash(host: String, id: String) {
+        if (id in clashes[host].orEmpty()) return
+        clashes[host] = clashes[host].orEmpty() + id
+        android.util.Log.w("enclos", "a conversation of $host has the id of another host's and is left out")
+    }
+
     private fun clearArchiveRequests(host: String, problem: String? = null) {
         val keys = archivePending.keys.filter { it.host == host }
         keys.forEach { key ->
@@ -1155,7 +1182,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
-        archiveRequests.clear(); archivePending.clear(); archiveProblems.clear()
+        archiveRequests.clear(); archivePending.clear(); archiveProblems.clear(); clashes.clear()
         agentImages.clear(paired.map { it.name })
         sandboxPolicies.clear(); policyBusy.clear(); policyFresh.clear(); policyErrors.clear(); policyReviews.clear(); policyRequests.clear()
         saving.execute { policyCache.edit { clear() } }
@@ -1192,6 +1219,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
+        clashes.remove(host)
         clearArchiveRequests(host)
         archiveProblems.keys.filter { it.host == host }.forEach { archiveProblems.remove(it) }
         agentImages.forget(host)

@@ -20,6 +20,17 @@ class ConversationMetadataTest {
     }
 
     @Test
+    fun another_hosts_conversation_with_the_same_id_never_replaces_this_hosts() {
+        // Two hosts with a sandbox `lab` and an agent `main` both have `home.lab.main`.
+        val mac = Conversation("mac", "lab/main", "home.lab.main", title = "Home", home = true, revision = 1)
+        val pi = mac.copy(host = "pi", archived = true, revision = 9)
+        assertFalse(acceptsConversationMetadata(mac, pi))
+        assertTrue(heldByAnotherHost(listOf(mac), "pi", "home.lab.main"))
+        assertFalse(heldByAnotherHost(listOf(mac), "mac", "home.lab.main"))
+        assertFalse(heldByAnotherHost(listOf(mac), "pi", "home.lab.coder"))
+    }
+
+    @Test
     fun delayed_archive_and_old_sync_cannot_hide_a_restored_conversation() {
         val archived = original.copy(archived = true, revision = 1)
         val restored = archived.copy(archived = false, revision = 2)
@@ -43,7 +54,8 @@ class ConversationMetadataTest {
     fun legacy_zero_is_accepted_before_new_revisions_and_counters_are_host_scoped() {
         assertTrue(acceptsConversationMetadata(null, original))
         assertTrue(acceptsConversationMetadata(original, original.copy(title = "Legacy name")))
-        assertTrue(acceptsConversationMetadata(original.copy(revision = 9), original.copy(host = "pi")))
+        // Another host's row with the same id is refused, not compared: see another_hosts_conversation_….
+        assertFalse(acceptsConversationMetadata(original.copy(revision = 9), original.copy(host = "pi")))
         assertFalse(acceptsConversationMetadata(original, original.copy(revision = -1)))
     }
 }
