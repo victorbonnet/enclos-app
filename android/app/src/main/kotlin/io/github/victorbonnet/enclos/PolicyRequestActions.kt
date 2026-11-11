@@ -22,6 +22,17 @@ enum class PolicyRequestAction {
     }
 }
 
+/**
+ * The fields to send for this action, or none when the stored request [current] does not allow
+ * it now. They are built from [reviewed], the request the person reviewed, not from [current]:
+ * a decision keeps the revision shown on the page, and the host refuses it when that is stale.
+ */
+fun PolicyRequestAction.send(reviewed: PolicyRequest, current: PolicyRequest?, connected: Boolean, fresh: Boolean,
+    supportsClose: Boolean, busy: Boolean): List<Pair<String, Any?>>? {
+    if (current == null || !allowed(current, connected, fresh, supportsClose, busy)) return null
+    return fields(reviewed)
+}
+
 data class PendingPolicyRequestAction(val messageId: String, val action: PolicyRequestAction)
 
 /** A closed request is terminal, even if an earlier broadcast arrives after it. */

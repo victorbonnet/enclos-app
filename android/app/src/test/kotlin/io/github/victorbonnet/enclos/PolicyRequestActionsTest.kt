@@ -20,6 +20,19 @@ class PolicyRequestActionsTest {
         assertEquals(true, PolicyRequestAction.Approve.fields(request).toMap()["approve"])
     }
 
+    @Test fun a_decision_sends_the_revision_the_person_reviewed_not_a_newer_stored_one() {
+        val newer = request.copy(revision = "revision-2")
+        for (action in listOf(PolicyRequestAction.Approve, PolicyRequestAction.Deny)) {
+            val fields = action.send(request, newer, connected = true, fresh = true, supportsClose = true, busy = false)!!.toMap()
+            assertEquals(action.name, "revision-1", fields["revision"])
+        }
+        // What may be sent is judged on the stored request.
+        assertNull(PolicyRequestAction.Approve.send(request, newer.copy(available = false), true, true, true, false))
+        assertNull(PolicyRequestAction.Deny.send(request, null, true, true, true, false))
+        assertNull(PolicyRequestAction.Deny.send(request, newer, true, true, true, busy = true))
+        assertEquals(mapOf("request" to "request-1"), PolicyRequestAction.Close.send(request, newer, true, true, true, false)!!.toMap())
+    }
+
     @Test fun unavailable_and_failed_requests_can_be_closed_without_enabling_approval() {
         val unavailable = request.copy(available = false)
         assertTrue(allowed(PolicyRequestAction.Close, unavailable))

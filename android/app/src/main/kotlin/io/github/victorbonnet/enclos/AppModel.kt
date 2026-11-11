@@ -1020,11 +1020,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun closeApproval(request: PolicyRequest): Boolean = sendApprovalAction(request, PolicyRequestAction.Close)
 
     private fun sendApprovalAction(request: PolicyRequest, action: PolicyRequestAction): Boolean {
-        val current = approvals[request.key] ?: return false
-        if (!action.allowed(current, connected(request.host), approvalsFresh[request.host] == true,
-                approvalCloseSupported[request.host] == true, request.key in pendingApprovalActions)) return false
         // Decisions retain the revision the person reviewed; the host rejects a stale one.
-        val command = message(action.type, *action.fields(request).toTypedArray())
+        val fields = action.send(request, approvals[request.key], connected(request.host), approvalsFresh[request.host] == true,
+            approvalCloseSupported[request.host] == true, request.key in pendingApprovalActions) ?: return false
+        val command = message(action.type, *fields.toTypedArray())
         if (connections[request.host]?.send(command) == true) {
             pendingApprovalActions[request.key] = PendingPolicyRequestAction(command.getString("id"), action)
             approvalErrors.remove(request.key)
