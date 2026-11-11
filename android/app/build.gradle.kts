@@ -11,10 +11,11 @@ kotlin {
 android {
     namespace = "io.github.victorbonnet.enclos"
     compileSdk = 37
+    ndkVersion = libs.versions.ndk.get()
 
     defaultConfig {
         applicationId = "io.github.victorbonnet.enclos"
-        // Android 9: StrongBox and hardware key attestation, for the device key
+        // Android 9: StrongBox, for the device key
         minSdk = 28
         targetSdk = 37
         versionCode = 1
