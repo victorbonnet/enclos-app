@@ -192,7 +192,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val steps = mutableStateMapOf<String, List<Step>>()
     /**
      * By agent (`host/sandbox/agent`): the commands the person may type to
-     * its runtime, as its bridge last sent them; kept while the app runs.
+     * its runtime, as its bridge last sent them; kept while the host is
+     * connected (the bridge sends them again after `agents`).
      */
     val commands = mutableStateMapOf<String, List<AgentCommand>>()
     /** By conversation: the last message read on this device, kept across launches. */
@@ -430,6 +431,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         typing.keys.filter { it in ids }.forEach { typing.remove(it) }
         awaiting.keys.filter { it in ids }.forEach { awaiting.remove(it) }
         steps.keys.filter { it in ids }.forEach { steps.remove(it) }
+        // Its agents' commands come again with the next connection.
+        commands.keys.filter { it.startsWith("${host.name}/") }.forEach { commands.remove(it) }
         // Files being fetched from it stop; asked again, they go on from where they were.
         fetching.filterValues { it.first == host.name }.keys.forEach {
             fetching.remove(it)
@@ -565,7 +568,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     val c = list!!.optJSONObject(i) ?: return@mapNotNull null
                     val name = c.optString("name").ifBlank { return@mapNotNull null }
                     AgentCommand(name, c.optString("description"), c.optString("args").ifBlank { null })
-                }
+                }.distinctBy { it.name } // The bridge sends each name once; the app does not count on it.
             }
             // A tool the agent starts, or ends: added, or marked done.
             "tool" -> {
@@ -775,6 +778,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         fetching.clear()
         asked.clear()
         files.clear()
+        commands.clear()
         save { clear() }
         saving.execute { java.io.File(getApplication<Application>().cacheDir, "attachments").deleteRecursively() }
         // Each connection again, its sync from the start.
