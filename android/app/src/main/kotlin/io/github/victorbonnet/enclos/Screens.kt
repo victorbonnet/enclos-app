@@ -539,6 +539,8 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, pair: () -> Unit) {
 fun StatusScreen(model: AppModel, pair: () -> Unit) {
     val p = palette
     var forgetting by remember { mutableStateOf<String?>(null) }
+    // A host forgotten without being told: the dialog said it would be.
+    var notTold by remember { mutableStateOf<String?>(null) }
     var clearing by remember { mutableStateOf(false) }
     forgetting?.let { name ->
         val live = model.connected(name)
@@ -552,9 +554,27 @@ fun StatusScreen(model: AppModel, pair: () -> Unit) {
             confirm = "Forget",
             onDismiss = { forgetting = null },
         ) {
-            model.forgetHost(name)
+            // The dialog's words were chosen when it opened: the connection
+            // may have ended since. What happened is what counts.
+            if (!model.forgetHost(name) && live) notTold = name
             forgetting = null
         }
+    }
+    notTold?.let { name ->
+        AlertDialog(
+            onDismissRequest = { notTold = null },
+            containerColor = p.surface,
+            shape = Shapes.bubble,
+            title = { Text("$name was not told", style = Type.heading, color = p.text) },
+            text = {
+                Text(
+                    "The connection ended before Forget. This phone is forgotten here, but $name keeps it listed until you run enclos app unpair there.",
+                    style = Type.small,
+                    color = p.textMuted,
+                )
+            },
+            confirmButton = { DialogButton("OK", onClick = { notTold = null }) },
+        )
     }
     if (clearing) {
         ConfirmDialog(

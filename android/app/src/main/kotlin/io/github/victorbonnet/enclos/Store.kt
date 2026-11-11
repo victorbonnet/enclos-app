@@ -195,6 +195,20 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         list.map { JSONObject().put("id", it.id).put("mime", it.mime).put("name", it.name).put("size", it.size) },
     ).toString()
 
+    /** The ids of the files of every message kept from [host], to delete them when it is forgotten. */
+    fun attachmentIds(host: String): List<String> =
+        readableDatabase.rawQuery("SELECT attachments FROM messages WHERE host = ? AND attachments IS NOT NULL", arrayOf(host)).use { c ->
+            val ids = mutableListOf<String>()
+            while (c.moveToNext()) {
+                try {
+                    attachments(c.getString(0)).mapTo(ids) { it.id }
+                } catch (e: org.json.JSONException) {
+                    // A row that cannot be read names no file to delete.
+                }
+            }
+            ids
+        }
+
     private fun attachments(json: String?): List<Attachment> {
         val a = JSONArray(json ?: return emptyList())
         return (0 until a.length()).map { a.getJSONObject(it) }.map {

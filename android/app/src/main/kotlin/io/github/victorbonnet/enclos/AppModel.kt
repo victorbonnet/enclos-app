@@ -130,6 +130,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // Off the main thread, on the writes' own, before any write: first
         // what the first screens show, then every message, merged in.
         saving.execute {
+            // Signing keys no host uses (a pairing that ended, a host paired
+            // again, a Forget the app was stopped in): deleted, as nothing
+            // else ever would. No pairing is under way: the launch screen is up.
+            try {
+                Keys.deleteUnused(hosts.all().mapTo(HashSet()) { it.keyAlias })
+            } catch (e: Exception) {
+                // The Keystore's or the preferences' failure: tried again at the next start.
+                android.util.Log.w("enclos", "unused keys not deleted: ${e.javaClass.simpleName}")
+            }
             val recent = read { recent() }
             // The connections open next: their HTTP client is built here, not on the main thread.
             BridgeConnection.prepare()
@@ -259,7 +268,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         pairLinkError.value = null
         pairing.value = Pairing(parsed.host, parsed.url.removePrefix("https://"), parsed.expires.toLong())
         val noise = generateNoiseKeypair()
-        val alias = "enclos-device-${parsed.host}-${UUID.randomUUID()}"
+        val alias = "$DEVICE_KEY_PREFIX${parsed.host}-${UUID.randomUUID()}"
         Keys.newDeviceKey(alias)
         pairing.value = pairing.value?.copy(keyMade = true)
         lateinit var connection: BridgeConnection
@@ -287,7 +296,17 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                             keyAlias = alias,
                             pushKey = decodeBytes(m.getString("push_key")),
                         )
+                        // Paired again: the key of the pairing it replaces is never used again.
+                        val replaced = hosts.all().firstOrNull { it.name == host.name }?.keyAlias
                         hosts.add(host)
+                        if (replaced != null && replaced != alias) {
+                            try {
+                                Keys.deleteDeviceKey(replaced)
+                            } catch (e: Exception) {
+                                // The sweep at the next start deletes it.
+                                android.util.Log.w("enclos", "the replaced key was not deleted: ${e.javaClass.simpleName}")
+                            }
+                        }
                         ui {
                             // Paired again, as another device: what the host sent before is forgotten.
                             forget(host.name)
@@ -577,6 +596,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private val asked = mutableMapOf<String, String>()
 
     private fun folderOf(a: Attachment) = java.io.File(java.io.File(getApplication<Application>().cacheDir, "attachments"), a.id)
+
+    /** The folder of attachment [id], to delete; none for an id that is not one folder's name. */
+    private fun attachmentFolder(id: String) =
+        if (attachmentFolderName(id)) java.io.File(java.io.File(getApplication<Application>().cacheDir, "attachments"), id) else null
     private fun fileOf(a: Attachment) =
         java.io.File(folderOf(a), a.name.replace(Regex("[^A-Za-z0-9._ -]"), "_").trimStart('.').take(80).ifBlank { "file" })
     private fun partOf(a: Attachment) = java.io.File(folderOf(a), ".part")
@@ -657,10 +680,18 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections.remove(name)?.close()
         failures.remove(name)
         hosts.remove(name)
-        Keys.deleteDeviceKey(host.keyAlias)
+        // The Keystore off the main thread; should it fail, the next start's sweep deletes the key.
+        saving.execute {
+            try {
+                Keys.deleteDeviceKey(host.keyAlias)
+            } catch (e: Exception) {
+                android.util.Log.w("enclos", "the forgotten host's key was not deleted: ${e.javaClass.simpleName}")
+            }
+        }
         paired.removeAll { it.name == name }
         status.remove(name)
         said.remove(name)
+        folded.removeAll { it.startsWith("$name/") }
         val ids = conversations.filter { it.host == name }.map { it.id }.toSet()
         val attached = ids.flatMap { lines[it].orEmpty() }.flatMap { it.attachments }
         ids.forEach {
@@ -674,8 +705,18 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             fetching.remove(it.id)
             files.remove(it.id)
         }
-        // The files, off the main thread, after what is queued.
-        saving.execute { attached.forEach { folderOf(it).deleteRecursively() } }
+        // The files, off the main thread, after what is queued: those of the
+        // messages shown, and those of messages kept but not read yet (the
+        // second pass of the read may not have ended, or failed), before the
+        // store forgets them ([forget] queues that next).
+        saving.execute {
+            val kept = try {
+                store.attachmentIds(name)
+            } catch (e: android.database.SQLException) {
+                emptyList()
+            }
+            (attached.map { it.id } + kept).toSet().forEach { id -> attachmentFolder(id)?.deleteRecursively() }
+        }
         forget(name)
         return told
     }
@@ -728,3 +769,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         saving.shutdown()
     }
 }
+
+/**
+ * Whether a bridge's attachment id names one folder of `cache/attachments`
+ * and nothing above it: deleting the folder of `..` would delete the cache.
+ */
+internal fun attachmentFolderName(id: String) = id.isNotEmpty() && id != "." && id != ".." && '/' !in id && '\\' !in id
