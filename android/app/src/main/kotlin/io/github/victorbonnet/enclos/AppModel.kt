@@ -240,6 +240,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections[host]?.send(message("conversation.read", "conversation" to conversation, "seq" to last))
     }
 
+    /** By conversation: how far the bridge says it was read, past the newest message here so far. */
+    private val unsettledRead = mutableMapOf<String, Long>()
+
     /** [conversation] is read up to [seq] (here or on another device): kept on this one. */
     private fun read(conversation: String, seq: Long) {
         lastRead[conversation] = seq
@@ -465,13 +468,28 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 }
                 // How far the person read it, on any of their devices: what
                 // is before is not unread here. Read further here (offline,
-                // say): the bridge is told.
+                // say): the bridge is told. Past the newest message here (a
+                // sync sends the conversations before their messages): kept
+                // until the messages came, never past the newest of them.
                 val bridgeRead = if (m.has("read")) m.getLong("read") else 0L
-                val here = lastRead[id] ?: 0L
-                if (bridgeRead > here) {
-                    read(id, bridgeRead)
-                } else if (here > bridgeRead) {
-                    connections[host.name]?.send(message("conversation.read", "conversation" to id, "seq" to here))
+                val newest = lines[id]?.lastOrNull()?.seq ?: 0L
+                when (val step = readStep(lastRead[id] ?: 0L, bridgeRead, newest)) {
+                    is ReadStep.Take -> {
+                        unsettledRead.remove(id)
+                        read(id, step.seq)
+                    }
+                    is ReadStep.Wait -> unsettledRead[id] = step.seq
+                    is ReadStep.Tell -> connections[host.name]?.send(message("conversation.read", "conversation" to id, "seq" to step.seq))
+                    ReadStep.Same -> Unit
+                }
+            }
+            // The sync's messages came: a read position still past them is
+            // taken up to the newest, as the bridge itself never goes further.
+            "synced" -> {
+                conversations.filter { it.host == host.name && it.id in unsettledRead }.forEach { c ->
+                    val newest = lines[c.id]?.lastOrNull()?.seq ?: 0L
+                    val seq = settledRead(lastRead[c.id] ?: 0L, unsettledRead.remove(c.id) ?: 0L, newest)
+                    if (seq != null) read(c.id, seq)
                 }
             }
             "message" -> {
@@ -504,6 +522,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     lines[id] = (now + line).sortedBy { it.seq }
                     val kept = line
                     save { message(host.name, id, kept) }
+                }
+                // The message the bridge said was read up to has come.
+                val unsettled = unsettledRead[id]
+                if (unsettled != null && line.seq >= unsettled) {
+                    unsettledRead.remove(id)
+                    if (unsettled > (lastRead[id] ?: 0L)) read(id, unsettled)
                 }
             }
             "typing" -> {
@@ -658,6 +682,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
         conversations.removeAll { it.host == host }
         ids.forEach { lines.remove(it) }
+        ids.forEach { unsettledRead.remove(it) }
         agents.removeAll { it.host == host }
         kept.remove(host)
         save { forget(host) }
@@ -669,3 +694,33 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         saving.shutdown()
     }
 }
+
+/** What the bridge's read position of a conversation means for this device's. */
+internal sealed interface ReadStep {
+    /** Read further on another device: this device takes it. */
+    data class Take(val seq: Long) : ReadStep
+
+    /** Past the newest message here: taken once the messages came, never past them. */
+    data class Wait(val seq: Long) : ReadStep
+
+    /** Read further here (offline, say): the bridge is told. */
+    data class Tell(val seq: Long) : ReadStep
+
+    data object Same : ReadStep
+}
+
+/** Compares how far a conversation was read [here] and on the [bridge], with the [newest] message here. */
+internal fun readStep(here: Long, bridge: Long, newest: Long): ReadStep = when {
+    bridge > here && bridge <= newest -> ReadStep.Take(bridge)
+    bridge > here -> ReadStep.Wait(bridge)
+    here > bridge -> ReadStep.Tell(here)
+    else -> ReadStep.Same
+}
+
+/**
+ * The sync ended with a read position [unsettled] still past the [newest]
+ * message: taken up to that message, as the bridge never goes further.
+ * Null when that moves nothing [here].
+ */
+internal fun settledRead(here: Long, unsettled: Long, newest: Long): Long? =
+    minOf(unsettled, newest).takeIf { it > here }
