@@ -771,6 +771,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val policyAddress = policyRequests.remove(m.optString("of"))
                 if (policyAddress != null) {
                     policyBusy.remove(policyAddress)
+                    // A person the host shared an agent with: the sandbox page drops its Policy row.
+                    if (policyIsOwnerOnly(m.optString("message"))) notPolicyOwner.add(policyAddress)
                     policyErrors[policyAddress] = m.optString("message")
                     policyReviews.remove(policyAddress)
                     return
@@ -837,6 +839,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val policyErrors = mutableStateMapOf<String, String>()
     val policyReviews = mutableStateMapOf<String, PolicyReview>()
     private val policyRequests = mutableMapOf<String, String>()
+    /** Sandboxes whose host said this person is not its own: only the host's person manages a policy. */
+    val notPolicyOwner = mutableStateListOf<String>()
 
     private fun policyCommand(address: String, command: JSONObject) {
         val host = address.substringBefore('/')
@@ -875,6 +879,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun forgetPolicy(host: String) {
         saving.execute { policyCache.edit { policyCache.all.keys.filter { it.startsWith("$host/") }.forEach { remove(it) } } }
         val prefix = "$host/"
+        notPolicyOwner.removeAll { it.startsWith(prefix) }
         sandboxPolicies.keys.filter { it.startsWith(prefix) }.forEach { sandboxPolicies.remove(it) }
         policyFresh.keys.filter { it.startsWith(prefix) }.forEach { policyFresh.remove(it) }
         policyBusy.keys.filter { it.startsWith(prefix) }.forEach { policyBusy.remove(it) }
@@ -1060,7 +1065,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
-        sandboxPolicies.clear(); policyBusy.clear(); policyFresh.clear(); policyErrors.clear(); policyReviews.clear(); policyRequests.clear()
+        sandboxPolicies.clear(); policyBusy.clear(); policyFresh.clear(); policyErrors.clear(); policyReviews.clear(); policyRequests.clear(); notPolicyOwner.clear()
         saving.execute { policyCache.edit { clear() } }
         approvals.clear()
         approvalsFresh.clear()

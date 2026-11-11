@@ -365,8 +365,11 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                     }
                 }
             }
-            ListHeading("Policy")
-            SandboxPolicySummary(model, address, openPolicy)
+            // Only the host's person manages a sandbox policy: a person it was shared with sees no row.
+            if (address !in model.notPolicyOwner) {
+                ListHeading("Policy")
+                SandboxPolicySummary(model, address, openPolicy)
+            }
             ListHeading("Runs on")
             Info("Runtime", runtime)
             Info("Host", "$host · ${if (live) "connected" else model.status[host] ?: "not connected"}")

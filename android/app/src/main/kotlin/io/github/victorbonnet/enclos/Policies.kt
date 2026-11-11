@@ -35,6 +35,13 @@ data class SandboxPolicy(val address: String, val version: Int, val base: String
 data class PolicyEdit(val field: String, val before: String?, val after: String?) {
     fun json() = JSONObject().put("field", field).put("before", before ?: JSONObject.NULL).put("after", after ?: JSONObject.NULL)
 }
+/**
+ * Whether the host refused a policy request because this person is not the
+ * host's own (enclos's bridge says "Only the host's person can manage
+ * sandbox policy."), rather than for a passing reason such as a pending change.
+ */
+fun policyIsOwnerOnly(message: String): Boolean = message.startsWith("Only the host's person")
+
 data class PolicyReview(val base: String, val revision: String, val edit: PolicyEdit, val changes: List<String>, val restart: Boolean) {
     companion object {
         fun from(m: JSONObject): PolicyReview {
