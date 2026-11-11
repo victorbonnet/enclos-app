@@ -852,15 +852,18 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 if (i == 0 || Times.day(lines[i - 1].time) != day) item(key = "day-${line.seq}") { Arriving { DaySeparator(day) } }
             }
         }
-        // Not connected: write, but nothing goes until the host is back.
+        // Not connected: write, but nothing goes until the host is back. A
+        // message the bridge did not get is back in the field, saying so.
+        val notSent = model.outgoing.notSent[id]?.let { "Not sent: $it." }
+        val away = if (live) null else "Not connected to ${conversation.host}: send once it's back."
         Composer(
             draft,
-            { if (it.isEmpty()) model.unsent.remove(id) else model.unsent[id] = it },
+            { model.outgoing.write(id, it) },
             "Message $agent",
             canSend = live,
-            notice = if (live) null else "Not connected to ${conversation.host}: send once it's back.",
+            notice = listOfNotNull(notSent, away).joinToString(" ").ifEmpty { null },
         ) {
-            // Cleared once it went; else it stays, to send again.
+            // Cleared once handed to the connection; else it stays, to send again.
             model.send(conversation, draft.trim())
         }
     }

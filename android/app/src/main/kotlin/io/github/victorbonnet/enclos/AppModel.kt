@@ -389,7 +389,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * message after the newest kept. [foreground] opens it, and [ended] again.
      */
     fun connect(host: Host) {
-        connections.remove(host.name)?.close()
+        // A connection replaced says nothing more ([ended] is not called): what went over it may be lost.
+        connections.remove(host.name)?.let {
+            it.close()
+            outgoing.ended(host.name, "the connection was opened again")
+        }
         // While retrying, why the last attempt ended stays on screen.
         if (status[host.name]?.startsWith("connected") != false) status[host.name] = "connecting"
         lateinit var connection: BridgeConnection
@@ -420,6 +424,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
         status[host.name] = why
+        // What the bridge did not show back may not have reached it: back in its field.
+        outgoing.ended(host.name, "the connection ended")
         // Nothing will come over a closed connection: stop showing the agent at work.
         val ids = conversations.filter { it.host == host.name }.map { it.id }.toSet()
         typing.keys.filter { it in ids }.forEach { typing.remove(it) }
@@ -486,6 +492,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             // known too), when one starts, and when its name changes.
             "conversation" -> {
                 val id = m.getString("conversation")
+                // Started on the bridge: no longer a draft.
+                drafts -= id
                 val known = Conversation(
                     host.name,
                     m.getString("agent"),
@@ -523,6 +531,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     Attachment(a.getString("id"), a.optString("mime"), a.optString("name"), a.optLong("size"))
                 }
                 var line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached)
+                // The person's own, as the bridge stored it: sent.
+                if (line.from != "agent") outgoing.shown(id, line.text)
                 if (line.from == "agent") {
                     typing.remove(id)
                     awaiting.remove(id)
@@ -581,7 +591,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     fetching.remove(file)
                     files[file] = FileState.Failed(m.optString("message"))
                 } else {
-                    said[host.name] = m.optString("message")
+                    // A message it refused goes back in its field, saying why; any other is the bridge's word.
+                    val refused = outgoing.refused(m.optString("of"), m.optString("message").ifBlank { "the bridge refused it" })
+                    if (refused != null) awaiting.remove(refused) else said[host.name] = m.optString("message")
                 }
             }
         }
@@ -679,33 +691,36 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    /** What the person writes and sends, by conversation, until the bridge has it ([Outgoing]). */
+    val outgoing = Outgoing()
+
     /** By conversation: what the person wrote and has not sent yet, kept while the app runs. */
-    val unsent = mutableStateMapOf<String, String>()
+    val unsent get() = outgoing.unsent
 
     /**
-     * Sends [text] in [conversation]; whether it went. It goes only while
-     * the host is connected: the screen does not offer it otherwise, and a
-     * connection that ended meanwhile leaves the text with the person.
+     * Sends [text] in [conversation]; whether it left the field. It goes
+     * only while the host is connected: the screen does not offer it
+     * otherwise. Should the connection end, or the bridge refuse it, before
+     * the bridge shows it back, it comes back to the field ([Outgoing]).
      */
     fun send(conversation: Conversation, text: String): Boolean {
         said.remove(conversation.host)
-        if (!connected(conversation.host)) return false
-        val connection = connections[conversation.host] ?: return false
-        // A draft becomes a conversation on the bridge with its first message.
-        if (conversation.id in drafts) {
-            val started = connection.send(
-                message("conversation.new", "conversation" to conversation.id, "agent" to conversation.agent),
-            )
-            if (!started) return false
-            drafts -= conversation.id
+        val sent = outgoing.send(conversation.id, conversation.host, text) transmit@{
+            if (!connected(conversation.host)) return@transmit null
+            val connection = connections[conversation.host] ?: return@transmit null
+            // A draft becomes a conversation on the bridge with its first
+            // message; it stays a draft until the bridge sends it back, so a
+            // `conversation.new` lost with the connection goes again.
+            if (conversation.id in drafts) {
+                val started = connection.send(
+                    message("conversation.new", "conversation" to conversation.id, "agent" to conversation.agent),
+                )
+                if (!started) return@transmit null
+            }
+            val frame = message("message.send", "conversation" to conversation.id, "text" to text)
+            if (connection.send(frame)) frame.getString("id") else null
         }
-        val sent = connection.send(
-            message("message.send", "conversation" to conversation.id, "text" to text),
-        )
-        if (sent) {
-            awaiting[conversation.id] = true
-            unsent.remove(conversation.id)
-        }
+        if (sent) awaiting[conversation.id] = true
         return sent
     }
 
@@ -729,6 +744,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         said.remove(name)
         val ids = conversations.filter { it.host == name }.map { it.id }.toSet()
         val attached = ids.flatMap { lines[it].orEmpty() }.flatMap { it.attachments }
+        outgoing.forget(ids)
+        drafts -= ids
         ids.forEach {
             typing.remove(it)
             awaiting.remove(it)
@@ -753,6 +770,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     fun clearCache() {
         conversations.clear()
+        // What was written goes too: its conversations are gone, and drafts do not come back.
+        outgoing.clear()
+        drafts.clear()
         lines.clear()
         agents.clear()
         kept.clear()
