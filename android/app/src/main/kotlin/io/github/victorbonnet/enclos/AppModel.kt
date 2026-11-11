@@ -52,7 +52,7 @@ data class Line(
     val attachments: List<Attachment> = emptyList(),
     /** The tools the agent ran for this answer, which the bridge does not keep: this phone does. */
     val steps: List<Step> = emptyList(),
-    /** In a group, the member who said it (`sandbox/agent`); none otherwise. */
+    /** In a group, the member who said it (`host/sandbox/agent`); none otherwise. */
     val agent: String? = null,
 )
 
@@ -581,15 +581,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             // known too), when one starts, and when its name changes.
             "conversation" -> {
                 val id = m.getString("conversation")
-                val known = Conversation(
-                    host.name,
-                    m.getString("agent"),
-                    id,
-                    m.optString("title").ifBlank { null },
-                    m.optString("titled_by").ifBlank { null },
-                    home = m.optBoolean("home"),
-                    members = m.optJSONArray("members")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),
-                )
+                val known = conversationOf(host.name, m)
+                // A group started here: the bridge made it.
+                startingGroups.values.remove(id)
                 val at = conversations.indexOfFirst { it.id == id }
                 if (at < 0 || conversations[at] != known) {
                     if (at < 0) conversations.add(known) else conversations[at] = known
@@ -608,21 +602,17 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "message" -> {
                 val id = m.getString("conversation")
+                // The bridge sends a conversation before its messages, at a
+                // sync and when one starts, so this is for an older bridge:
+                // the conversation is then taken as one with a single agent,
+                // and in a group its speakers would be lost.
                 if (conversations.none { it.id == id }) {
                     val started = Conversation(host.name, m.getString("agent"), id)
                     conversations.add(started)
                     save { conversation(started) }
                 }
-                val files = m.optJSONArray("attachments")
-                val attached = (0 until (files?.length() ?: 0)).map {
-                    val a = files!!.getJSONObject(it)
-                    Attachment(a.getString("id"), a.optString("mime"), a.optString("name"), a.optLong("size"))
-                }
-                var line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached)
                 // In a group, who of its members said it.
-                if (line.from == "agent" && conversations.firstOrNull { it.id == id }?.group == true) {
-                    line = line.copy(agent = "${host.name}/${m.getString("agent")}")
-                }
+                var line = lineOf(host.name, m, group = conversations.firstOrNull { it.id == id }?.group == true)
                 if (line.from == "agent") {
                     typing.remove(id)
                     awaiting.remove(id)
@@ -643,20 +633,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             // Where a group's discussion is.
-            "group.state" -> {
-                val id = m.getString("conversation")
-                val list = m.optJSONArray("members")
-                groups[id] = GroupStatus(
-                    state = m.optString("state"),
-                    round = m.optInt("round"),
-                    maxRounds = m.optInt("max_rounds"),
-                    turns = (0 until (list?.length() ?: 0)).map { i ->
-                        val t = list!!.getJSONObject(i)
-                        "${host.name}/${t.getString("agent")}" to t.optString("turn").ifBlank { null }
-                    },
-                    reason = m.optString("reason").ifBlank { null },
-                )
-            }
+            "group.state" -> groups[m.getString("conversation")] = groupStatusOf(host.name, m)
             "typing" -> {
                 val id = m.getString("conversation")
                 if (m.optBoolean("on")) {
@@ -705,7 +682,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     fetching.remove(file)
                     files[file] = FileState.Failed(m.optString("message"))
                 } else {
-                    said[host.name] = m.optString("message")
+                    // A group the bridge would not start: gone from the phone, saying why.
+                    val group = startingGroups.remove(m.optString("of"))
+                    if (group != null) refused(group, m.optString("message").ifBlank { "the bridge refused it" }) else said[host.name] = m.optString("message")
                 }
             }
         }
@@ -736,18 +715,41 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     fun newGroup(members: List<Agent>, title: String): String? {
         val host = members.firstOrNull()?.host ?: return null
+        if (!connected(host)) return null
         val connection = connections[host] ?: return null
         val id = UUID.randomUUID().toString()
         val names = members.map { it.name }
         val message = message("group.new", "conversation" to id, "members" to org.json.JSONArray(names))
         if (title.isNotBlank()) message.put("title", title.trim())
         if (!connection.send(message)) return null
-        // Shown at once, as the bridge will send it.
+        startingGroups[message.getString("id")] = id
+        // Shown at once, as the bridge will send it: its members `sandbox/agent`, as the bridge's are.
         conversations.add(
             Conversation(host, names.first().substringBefore('/'), id, title.trim().ifBlank { members.joinToString(", ") { it.agent } }, "person",
-                members = names.map { "$host/$it" }),
+                members = names),
         )
         return id
+    }
+
+    /** By the id of a `group.new` sent: its group, until the bridge sends the group back, or refuses it. */
+    private val startingGroups = mutableMapOf<String, String>()
+
+    /** By group: why the bridge would not start it; said where it was started. */
+    val refusedGroups = mutableStateMapOf<String, String>()
+
+    /** The bridge would not start [group]: it leaves the phone, and [why] is kept to say so. */
+    private fun refused(group: String, why: String) {
+        conversations.removeAll { it.id == group }
+        groups.remove(group)
+        lines.remove(group)
+        awaiting.remove(group)
+        refusedGroups[group] = why
+    }
+
+    /** Drops [id] if it is still a draft (no message sent): a new conversation's screen left, or its agent changed. */
+    fun dropDraft(id: String) {
+        if (!drafts.remove(id)) return
+        conversations.removeAll { it.id == id }
     }
 
     /** Stops group [conversation]'s discussion; what was said stays. */
@@ -881,9 +883,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         status.remove(name)
         said.remove(name)
         commands.keys.filter { it.startsWith("$name/") }.forEach { commands.remove(it) }
+        // Whether its heading was folded: nothing left to fold, and a host paired again under that name starts open.
+        if (folded.remove(hostFold(name))) settings.edit { putStringSet("folded", folded.toSet()) }
         val ids = conversations.filter { it.host == name }.map { it.id }.toSet()
         val attached = ids.flatMap { lines[it].orEmpty() }.flatMap { it.attachments }
         ids.forEach {
+            groups.remove(it)
             typing.remove(it)
             awaiting.remove(it)
             steps.remove(it)
@@ -907,6 +912,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     fun clearCache() {
         conversations.clear()
+        groups.clear()
         lines.clear()
         agents.clear()
         kept.clear()

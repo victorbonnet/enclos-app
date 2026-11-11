@@ -463,6 +463,25 @@ private fun Info(label: String, value: String) {
 
 // ---------- A new conversation ----------
 
+/** In place of a group the bridge would not start: back, and why. */
+@Composable
+fun GroupRefused(why: String, back: () -> Unit) {
+    val p = palette
+    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+        AppBar { IconButton(Glyphs.back, "Back", back) }
+        Hairline()
+        Text("The group was not started: $why", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
+    }
+}
+
+/**
+ * What a new conversation's screen made with an earlier tap whose message
+ * did not go: the group (by its members and name) or the draft (by its
+ * agent), reused by the next tap, so a failed send makes no second group on
+ * the host, nor another draft on the phone.
+ */
+private data class Made(val key: String, val id: String)
+
 /**
  * A new conversation: the agent it is with, picked from a chip at the top
  * (the one most recently active first), its card in the middle, and the
@@ -481,6 +500,11 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
     var grouping by remember { mutableStateOf(false) }
     val members = remember { androidx.compose.runtime.mutableStateListOf<Agent>() }
     var name by remember { mutableStateOf("") }
+    var madeGroup by remember { mutableStateOf<Made?>(null) }
+    var madeDraft by remember { mutableStateOf<Made?>(null) }
+    // Left without a message sent: the draft goes (a group stays, as the bridge made it).
+    val draftNow by androidx.compose.runtime.rememberUpdatedState(madeDraft)
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { draftNow?.let { model.dropDraft(it.id) } } }
     val canGroup = agents.groupBy { it.host to it.sandbox }.values.any { it.size >= 2 }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
@@ -575,17 +599,27 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
             notice = when {
                 agent != null && !live -> "Not connected to ${agent.host}: send once it's back."
                 !enough -> "Tick two to six agents of one sandbox."
+                grouping && madeGroup != null -> model.refusedGroups[madeGroup?.id]?.let { "The group was not started: $it" }
                 else -> null
             },
         ) {
-            if (agent == null) return@Composer
+            if (agent == null || !model.connected(agent.host)) return@Composer
             if (grouping) {
-                val id = model.newGroup(members.toList(), name) ?: return@Composer
+                val key = members.joinToString(",") { it.address } + "|" + name.trim()
+                // The group an earlier tap made, while it stands for the same members and name.
+                val id = madeGroup?.takeIf { m -> m.key == key && model.conversations.any { it.id == m.id } }?.id
+                    ?: model.newGroup(members.toList(), name)?.also { madeGroup = Made(key, it) }
+                    ?: return@Composer
                 val group = model.conversations.firstOrNull { it.id == id } ?: return@Composer
                 if (model.send(group, text.trim())) opened(id)
                 return@Composer
             }
-            val id = model.newConversation(agent)
+            // The draft an earlier tap made, while the agent is the same; another agent's goes.
+            val id = madeDraft?.takeIf { m -> m.key == agent.address && model.conversations.any { it.id == m.id } }?.id
+                ?: model.newConversation(agent).also { made ->
+                    madeDraft?.let { model.dropDraft(it.id) }
+                    madeDraft = Made(agent.address, made)
+                }
             val started = model.conversations.firstOrNull { it.id == id } ?: return@Composer
             if (model.send(started, text.trim())) opened(id)
         }

@@ -1180,7 +1180,12 @@ fun SettingsScreen(model: AppModel, pair: () -> Unit) {
 @Composable
 fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val p = palette
-    val conversation = model.conversations.firstOrNull { it.id == id } ?: return
+    val conversation = model.conversations.firstOrNull { it.id == id }
+    if (conversation == null) {
+        // A group the bridge would not start: gone, saying why.
+        model.refusedGroups[id]?.let { GroupRefused(it, back) }
+        return
+    }
     val lines = model.lines[id].orEmpty()
     val agent = conversation.agent.substringAfter('/')
     val live = model.connected(conversation.host)

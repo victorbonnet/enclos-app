@@ -30,33 +30,10 @@ class Saved(
  * Read off the main thread, in two passes: [recent], what the first screens
  * show, then [lines], every message.
  */
-class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", null, 3) {
-    override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL(
-            "CREATE TABLE conversations (id TEXT PRIMARY KEY, host TEXT NOT NULL, agent TEXT NOT NULL, title TEXT, titled_by TEXT, " +
-                "home INTEGER NOT NULL DEFAULT 0, members TEXT)",
-        )
-        // `seq` is the bridge's, increasing per host.
-        db.execSQL(
-            "CREATE TABLE messages (host TEXT NOT NULL, seq INTEGER NOT NULL, conversation TEXT NOT NULL, sender TEXT NOT NULL, " +
-                "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, speaker TEXT, PRIMARY KEY (host, seq))",
-        )
-        db.execSQL("CREATE INDEX messages_of ON messages (conversation, seq)")
-        db.execSQL(
-            "CREATE TABLE agents (host TEXT NOT NULL, name TEXT NOT NULL, runtime TEXT NOT NULL, capabilities TEXT NOT NULL, PRIMARY KEY (host, name))",
-        )
-    }
+class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", null, STORE_VERSION) {
+    override fun onCreate(db: SQLiteDatabase) = CREATE.forEach(db::execSQL)
 
-    // Step by step from the version on the phone, never by dropping what was kept.
-    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
-        // 2: an agent's Home conversation is marked.
-        if (old < 2) db.execSQL("ALTER TABLE conversations ADD COLUMN home INTEGER NOT NULL DEFAULT 0")
-        // 3: a group's members, and who of them said each message.
-        if (old < 3) {
-            db.execSQL("ALTER TABLE conversations ADD COLUMN members TEXT")
-            db.execSQL("ALTER TABLE messages ADD COLUMN speaker TEXT")
-        }
-    }
+    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) = upgrades(old).forEach(db::execSQL)
 
     /**
      * What the first screens show: the agents, every conversation with its
@@ -238,5 +215,30 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
                 durationMs = if (it.has("duration_ms")) it.getLong("duration_ms") else null,
             )
         }
+    }
+}
+
+/** The database's version: [upgrades] brings an older one to it. */
+internal const val STORE_VERSION = 3
+
+/** A new database, at [STORE_VERSION]. */
+internal val CREATE = listOf(
+    "CREATE TABLE conversations (id TEXT PRIMARY KEY, host TEXT NOT NULL, agent TEXT NOT NULL, title TEXT, titled_by TEXT, " +
+        "home INTEGER NOT NULL DEFAULT 0, members TEXT)",
+    // `seq` is the bridge's, increasing per host.
+    "CREATE TABLE messages (host TEXT NOT NULL, seq INTEGER NOT NULL, conversation TEXT NOT NULL, sender TEXT NOT NULL, " +
+        "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, speaker TEXT, PRIMARY KEY (host, seq))",
+    "CREATE INDEX messages_of ON messages (conversation, seq)",
+    "CREATE TABLE agents (host TEXT NOT NULL, name TEXT NOT NULL, runtime TEXT NOT NULL, capabilities TEXT NOT NULL, PRIMARY KEY (host, name))",
+)
+
+/** What brings a database of version [old] to [STORE_VERSION]: step by step, never by dropping what was kept. */
+internal fun upgrades(old: Int): List<String> = buildList {
+    // 2: an agent's Home conversation is marked.
+    if (old < 2) add("ALTER TABLE conversations ADD COLUMN home INTEGER NOT NULL DEFAULT 0")
+    // 3: a group's members, and who of them said each message.
+    if (old < 3) {
+        add("ALTER TABLE conversations ADD COLUMN members TEXT")
+        add("ALTER TABLE messages ADD COLUMN speaker TEXT")
     }
 }
