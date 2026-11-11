@@ -7,7 +7,9 @@ import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import io.github.victorbonnet.enclos.core.decodeBytes
@@ -121,7 +123,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * the launch screen stays up (so the app never opens empty and fills
      * in) and no connection opens (so `sync` knows where the phone stopped).
      */
-    var ready = false
+    // Observable: a screen open on a conversation the phone does not hold
+    // goes back once this is known (see MainActivity).
+    var ready by mutableStateOf(false)
         private set
     /** By host: the newest `seq` kept on the phone, which `sync` starts after. */
     private val kept = mutableMapOf<String, Long>()
@@ -566,6 +570,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         return id
     }
 
+    /** The screen of [conversation] was left: a draft with nothing sent goes, as if never started. */
+    fun left(conversation: String) {
+        if (conversation !in drafts || !lines[conversation].isNullOrEmpty()) return
+        drafts -= conversation
+        conversations.removeAll { it.id == conversation }
+    }
+
     /** Whether the inbox lists [conversation]: once something was said in it. */
     fun listed(conversation: Conversation) = !lines[conversation.id].isNullOrEmpty()
 
@@ -649,23 +660,17 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun send(conversation: Conversation, text: String) {
         said.remove(conversation.host)
         val connection = connections[conversation.host]
-        // A draft becomes a conversation on the bridge with its first message,
-        // and with the name the person gave it meanwhile: right after the
-        // bridge's `conversation.new`, so its unnamed confirmation does not stay.
-        if (conversation.id in drafts) {
-            val started = connection?.send(
-                message("conversation.new", "conversation" to conversation.id, "agent" to conversation.agent),
-            ) == true
-            if (!started) return
-            drafts -= conversation.id
-            val named = conversations.firstOrNull { it.id == conversation.id }
-            if (named?.titledBy == "person" && named.title != null) {
-                connection.send(message("conversation.rename", "conversation" to conversation.id, "title" to named.title))
-            }
+        // A draft becomes a conversation on the bridge with its first message ([firstSent]).
+        val draft = conversation.id in drafts
+        val named = conversations.firstOrNull { it.id == conversation.id } ?: conversation
+        val outgoing = firstSent(named, draft, text)
+        var sent = false
+        for ((i, out) in outgoing.withIndex()) {
+            sent = connection?.send(message(out.type, *out.fields.toTypedArray())) == true
+            // Not started on the bridge: still a draft, and nothing else goes.
+            if (!sent && draft && i == 0) return
+            if (draft && i == 0) drafts -= conversation.id
         }
-        val sent = connection?.send(
-            message("message.send", "conversation" to conversation.id, "text" to text),
-        ) == true
         if (sent) awaiting[conversation.id] = true
     }
 
@@ -753,4 +758,23 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // What is queued is still written.
         saving.shutdown()
     }
+}
+
+/** A message the app sends to a bridge: its type and fields. */
+internal data class Outgoing(val type: String, val fields: List<Pair<String, Any?>>)
+
+/**
+ * What sending [text] in [conversation] sends, in order, on one connection.
+ * A [draft] becomes a conversation on the bridge with its first message
+ * (`conversation.new` first), and with the name the person gave it
+ * meanwhile, right after, so the bridge's unnamed confirmation does not stay.
+ */
+internal fun firstSent(conversation: Conversation, draft: Boolean, text: String): List<Outgoing> = buildList {
+    if (draft) {
+        add(Outgoing("conversation.new", listOf("conversation" to conversation.id, "agent" to conversation.agent)))
+        if (conversation.titledBy == "person" && conversation.title != null) {
+            add(Outgoing("conversation.rename", listOf("conversation" to conversation.id, "title" to conversation.title)))
+        }
+    }
+    add(Outgoing("message.send", listOf("conversation" to conversation.id, "text" to text)))
 }

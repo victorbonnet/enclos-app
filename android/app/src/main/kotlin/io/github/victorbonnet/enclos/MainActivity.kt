@@ -146,8 +146,13 @@ private fun Screens(model: AppModel) {
     val transition = rememberTransition(routes, label = "route")
     val scope = rememberCoroutineScope()
     val go = { to: Route ->
+        val leaving = (routes.targetState as? Route.Chat)?.takeIf { it != to }
         saved = to.save()
-        scope.launch { routes.animateTo(to) }
+        scope.launch {
+            routes.animateTo(to)
+            // A conversation's screen left, once it slid away: a draft with nothing sent goes.
+            leaving?.let { model.left(it.id) }
+        }
         Unit
     }
 
@@ -160,11 +165,20 @@ private fun Screens(model: AppModel) {
         try {
             progress.collect { event -> routes.seekTo(event.progress, Route.Tabs) }
             saved = Route.Tabs.save()
+            val leaving = routes.currentState
             routes.animateTo(Route.Tabs)
+            if (leaving is Route.Chat) model.left(leaving.id)
         } catch (_: CancellationException) {
             routes.animateTo(routes.currentState)
         }
     }
+    // A conversation the phone does not hold, once what it kept is read: a
+    // draft lost when the system stopped the app, or one forgotten or
+    // cleared while open. Back to the tabs rather than a blank screen.
+    val showing = routes.targetState
+    val missing = showing is Route.Chat && model.ready && model.conversations.none { it.id == showing.id }
+    LaunchedEffect(missing) { if (missing) go(Route.Tabs) }
+
     // A pairing link opened the app: to the pairing screen, which asks.
     val opened = model.openedLink.value
     LaunchedEffect(opened) { if (opened != null) go(Route.Pair) }

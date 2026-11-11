@@ -48,7 +48,7 @@ A conversation has a name: its agent's, from what was said in it (Hermes names e
 
 ### Agents
 
-Each paired host, with a filled square while connected (`connected · tailnet`) and an outline otherwise (why it is not); under it each sandbox, with its runtime and, once the bridge has reached the agent's plugin, what its channel does: `full channel` (messages both ways and messages on its own, the plugin announced `notify`) or `request/reply`. Under each sandbox its agents; tapping one opens a new conversation, a draft on this phone until its first message, which starts it on the bridge (`conversation.new`, then the message): a conversation opened and left leaves nothing behind. An action on the title's line pairs another host. A person sees only what is shared with them; the list never hints that more exists.
+Each paired host, with a filled square while connected (`connected · tailnet`) and an outline otherwise (why it is not); under it each sandbox, with its runtime and, once the bridge has reached the agent's plugin, what its channel does: `full channel` (messages both ways and messages on its own, the plugin announced `notify`) or `request/reply`. Under each sandbox its agents; tapping one opens a new conversation, a draft on this phone until its first message, which starts it on the bridge (`conversation.new`, then the message): a conversation opened and left leaves nothing behind, on the bridge or on the phone. A conversation screen whose conversation the phone does not hold (a draft lost when the system stopped the app, or one forgotten or cleared while open) goes back to the tabs. An action on the title's line pairs another host. A person sees only what is shared with them; the list never hints that more exists.
 
 ### Status
 
