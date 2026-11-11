@@ -33,7 +33,24 @@ data class RoutineOptions(val timezone: String, val features: Set<String>, val s
         return operations?.contains(operation) ?: (operation != "run" || "run" in features)
     }
     companion object {
-        fun from(m: JSONObject): RoutineOptions = RoutineOptions(m.getString("timezone"), m.routineStrings("features").toSet(), choices(m.optJSONArray("skills")), m.optJSONArray("models")?.let { a -> (0 until a.length()).map { a.getJSONObject(it).let { model -> RoutineModelChoice(model.getString("id"), model.getString("label"), model.routineText("provider")) } } }.orEmpty(), choices(m.optJSONArray("toolsets")), if (m.isNull("operations")) null else m.getJSONArray("operations").let { a -> (0 until a.length()).map(a::getString).toSet() })
+        fun from(m: JSONObject): RoutineOptions = RoutineOptions(
+            timezone = m.getString("timezone"),
+            features = m.routineStrings("features").toSet(),
+            skills = choices(m.optJSONArray("skills")),
+            models = m.optJSONArray("models")?.let { a ->
+                (0 until a.length()).map { a.getJSONObject(it).let { model -> RoutineModelChoice(model.getString("id"), model.getString("label"), model.routineText("provider")) } }
+            }.orEmpty(),
+            toolsets = choices(m.optJSONArray("toolsets")),
+            operations = operations(m),
+        )
+
+        /**
+         * `operations`, missing or null: a runtime that predates it, whose legacy controls stay
+         * (null). A list, even empty: exactly those operations. Anything else is unreadable.
+         */
+        private fun operations(m: JSONObject): Set<String>? =
+            if (m.isNull("operations")) null else m.getJSONArray("operations").let { a -> (0 until a.length()).map(a::getString).toSet() }
+
         fun choices(a: JSONArray?): List<RoutineChoice> = a?.let { (0 until it.length()).map { i -> it.getJSONObject(i).let { c -> RoutineChoice(c.getString("id"), c.getString("label")) } } }.orEmpty()
     }
 }
