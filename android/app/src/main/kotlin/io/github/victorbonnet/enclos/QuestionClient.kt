@@ -10,7 +10,7 @@ data class QuestionRequest(val id: String, val question: QuestionInfo, val answe
         incoming.key == question.key && incoming.conversation == question.conversation && incoming.agent == question.agent
 
     fun confirms(incoming: QuestionInfo): Boolean = incoming.revision > question.revision &&
-        question.copy(state = incoming.state, revision = incoming.revision, answer = incoming.answer) == incoming &&
+        question.copy(state = incoming.state, revision = incoming.revision, answer = incoming.answer, confirmed = incoming.confirmed) == incoming &&
         if (answer == QuestionAnswer.Skip) incoming.state == QuestionState.Skipped && incoming.answer == null
         else incoming.state == QuestionState.Answered && incoming.answer?.normalized() == answer.normalized()
 

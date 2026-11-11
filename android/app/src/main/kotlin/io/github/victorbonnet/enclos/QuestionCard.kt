@@ -17,6 +17,22 @@ import io.github.victorbonnet.enclos.ui.*
 /** What every question card says first, in the app's words. */
 const val QUESTION_FRAME = "The agent asks · answering changes no access"
 
+/**
+ * What a settled card says. An answer or a skip that is not the one a paired device
+ * submitted (`confirmed` false) is the agent's report, and says so. Answered may come
+ * with no answer (one the runtime took that the contract cannot carry): no choice shows.
+ */
+internal fun questionStatus(question: QuestionInfo): String {
+    val reported = if (question.confirmed) "" else ", as the agent reports"
+    return when (question.state) {
+        QuestionState.Answered -> "Answered$reported"
+        QuestionState.Skipped -> "Skipped$reported"
+        QuestionState.Expired -> "Expired · ask the agent for a new question."
+        QuestionState.Cancelled -> "Cancelled"
+        QuestionState.Pending -> ""
+    }
+}
+
 /** Typed native questions only; readable history stays the fallback for older hosts. */
 @Composable
 fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
@@ -58,13 +74,7 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
             )
         }
         if (terminal) {
-            Text(when (question.state) {
-                QuestionState.Answered -> "Answered"
-                QuestionState.Skipped -> "Skipped"
-                QuestionState.Expired -> "Expired · ask the agent for a new question."
-                QuestionState.Cancelled -> "Cancelled"
-                QuestionState.Pending -> ""
-            }, style = Type.small, color = p.textMuted)
+            Text(questionStatus(question), style = Type.small, color = p.textMuted)
             if (confirmed is QuestionAnswer.Choices) {
                 Text("Selected: ${confirmed.indices.joinToString("; ") { question.choices[it] }}", style = Type.body, color = p.text)
             }

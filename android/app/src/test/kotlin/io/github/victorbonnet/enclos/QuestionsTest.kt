@@ -38,7 +38,8 @@ class QuestionsTest {
             question.copy(choices = List(13) { "Choice" }), question.copy(choices = listOf(" ")),
             question.copy(choices = emptyList(), multiple = true), question.copy(text = "\u0000skipped"),
             question.copy(text = "🤖".repeat(6144)), question.copy(text = "\n".repeat(12 * 1024) + "x"),
-            question.copy(state = QuestionState.Answered), question.copy(answer = QuestionAnswer.Skip),
+            question.copy(confirmed = true), question.copy(state = QuestionState.Answered, answer = QuestionAnswer.Skip),
+            question.copy(answer = QuestionAnswer.Skip),
             question.copy(state = QuestionState.Skipped, answer = QuestionAnswer.Text("No")), question.copy(revision = -1),
         )) assertTrue(invalid.toString().take(80), runCatching { invalid.validate() }.isFailure)
         for (answer in listOf(
@@ -63,6 +64,30 @@ class QuestionsTest {
         for (text in listOf("ok\u200D", "a\tb", "a\r\nb", "\u00AD")) {
             assertTrue(text, runCatching { question.validateAnswer(QuestionAnswer.Text(text)) }.isFailure)
         }
+    }
+
+    /** The cases of enclos-protocol's answered-without-answer and `confirmed` checks. */
+    @Test fun answered_may_carry_no_answer_and_only_a_settled_question_is_confirmed() {
+        val answeredBlind = question.copy(state = QuestionState.Answered, revision = 1)
+        answeredBlind.validate()
+        question.copy(state = QuestionState.Skipped, revision = 1, confirmed = true).validate()
+        assertTrue(runCatching { question.copy(confirmed = true).validate() }.isFailure)
+        assertEquals("Answered, as the agent reports", questionStatus(answeredBlind))
+        assertEquals("Answered", questionStatus(answeredBlind.copy(answer = QuestionAnswer.Choices(listOf(0)), confirmed = true)))
+        assertEquals("Answered, as the agent reports", questionStatus(answeredBlind.copy(answer = QuestionAnswer.Choices(listOf(0)))))
+        assertEquals("Skipped, as the agent reports", questionStatus(question.copy(state = QuestionState.Skipped, revision = 1)))
+        assertEquals("Skipped", questionStatus(question.copy(state = QuestionState.Skipped, revision = 1, confirmed = true)))
+        assertEquals("Cancelled", questionStatus(question.copy(state = QuestionState.Cancelled, revision = 1)))
+        // A later revision may not turn a settled result into another one, confirmed or not.
+        val reported = answeredBlind.copy(answer = QuestionAnswer.Choices(listOf(0)))
+        assertEquals(reported, newestQuestion(reported, reported.copy(revision = 2, confirmed = true)))
+        assertEquals(reported.copy(confirmed = true), newestQuestion(question, reported.copy(confirmed = true)))
+    }
+
+    @Test fun labels_that_differ_only_by_joiners_are_not_distinct() {
+        val heart = points(0x2764)
+        assertTrue(runCatching { question.copy(choices = listOf(heart, heart + points(0xFE0F))).validate() }.isFailure)
+        question.copy(choices = listOf(heart + points(0xFE0F), "Deny")).validate()
     }
 
     /** Written as code points, so the source holds no invisible character. */

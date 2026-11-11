@@ -40,6 +40,12 @@ data class QuestionInfo(
     val state: QuestionState,
     val revision: Long,
     val answer: QuestionAnswer? = null,
+    /**
+     * Whether this settlement is the one a paired device submitted, matched by its request.
+     * False while pending and for a settlement the agent's channel reports on its own, which
+     * the card shows as the agent's report rather than the person's choice.
+     */
+    val confirmed: Boolean = false,
 ) {
     val key: QuestionKey get() = QuestionKey(host, id)
 
@@ -48,17 +54,17 @@ data class QuestionInfo(
         require(idValid(id) && idValid(conversation) && agentValid(agent)) { "Invalid question identity." }
         require(revision >= 0) { "Invalid question revision." }
         validateDefinition()
-        when (state) {
-            QuestionState.Answered -> {
-                require(answer != null && answer != QuestionAnswer.Skip) { "Question state and answer disagree." }
-                validateAnswer(answer)
-            }
-            else -> require(answer == null) { "Question state and answer disagree." }
+        require(!confirmed || state != QuestionState.Pending) { "A pending question has no confirmed answer." }
+        // Answered may come without an answer: the runtime accepted one this contract cannot carry.
+        if (answer != null) {
+            require(state == QuestionState.Answered && answer != QuestionAnswer.Skip) { "Question state and answer disagree." }
+            validateAnswer(answer)
         }
         val metadata = definitionJson().dropLast(1) +
             ",\"conversation\":${jsonString(conversation)},\"agent\":${jsonString(agent)}" +
             ",\"state\":${jsonString(state.wire)},\"revision\":$revision" +
-            (answer?.let { ",\"answer\":${answerJsonText(it)}" } ?: "") + "}"
+            (answer?.let { ",\"answer\":${answerJsonText(it)}" } ?: "") +
+            (if (confirmed) ",\"confirmed\":true" else "") + "}"
         require(metadata.utf8Size() <= MAX_QUESTION_INFO_BYTES) { "This question metadata is too large." }
     }
 
@@ -68,7 +74,8 @@ data class QuestionInfo(
         require(choices.size <= MAX_CHOICES) { "A question supports at most $MAX_CHOICES choices." }
         require(!multiple || choices.isNotEmpty()) { "Multiple selection requires choices." }
         require(choices.all { textValid(it, lines = false) }) { "Invalid choice label." }
-        require(choices.distinct().size == choices.size) { "Choice labels must be distinct." }
+        // Distinct once joiners are set aside ([Visible.bare]): two labels must not read the same.
+        require(choices.map(Visible::bare).distinct().size == choices.size) { "Choice labels must be distinct." }
         require(definitionJson().utf8Size() <= MAX_QUESTION_BYTES) { "This question is too large." }
     }
 
@@ -94,6 +101,7 @@ data class QuestionInfo(
         .put("id", id).put("text", text).put("choices", JSONArray(choices)).put("multiple", multiple)
         .put("conversation", conversation).put("agent", agent).put("state", state.wire).put("revision", revision)
         .apply { answer?.let { put("answer", it.json()) } }
+        .apply { if (confirmed) put("confirmed", true) }
 
     /** The definition as serde writes it, for its size. */
     private fun definitionJson(): String =
@@ -117,9 +125,15 @@ data class QuestionInfo(
             val state = QuestionState.entries.firstOrNull { it.wire == string("state") }
                 ?: throw IllegalArgumentException("Invalid state")
             val answer = if (json.has("answer") && !json.isNull("answer")) answerFrom(json.getJSONObject("answer")) else null
+            // serde's `default`: absent is false, and anything but a boolean is refused.
+            val confirmed = if (json.has("confirmed")) {
+                json.get("confirmed") as? Boolean ?: throw IllegalArgumentException("Invalid confirmed")
+            } else {
+                false
+            }
             val info = QuestionInfo(
                 host, string("id"), string("text"), choices, multiple, string("conversation"), string("agent"), state,
-                (revision as Number).toLong(), answer,
+                (revision as Number).toLong(), answer, confirmed,
             )
             info.validate()
             return info.normalized()
@@ -153,8 +167,9 @@ fun keptQuestions(
 fun newestQuestion(current: QuestionInfo?, incoming: QuestionInfo): QuestionInfo {
     if (current == null || current.key != incoming.key) return incoming
     if (incoming.revision <= current.revision) return current
-    if (current.copy(state = incoming.state, revision = incoming.revision, answer = incoming.answer) != incoming) return current
-    if (current.state != QuestionState.Pending && (current.state != incoming.state || current.answer != incoming.answer)) return current
+    if (current.copy(state = incoming.state, revision = incoming.revision, answer = incoming.answer, confirmed = incoming.confirmed) != incoming) return current
+    if (current.state != QuestionState.Pending &&
+        (current.state != incoming.state || current.answer != incoming.answer || current.confirmed != incoming.confirmed)) return current
     return incoming
 }
 

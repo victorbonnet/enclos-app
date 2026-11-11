@@ -176,6 +176,20 @@ class QuestionClientTest {
         }
     }
 
+    @Test fun a_confirmed_receipt_finishes_and_an_answer_the_card_cannot_carry_does_not() {
+        val f = Fixture(); f.ready(question)
+        val choice = f.client.submit(question, QuestionAnswer.Choices(listOf(1)))!!
+        // Answered with no answer: the agent took something else; never this device's receipt.
+        assertFalse(f.client.result("mac", choice, question.copy(state = QuestionState.Answered, revision = 1)))
+        assertEquals(QuestionState.Answered, f.client.questions[question.key]?.state)
+        assertTrue(question.key in f.client.pending)
+        val g = Fixture(); g.ready(question)
+        val mine = g.client.submit(question, QuestionAnswer.Choices(listOf(1)))!!
+        val confirmed = question.copy(state = QuestionState.Answered, revision = 1, answer = QuestionAnswer.Choices(listOf(1)), confirmed = true)
+        assertTrue(g.client.result("mac", mine, confirmed))
+        assertEquals(confirmed, g.client.questions[question.key])
+    }
+
     @Test fun check_again_settles_an_unconfirmed_outcome_over_the_open_connection() {
         val f = Fixture(); f.ready(question)
         assertFalse(f.client.canCheckAgain(question))
