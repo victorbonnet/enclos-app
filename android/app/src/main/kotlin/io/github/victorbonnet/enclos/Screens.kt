@@ -53,6 +53,8 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -149,7 +151,24 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
     val sorted = model.conversations.sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: Long.MAX_VALUE }
     var query by rememberSaveable { mutableStateOf("") }
     var filter by remember { mutableStateOf<InboxFilter>(InboxFilter.All) }
-    val found = search(sorted, { model.lines[it].orEmpty() }, model::unread, query, filter)
+    // What search reads, taken here on the main thread: lists that are
+    // replaced, never changed, when a message arrives.
+    val said = sorted.associate { it.id to model.lines[it.id].orEmpty() }
+    val unread = sorted.associate { it.id to model.unread(it.id) }
+    val listed = remember(sorted, said, unread, filter) { search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, "", filter) }
+    // A query reads every message: searched off the main thread, each
+    // message folded once (model.folds); the last result stays meanwhile.
+    var searched by remember { mutableStateOf<List<Found>?>(null) }
+    LaunchedEffect(sorted, said, unread, query, filter) {
+        searched = if (query.isBlank()) {
+            null
+        } else {
+            withContext(Dispatchers.Default) {
+                search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, query, filter, model.folds::of)
+            }
+        }
+    }
+    val found = if (query.isBlank()) listed else searched ?: listed
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             LargeTitle("Inbox")
@@ -485,9 +504,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     }
     var renaming by remember { mutableStateOf(false) }
     if (renaming) {
-        RenameDialog(conversation.title, onDismiss = { renaming = false }) {
-            model.rename(conversation, it)
-            renaming = false
+        RenameDialog(conversation.title, live, conversation.host, onDismiss = { renaming = false }) {
+            model.rename(conversation, it).also { sent -> if (sent) renaming = false }
         }
     }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
@@ -551,12 +569,16 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
 
 /**
  * Names the conversation: the person's name replaces the agent's, which
- * then names it no more; clearing it lets the agent name it again.
+ * then names it no more; clearing it lets the agent name it again. The
+ * bridge keeps the name, so it is saved only while [host] is connected
+ * ([live]); [onSave] says whether it was.
  */
 @Composable
-private fun RenameDialog(current: String?, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+private fun RenameDialog(current: String?, live: Boolean, host: String, onDismiss: () -> Unit, onSave: (String) -> Boolean) {
     val p = palette
     var name by remember { mutableStateOf(current.orEmpty()) }
+    var refused by remember { mutableStateOf(false) }
+    val save = { title: String -> refused = !onSave(title) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     AlertDialog(
@@ -585,13 +607,17 @@ private fun RenameDialog(current: String?, onDismiss: () -> Unit, onSave: (Strin
                     },
                 )
                 Gap(8.dp)
-                Text("The agent names a conversation until you do.", style = Type.small, color = p.textMuted)
+                Text(
+                    if (!live || refused) "Not connected to $host: the name can be saved once it is." else "The agent names a conversation until you do.",
+                    style = Type.small,
+                    color = p.textMuted,
+                )
             }
         },
-        confirmButton = { DialogButton("Save", enabled = name.isNotBlank()) { onSave(name) } },
+        confirmButton = { DialogButton("Save", enabled = live && name.isNotBlank()) { save(name) } },
         dismissButton = {
             Row {
-                if (current != null) DialogButton("Clear name") { onSave("") }
+                if (current != null) DialogButton("Clear name", enabled = live) { save("") }
                 DialogButton("Cancel", onClick = onDismiss)
             }
         },

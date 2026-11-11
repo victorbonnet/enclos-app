@@ -65,4 +65,21 @@ class SearchTest {
         assertEquals(emptyList<IntRange>(), matches("Météo", "  "))
         assertEquals(emptyList<IntRange>(), matches("Météo", "paris"))
     }
+
+    @Test
+    fun the_words_may_be_in_different_messages_and_the_row_shows_the_newest() {
+        // "failing" is in the person's message, "412" in the agent's answer.
+        val found = find("failing 412").single()
+        assertEquals("c-2", found.conversation.id)
+        assertEquals(4L, found.match?.seq)
+    }
+
+    @Test
+    fun each_message_is_folded_once_however_often_it_is_searched() {
+        var folded = 0
+        val folds = Folds { folded++; fold(words(it)) }
+        repeat(3) { search(all, { lines[it].orEmpty() }, { 0 }, "rain", InboxFilter.All, folds::of) }
+        assertEquals(4, folded)
+        assertEquals(2L, search(all, { lines[it].orEmpty() }, { 0 }, "rain", InboxFilter.All, folds::of).single().match?.seq)
+    }
 }

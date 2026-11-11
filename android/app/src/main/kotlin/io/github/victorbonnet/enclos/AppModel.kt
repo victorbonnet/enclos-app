@@ -42,6 +42,32 @@ data class Conversation(
     val titledBy: String? = null,
 )
 
+/**
+ * A conversation's name as the bridge sent it, ready to show: without the
+ * characters that change how text reads unseen (an agent names it from what
+ * was said), and none when nothing visible is left.
+ */
+fun shownTitle(sent: String?): String? = sent?.let { Visible.stripped(it).trim() }?.ifEmpty { null }
+
+/**
+ * Names [conversation] in [conversations] (an empty [title] clears its
+ * name) once [send] passed the name to its bridge. When it could not (not
+ * connected), nothing changes: a name never looks saved, then comes back
+ * as it was at the next sync. Returns whether it was sent.
+ */
+fun renamed(conversations: MutableList<Conversation>, conversation: Conversation, title: String, send: (String) -> Boolean): Boolean {
+    val name = title.trim()
+    if (!send(name)) return false
+    val at = conversations.indexOfFirst { it.id == conversation.id }
+    if (at >= 0) {
+        conversations[at] = conversations[at].copy(
+            title = name.ifEmpty { null },
+            titledBy = if (name.isEmpty()) null else "person",
+        )
+    }
+    return true
+}
+
 /** The pairing in progress: what the link said, and how far it went. */
 data class Pairing(
     val host: String,
@@ -289,7 +315,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     host.name,
                     m.getString("agent"),
                     id,
-                    m.optString("title").ifBlank { null },
+                    shownTitle(m.optString("title")),
                     m.optString("titled_by").ifBlank { null },
                 )
                 val at = conversations.indexOfFirst { it.id == id }
@@ -337,21 +363,19 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Names [conversation] (an empty [title] clears its name, and the agent
-     * may name it again); shown at once, and confirmed by the bridge.
+     * may name it again): sent to the bridge, then shown. Returns false,
+     * changing nothing, when its host is not connected.
      */
-    fun rename(conversation: Conversation, title: String) {
-        val name = title.trim()
-        val at = conversations.indexOfFirst { it.id == conversation.id }
-        if (at >= 0) {
-            conversations[at] = conversation.copy(
-                title = name.ifEmpty { null },
-                titledBy = if (name.isEmpty()) null else "person",
-            )
+    fun rename(conversation: Conversation, title: String): Boolean =
+        renamed(conversations, conversation, title) { name ->
+            connected(conversation.host) &&
+                connections[conversation.host]?.send(
+                    message("conversation.rename", "conversation" to conversation.id, "title" to name),
+                ) == true
         }
-        connections[conversation.host]?.send(
-            message("conversation.rename", "conversation" to conversation.id, "title" to name),
-        )
-    }
+
+    /** Each message's folded words, for search, kept while the app runs. */
+    val folds = Folds()
 
     fun send(conversation: Conversation, text: String) {
         said.remove(conversation.host)
