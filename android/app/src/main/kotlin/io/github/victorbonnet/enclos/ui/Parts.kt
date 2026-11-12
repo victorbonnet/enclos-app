@@ -254,7 +254,13 @@ fun DaySeparator(text: String) {
  * sent on its own (a cron job's, say) carries [header] above its text.
  */
 @Composable
-fun Bubble(text: String, time: String, outgoing: Boolean, header: String? = null) {
+fun Bubble(
+    text: String,
+    time: String,
+    outgoing: Boolean,
+    header: String? = null,
+    files: (@Composable () -> Unit)? = null,
+) {
     val p = palette
     Box(Modifier.fillMaxWidth(), contentAlignment = if (outgoing) Alignment.CenterEnd else Alignment.CenterStart) {
         val shape = if (outgoing) Shapes.bubbleOut else Shapes.bubbleIn
@@ -267,10 +273,15 @@ fun Bubble(text: String, time: String, outgoing: Boolean, header: String? = null
                     Text(header, style = Type.meta, color = p.accent)
                 }
             }
+            // Its files first (an image the agent made), then its words.
+            files?.let {
+                it()
+                if (text.isNotBlank()) Gap(8.dp)
+            }
             // The agent writes markdown, drawn; what the person typed shows as typed.
             if (outgoing) {
                 Text(text, style = Type.message, color = p.buttonText)
-            } else {
+            } else if (text.isNotBlank()) {
                 SelectionContainer { MarkdownText(text, p.text) }
             }
             Text(

@@ -105,6 +105,8 @@ Nothing in a message is fetched or run:
 
 The person's own messages are not markdown: they show as typed. Previews (inbox, and later notifications) are the words without the marks.
 
+**Files.** An agent's message may carry files: an image it made, a chart, a document (enclos `docs/protocol.md`, Files). The app fetches each from the bridge over the conversation's connection, in parts, when the message is first shown: on an unmetered network (Wi-Fi), any file up to the bridge's 25 MiB; on a metered one (mobile data, a hotspot, as the phone's system counts it), a file above 10 MB only when tapped, so an agent cannot make the phone pull it over mobile data unasked, and by itself once the phone is on an unmetered network again. With no network, or before the system says, the network counts as metered, and keeps it in its cache (never backed up), in a folder per host and file; a file whose id is not of the bridge's form (letters, digits and `-`, as a UUID) is not kept. A file's name shows without the characters that change how text reads unseen (the app's `Visible` rule): `report` U+202E `fdp.html` does not read as a PDF. An image shows in the bubble, above the words, decoded at the screen's size, in a box of its own shape held between 1:3 and 3:1, the image fitted inside; tapped, it opens full screen, edge to edge, on near black in both themes (as photo viewers do: the image is the only colour), with Back, its name and Share over it on a shade, which a tap on the image hides or shows. Pinch zooms it, up to 6×, around the fingers; while zoomed it moves with a finger, its edges held at the screen's; a double-tap zooms 2.5× on that point, or back to the whole image. It is decoded at up to 4,096 px on its longest side, to stay sharp when zoomed; an image is never decoded above 64 MB in memory, a smaller sample being taken (Android draws no bitmap above 100 MB). An image Android cannot decode (an SVG chart, a damaged file) shows as another file does. Another file shows as a line with its name and size; tapped, it is shared. Share hands that one file to another app through the system's share sheet. A file that did not come says why and is fetched again when tapped: a fetch the connection broke, a part out of order, or a file the phone could not write (storage full); it goes on from where it was. A message with files and no words previews as "Image", or the file's name.
+
 The runtime's plugin tells the agent what the app draws, so that it formats when it helps (Hermes: the plugin's `platform_hint`, in enclos).
 
 ## 6. Motion
@@ -145,6 +147,7 @@ Light or dark: the system's setting by default. Once the person chooses (System 
 | Markdown | commonmark-java (+ GFM tables, strikethrough, autolink), drawn in Compose | Apple's swift-markdown (cmark-gfm), drawn in SwiftUI |
 | Theme kept | app preferences; `UiModeManager.setApplicationNightMode` on Android 12+ | `UserDefaults`; `preferredColorScheme` |
 | Animations off | Remove animations (animator duration scale 0) | Reduce Motion |
+| Files | cache `attachments/<id>/<name>`; shared through a `FileProvider` and `ACTION_SEND` | Caches directory; shared through `ShareLink` / `UIActivityViewController` |
 | Push (not built) | FCM, one notification channel per agent | FCM through APNs, the conversation as thread identifier |
 
 ## Not built yet
@@ -154,4 +157,5 @@ Push notifications (the bridge encrypts a preview for the device; the app decryp
 ## To verify
 
 - **Transfer to a new phone** excludes the app's data: the rules say so, but no transfer was run (Android).
+- **A metered network through Tailscale**: Android counts the VPN as metered when the network under it is, so a large file waits on mobile data and comes by itself on Wi-Fi; the rule is tested, the network state on a phone was not (Android).
 - **iOS** equivalents in the table above: none is built.

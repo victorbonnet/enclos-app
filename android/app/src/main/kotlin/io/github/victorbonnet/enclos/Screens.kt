@@ -99,6 +99,7 @@ import io.github.victorbonnet.enclos.ui.TextLink
 import io.github.victorbonnet.enclos.ui.Type
 import io.github.victorbonnet.enclos.ui.Motion
 import io.github.victorbonnet.enclos.ui.UnreadBadge
+import io.github.victorbonnet.enclos.ui.Files
 import io.github.victorbonnet.enclos.ui.ToolSteps
 import io.github.victorbonnet.enclos.ui.WorkingBubble
 import io.github.victorbonnet.enclos.ui.palette
@@ -573,6 +574,9 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             time = Times.clock(line.time),
                             outgoing = line.from != "agent",
                             header = if (line.kind == "notify") ON_ITS_OWN else null,
+                            files = line.attachments.takeIf { it.isNotEmpty() }?.let { attached ->
+                                { Files(attached, model.files) { model.fetch(conversation.host, it) } }
+                            },
                         )
                     }
                 }

@@ -64,8 +64,12 @@ class Folds(private val folding: (Line) -> String = { fold(words(it)) }) {
     fun of(conversation: String, line: Line): String = done.getOrPut(conversation to line.seq) { folding(line) }
 }
 
-/** A message's words: the agent's without the marks of its markdown. */
-fun words(line: Line): String = if (line.from == "agent") Markdown.plain(line.text) else line.text
+/** A message's words: the agent's without the marks of its markdown; a file alone, by what it is. */
+fun words(line: Line): String {
+    val text = if (line.from == "agent") Markdown.plain(line.text) else line.text
+    if (text.isNotBlank() || line.attachments.isEmpty()) return text
+    return line.attachments.joinToString(", ") { if (it.image) "Image" else it.name }
+}
 
 /** [text] in lower case, without accents, its spaces single: what search compares. */
 fun fold(text: String): String =
