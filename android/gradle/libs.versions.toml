@@ -1,5 +1,5 @@
 [versions]
-androidGradlePlugin = "9.5.0"
+androidGradlePlugin = "9.5.1"
 # The NDK that compiles the Rust core (scripts/build-core-android.sh, CI)
 ndk = "30.0.16248370"
 kotlin = "2.4.21"
