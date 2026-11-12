@@ -53,6 +53,8 @@ data class Line(
     val kind: String,
     val time: Long,
     val attachments: List<Attachment> = emptyList(),
+    /** The tools the agent ran for this answer, which the bridge does not keep: this phone does. */
+    val steps: List<Step> = emptyList(),
 )
 
 /** A file of a message, fetched from the bridge when it is shown. */
@@ -124,6 +126,10 @@ data class Pairing(
 /** What the screens show, kept across the screens and updated on the main thread. */
 class AppModel(application: Application) : AndroidViewModel(application) {
     private val hosts = Hosts(application)
+    /** What the bridges sent, kept on the phone: shown at once when the app starts. */
+    private val store = Store(application)
+    /** Writes to [store], in order, off the main thread. */
+    private val saving = Executors.newSingleThreadExecutor()
     private val reads = application.getSharedPreferences("reads", Context.MODE_PRIVATE)
     private val main = Handler(Looper.getMainLooper())
     /** Where the pairing keys are made: StrongBox can take seconds. */
@@ -145,6 +151,87 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val agents = mutableStateListOf<Agent>()
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
+
+    /**
+     * Whether what the phone kept for the first screens is read. Until then
+     * the launch screen stays up (so the app never opens empty and fills
+     * in) and no connection opens (so `sync` knows where the phone stopped).
+     */
+    var ready = false
+        private set
+    /** By host: the newest `seq` kept on the phone, which `sync` starts after. */
+    private val kept = mutableMapOf<String, Long>()
+
+    init {
+        // Off the main thread, on the writes' own, before any write: first
+        // what the first screens show, then every message, merged in.
+        saving.execute {
+            val recent = read { recent() }
+            // The connections open next: their HTTP client is built here, not on the main thread.
+            BridgeConnection.prepare()
+            ui {
+                if (recent != null) {
+                    agents.addAll(recent.agents)
+                    conversations.addAll(recent.conversations)
+                    lines.putAll(recent.lines)
+                    kept.putAll(recent.kept)
+                }
+                ready = true
+                if (foreground) foreground()
+            }
+            val all = read { lines() } ?: return@execute
+            ui {
+                val known = conversations.mapTo(HashSet()) { it.id }
+                all.forEach { (id, older) ->
+                    if (id !in known) return@forEach
+                    val now = lines[id].orEmpty()
+                    val both = merged(older, now)
+                    if (both !== now) lines[id] = both
+                }
+            }
+        }
+    }
+
+    /** Reads what the phone kept; on a failure, the bridge's sync still brings what it has. */
+    private fun <T> read(query: Store.() -> T): T? = try {
+        store.query()
+    } catch (e: android.database.SQLException) {
+        android.util.Log.w("enclos", "could not read what the phone kept: ${e.javaClass.simpleName}")
+        null
+    }
+
+    /**
+     * Keeps something on the phone. A conversation or the agents not kept
+     * come again at the next sync, which sends them all; a message goes
+     * through [keep] instead.
+     */
+    private fun save(write: Store.() -> Unit) = saving.execute {
+        try {
+            store.write()
+        } catch (e: android.database.SQLException) {
+            // Its type only: nothing of what was said goes to logcat.
+            android.util.Log.w("enclos", "not kept on the phone: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /** Which messages may still be kept this run; used on [saving]'s thread only. */
+    private val gaps = Gaps()
+
+    /**
+     * Keeps a message of [host]. `sync` starts after the newest message kept,
+     * so one that could not be written (a full disk) must not be followed by
+     * a later one: after a failed write, no later message of that host is
+     * kept this run, and the next start syncs from before the one that failed.
+     */
+    private fun keep(host: String, conversation: String, line: Line) = saving.execute {
+        if (!gaps.keeps(host, line.seq)) return@execute
+        try {
+            store.message(host, conversation, line)
+        } catch (e: android.database.SQLException) {
+            gaps.failed(host, line.seq)
+            android.util.Log.w("enclos", "not kept on the phone: ${e.javaClass.simpleName}")
+        }
+    }
     /** By conversation: whether the agent said it is writing (`typing`). */
     val typing = mutableStateMapOf<String, Boolean>()
     /** By conversation: a message was sent and the agent has not answered yet. */
@@ -153,11 +240,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private val unanswered = Awaiting()
     /** By conversation: the tools the agent runs now, live from the bridge. */
     val steps = mutableStateMapOf<String, List<Step>>()
-    /**
-     * By the `seq` of the agent's message they led to: the steps of that
-     * answer. In memory only: the bridge does not keep steps.
-     */
-    val stepsOf = mutableStateMapOf<Long, List<Step>>()
     /** By conversation: the last message read on this device, kept across launches. */
     private val lastRead = mutableStateMapOf<String, Long>().apply {
         reads.all.forEach { (id, seq) -> if (seq is Long) put(id, seq) }
@@ -278,7 +360,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             connection = BridgeConnection(
                 url = parsed.url,
                 bridgeKey = parsed.key,
-                noisePrivate = noise.privateKey,
+                noisePrivate = { noise.privateKey },
                 first = { session ->
                     message(
                         "pair.request",
@@ -318,18 +400,17 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** [host] was paired, in place of [old] if it replaced it. */
     private fun pairedWith(host: Host, old: Host?) {
+        conversations.filter { it.host == host.name }.forEach {
+            typing.remove(it.id)
+            answered(it.id)
+            steps.remove(it.id)
+        }
+        // Paired again, as another device: what the host sent before is forgotten.
+        forget(host.name)
         paired.removeAll { it.name == host.name }
         paired.add(host)
         // Another bridge under the same name: nothing of the old one stays.
         if (old != null && !old.bridgeKey.contentEquals(host.bridgeKey)) {
-            agents.removeAll { it.host == host.name }
-            conversations.filter { it.host == host.name }.forEach {
-                lines.remove(it.id)
-                typing.remove(it.id)
-                answered(it.id)
-                steps.remove(it.id)
-            }
-            conversations.removeAll { it.host == host.name }
             status.remove(host.name)
             said.remove(host.name)
         }
@@ -346,7 +427,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Opens the connection to [host]: `auth`, then its agents and every
-     * message since the start. [foreground] opens it, and [ended] again.
+     * message after the newest kept. [foreground] opens it, and [ended] again.
      */
     fun connect(host: Host) {
         connections.remove(host.name)?.close()
@@ -356,7 +437,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connection = BridgeConnection(
             url = host.url,
             bridgeKey = host.bridgeKey,
-            noisePrivate = Keys.unwrap(host.noiseKeyWrapped),
+            noisePrivate = { Keys.unwrap(host.noiseKeyWrapped) },
             first = { session ->
                 message(
                     "auth",
@@ -408,10 +489,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         main.postDelayed({ if (foreground && host.name !in connections) reopen(host.name) }, backoff(n))
     }
 
-    /** The app came to the foreground: opens the connection of every host that has none. */
+    /**
+     * The app came to the foreground: opens the connection of every host
+     * that has none, once what the phone kept is read ([ready]).
+     */
     fun foreground() {
         foreground = true
-        paired.filter { it.name !in connections }.forEach { connect(it) }
+        if (ready) paired.filter { it.name !in connections }.forEach { connect(it) }
     }
 
     /** The app left the foreground: its connections stay up while the phone lets them. */
@@ -424,17 +508,26 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun received(host: Host, m: JSONObject) {
+        // A conversation is known by its id alone: one another host already
+        // has stays that host's, whatever this host's bridge sends about it.
+        if (ownedByAnother(conversations, host.name, m.optString("conversation"))) {
+            android.util.Log.w("enclos", "${m.optString("type")} for another host's conversation: ignored")
+            return
+        }
         when (m.optString("type")) {
             "authenticated" -> {
                 failures.remove(host.name)
                 status[host.name] = "connected as ${m.optString("person")}"
                 connections[host.name]?.send(message("agents"))
-                connections[host.name]?.send(message("sync", "since" to 0))
+                // What is on the phone is kept: only what is newer comes.
+                connections[host.name]?.send(message("sync", "since" to since(host.name)))
             }
             "agents.list" -> {
                 val list = agentsIn(host.name, m)
                 agents.removeAll { it.host == host.name }
                 agents.addAll(list)
+                val listed = agents.filter { it.host == host.name }
+                save { agents(host.name, listed) }
             }
             // A conversation and its name: at each sync (so an empty one is
             // known too), when one starts, and when its name changes.
@@ -448,23 +541,28 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     m.optString("titled_by").ifBlank { null },
                 )
                 val at = conversations.indexOfFirst { it.id == id }
-                if (at < 0) conversations.add(known) else if (conversations[at] != known) conversations[at] = known
+                if (at < 0 || conversations[at] != known) {
+                    if (at < 0) conversations.add(known) else conversations[at] = known
+                    save { conversation(known) }
+                }
             }
             "message" -> {
                 val id = m.getString("conversation")
-                val line = lineIn(m)
+                var line = lineIn(m)
                 if (conversations.none { it.id == id }) {
-                    conversations.add(Conversation(host.name, m.getString("agent"), id))
+                    val started = Conversation(host.name, m.getString("agent"), id)
+                    conversations.add(started)
+                    save { conversation(started) }
                 }
                 if (line.from == "agent") {
                     val agent = m.getString("agent")
                     // Only a reply answers the person; any other kind (notify,
                     // and later ones) leaves the turn and its steps alone.
                     if (line.kind == "reply") {
-                        // An answer ends the turn: the steps that led to it go with it.
+                        // An answer ends the turn: the steps that led to it go with it, kept with it.
                         typing.remove(id)
                         answered(id)
-                        steps.remove(id)?.takeIf { it.isNotEmpty() }?.let { stepsOf[line.seq] = it }
+                        steps.remove(id)?.let { line = line.copy(steps = it) }
                     } else if (agents.none { it.host == host.name && it.name == agent && "typing" in it.capabilities }) {
                         // A message on its own (a cron job's) while the agent
                         // works keeps the turn's steps and its working state;
@@ -479,7 +577,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 val now = lines[id].orEmpty()
-                if (now.none { it.seq == line.seq }) lines[id] = (now + line).sortedBy { it.seq }
+                if (now.none { it.seq == line.seq }) {
+                    lines[id] = (now + line).sortedBy { it.seq }
+                    keep(host.name, id, line)
+                }
             }
             "typing" -> {
                 val id = m.getString("conversation")
@@ -690,10 +791,66 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         reopen(name)
     }
 
+    /** The newest message from [host] on the phone, which `sync` starts after. */
+    private fun since(host: String): Long {
+        val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
+        val shown = ids.maxOfOrNull { lines[it]?.lastOrNull()?.seq ?: 0 } ?: 0
+        return maxOf(shown, kept[host] ?: 0)
+    }
+
+    /** Forgets what [host] sent, on screen and on the phone. */
+    private fun forget(host: String) {
+        val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
+        conversations.removeAll { it.host == host }
+        ids.forEach { lines.remove(it) }
+        agents.removeAll { it.host == host }
+        kept.remove(host)
+        saving.execute { gaps.clear(host) }
+        save { forget(host) }
+    }
+
     override fun onCleared() {
         connections.values.forEach { it.close() }
         work.shutdown()
         disk.shutdown()
+        // What is queued is still written.
+        saving.shutdown()
+    }
+}
+
+/**
+ * [older], every message the phone kept of a conversation, merged with
+ * [now], what is shown: the newest of [older], then what came since, which
+ * is newer than all of it. [now] itself when it already holds them all.
+ */
+internal fun merged(older: List<Line>, now: List<Line>): List<Line> {
+    if (older.isEmpty()) return now
+    if (now.size >= older.size && now.firstOrNull()?.seq == older.first().seq) return now
+    val last = older.last().seq
+    return older + now.filter { it.seq > last }
+}
+
+/** Whether [id] is a conversation of a host other than [host]. */
+internal fun ownedByAnother(conversations: List<Conversation>, host: String, id: String) =
+    id.isNotEmpty() && conversations.any { it.id == id && it.host != host }
+
+/**
+ * By host, the lowest `seq` whose write failed this run. A later message of
+ * that host is not kept, so the newest message kept, which the next start's
+ * `sync` starts after, stays below the one missing.
+ */
+internal class Gaps {
+    private val lowest = mutableMapOf<String, Long>()
+
+    fun keeps(host: String, seq: Long) = lowest[host]?.let { seq < it } ?: true
+
+    fun failed(host: String, seq: Long) {
+        lowest[host] = minOf(seq, lowest[host] ?: seq)
+    }
+
+    /** [host] was forgotten: what it sends next starts from nothing. */
+    fun clear(host: String) {
+        lowest.remove(host)
     }
 }
 

@@ -2,8 +2,8 @@
 <!-- Nothing of the app leaves the phone, by backup or by transfer to a new
      phone (Android 12 and later; android:allowBackup="false" covers older
      releases, and no longer covers device transfer from 12 on). The app
-     holds keys wrapped by this phone's keystore, its paired hosts and, later,
-     conversations. A new phone pairs again. -->
+     holds keys wrapped by this phone's keystore, its paired hosts and the
+     conversations it was sent. A new phone pairs again. -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="root" path="." />

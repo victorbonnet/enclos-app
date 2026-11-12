@@ -43,7 +43,8 @@ fun message(type: String, vararg fields: Pair<String, Any?>): JSONObject {
 class BridgeConnection(
     private val url: String,
     private val bridgeKey: ByteArray,
-    private val noisePrivate: ByteArray,
+    /** The device's Noise private key, asked for on the connection's thread (unwrapping it is slow). */
+    private val noisePrivate: () -> ByteArray,
     private val first: (DeviceSession) -> JSONObject,
     private val onMessage: (JSONObject) -> Unit,
     private val onClosed: (String) -> Unit,
@@ -71,7 +72,7 @@ class BridgeConnection(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 socket = webSocket
                 try {
-                    val h = DeviceHandshake(noisePrivate, bridgeKey)
+                    val h = DeviceHandshake(noisePrivate(), bridgeKey)
                     handshake = h
                     webSocket.send(h.hello().toByteString())
                 } catch (e: Exception) {
@@ -155,5 +156,10 @@ class BridgeConnection(
         private val client = OkHttpClient.Builder()
             .pingInterval(30, TimeUnit.SECONDS)
             .build()
+
+        /** Builds the HTTP client and its TLS setup, slow the first time: off the main thread, before connecting. */
+        fun prepare() {
+            client.dispatcher
+        }
     }
 }

@@ -24,7 +24,7 @@ The pairing screen has three steps, always in this order: code read, device key 
 
 **A link naming a host already paired.** A pairing link gives the host's name itself, so a name proves nothing; the bridge's key, which the Noise handshake checks, tells one bridge from another. When the link names a host this phone is already paired with:
 
-- **Same bridge key**: the app pairs again, as for a new host. Once the bridge accepts, the new pairing takes the old one's place, the old pairing's device key is deleted from the key store, and what the app shows of the host stays.
+- **Same bridge key**: the app pairs again, as for a new host. Once the bridge accepts, the new pairing takes the old one's place and the old pairing's device key is deleted from the key store; what the host sent before is forgotten, as for any pairing again ([On the phone](#8-on-the-phone)).
 - **Another bridge key**: the app makes no key and does not connect. It shows a card, "Replace <host>?", with the paired bridge's address and the link's. **Keep <host>** leaves the pairing as it was. **Replace** pairs with the link's bridge; once it accepts, the old pairing, its device key and what the app showed of that host are gone.
 
 The replaced host still lists this phone as a paired device until it is removed on that host.
@@ -35,7 +35,7 @@ The replaced host still lists this phone as a paired device until it is removed 
 
 - The app opens a connection to each paired host when it comes to the foreground, and keeps it while the phone lets it.
 - A connection that ends while the app is in the foreground is opened again after 2 s, then 4, 8, 16, 32, then every 60 s, until it is authenticated. Reconnect in Status tries at once.
-- On each connection the app asks for the host's agents and syncs every message since the start; the bridge sends each message with the time it was stored.
+- On each connection the app asks for the host's agents and syncs the messages after the newest one it [keeps](#8-on-the-phone) from that host (every message, the first time); the bridge sends each message with the time it was stored.
 - In the background the app does not connect. Until push notifications are built, what arrives meanwhile is shown at the next sync.
 - When the bridge reports an error (an agent it could not reach), the conversation and Status show it, in the bridge's words.
 
@@ -70,7 +70,7 @@ The conversation's name in the bar (the agent's name while it has none), the age
 - The person's messages: right, on `button-bg`, shown exactly as typed.
 - The agent's: left, on `surface` with a hairline, [markdown](#5-messages) drawn, selectable to copy. One the agent sent on its own (`kind: notify`, such as a cron job's) has an "on its own" header; the protocol does not say which job.
 - **The agent at work**: three squares rising in turn, a 900 ms wave, from the moment the person's message is sent until the agent answers, and whenever the runtime says it is typing. It stops when the connection ends, when the bridge refuses the message (an `error` naming it, such as `agent_unavailable`), and after 10 minutes with no word from the agent.
-- **What it does** (runtimes with the `tools` capability): above the working wave, "Working · n steps" and each tool the agent runs, one a line: its mark (a square pulsing in `accent` while it runs, a check once done, a cross if it failed or a policy refused it), its name in mono, what it does (`ls -la`, `weather Lyon`) and how long it took. When the answer arrives, its steps fold into one line above it ("3 steps", with a chevron), which opens them. When the turn ends with no answer (the runtime stops typing), a step still running is marked done and the steps are no longer shown; an answer that follows still takes them, and the person's next message starts a turn with none. A tool's name and what it does show a hidden character as `⟨U+XXXX⟩` (the app's `Visible` rule). Steps come live from the bridge, which does not keep them: they are not shown again after the app restarts.
+- **What it does** (runtimes with the `tools` capability): above the working wave, "Working · n steps" and each tool the agent runs, one a line: its mark (a square pulsing in `accent` while it runs, a check once done, a cross if it failed or a policy refused it), its name in mono, what it does (`ls -la`, `weather Lyon`) and how long it took. When the answer arrives, its steps fold into one line above it ("3 steps", with a chevron), which opens them. When the turn ends with no answer (the runtime stops typing), a step still running is marked done and the steps are no longer shown; an answer that follows still takes them, and the person's next message starts a turn with none. A tool's name and what it does show a hidden character as `⟨U+XXXX⟩` (the app's `Visible` rule). Steps come live from the bridge, which does not keep them: the phone keeps them with the answer they led to, so they stay after the app restarts, on that phone only (another device, or this one after missing them, shows the answer without its steps).
 - Under the messages, why the host is not connected, or what the bridge said, when there is something to say.
 
 Opening a conversation marks it read: unread counts are the agent's messages after the last one read, kept on this device only.
@@ -126,7 +126,8 @@ Light or dark: the system's setting by default. Once the person chooses (System 
 ## 8. On the phone
 
 - **Keys**: the device's signing key is made in, and never leaves, the platform's key store; the Noise key is wrapped by it.
-- **Stored**: the paired hosts (each bridge's address and key, the device's id there, the wrapped Noise key), the last message read per conversation, the theme. Conversations are kept in memory and synced again from the bridge.
+- **Stored**: the paired hosts (each bridge's address and key, the device's id there, the wrapped Noise key), the last message read per conversation, the theme.
+- **Conversations are kept on the phone**: each host's agents, the conversations and their names, every message with its files' descriptions, and the steps of each answer. They show when the app opens, before any connection, and while a host is unreachable; a sync then brings only what is newer. The copy is read off the main thread, in two passes: first what the first screens show (every conversation with its last message, and the last 40 messages of the 10 most recent), with the launch screen kept until then (at most a second) and the connections opened after it; then every other message, merged in. Until that second pass ends, search and unread counts see only the first pass's messages. The bridge stays the source: what the phone keeps is what the bridge sent, and a conversation started on the phone is kept once the bridge confirms it. Pairing again with a host forgets what it sent before. A message that cannot be written (a full disk) leaves no gap: no later message of that host is kept until the app starts again, so the next sync, which starts after the newest message kept, brings it back. A kept row the app can no longer read is skipped, not fatal. A conversation is known by its id: one that a host's bridge sends with the id of another host's conversation is ignored. The copy is in the app's private storage, readable by the app only, and not encrypted by the app itself: it is as safe at rest as the phone's own storage encryption makes it. Files stay in the cache, which the system may clear: they are fetched again when shown.
 - **Nothing leaves the phone** ([ADR 0003](adr/0003-nothing-of-the-app-leaves-the-phone.md)): no backup, no transfer to a new phone. A new phone pairs again.
 
 ## Platforms
@@ -147,6 +148,7 @@ Light or dark: the system's setting by default. Once the person chooses (System 
 | Markdown | commonmark-java (+ GFM tables, strikethrough, autolink), drawn in Compose | Apple's swift-markdown (cmark-gfm), drawn in SwiftUI |
 | Theme kept | app preferences; `UiModeManager.setApplicationNightMode` on Android 12+ | `UserDefaults`; `preferredColorScheme` |
 | Animations off | Remove animations (animator duration scale 0) | Reduce Motion |
+| Conversations kept | SQLite, the platform's (`SQLiteOpenHelper`), `conversations.db`, written off the main thread | SQLite, the platform's, in Application Support, excluded from backup |
 | Files | cache `attachments/<id>/<name>`; shared through a `FileProvider` and `ACTION_SEND` | Caches directory; shared through `ShareLink` / `UIActivityViewController` |
 | Push (not built) | FCM, one notification channel per agent | FCM through APNs, the conversation as thread identifier |
 
