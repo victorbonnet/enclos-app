@@ -1,5 +1,7 @@
 [versions]
 androidGradlePlugin = "9.5.0"
+# The NDK that compiles the Rust core (scripts/build-core-android.sh, CI)
+ndk = "30.0.16248370"
 kotlin = "2.4.21"
 androidx-compose-bom = "2026.09.00"
 androidx-activity-compose = "1.13.0"
@@ -8,6 +10,7 @@ okhttp = "5.5.1"
 zxing-android-embedded = "4.3.0"
 androidx-lifecycle = "2.11.0"
 junit = "4.13.2"
+json = "20260814"
 
 [libraries]
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "androidx-compose-bom" }
@@ -25,6 +28,8 @@ zxing-android-embedded = { module = "com.journeyapps:zxing-android-embedded", ve
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 # Unit tests on the JVM, for what needs no phone
 junit = { module = "junit:junit", version.ref = "junit" }
+# org.json for those tests: android.jar's copy is a stub off the phone
+json = { module = "org.json:json", version.ref = "json" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }
