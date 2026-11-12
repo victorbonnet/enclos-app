@@ -28,6 +28,6 @@ core-android:
 
 # Needs the Android SDK and NDK, and cargo-ndk
 android: core-android
-    cd android && ./gradlew --no-daemon :app:assembleDebug :app:lintDebug
+    cd android && ./gradlew --no-daemon :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 
 ci: fmt clippy test deny uniffi-versions

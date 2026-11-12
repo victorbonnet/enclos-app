@@ -304,6 +304,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val live = model.connected(conversation.host)
     val typing = model.typing[id] == true
     var draft by remember { mutableStateOf("") }
+    var unsent by remember { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
     LaunchedEffect(lines.size, typing) {
         model.markRead(id)
@@ -342,9 +343,11 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             if (!live) item(key = "status") { SystemLine(model.status[conversation.host] ?: "not connected") }
             model.said[conversation.host]?.let { item(key = "said") { SystemLine("The bridge said: $it") } }
         }
+        // Why the last message did not go: the draft stays until it does.
+        unsent?.let { SystemLine(it, Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) }
         Composer(draft, { draft = it }, "Message $agent") {
-            model.send(conversation, draft.trim())
-            draft = ""
+            unsent = model.send(conversation, draft.trim())
+            if (unsent == null) draft = ""
         }
     }
 }
@@ -416,7 +419,17 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                         "${it.host} · ${it.address} · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired"
                     } ?: "Scan the code enclos app pair shows",
                 )
-                Step(2, if (pairing?.keyMade == true) StepState.Done else StepState.Next, "Device key made", "Kept in this phone's Android Keystore")
+                Step(
+                    2,
+                    when {
+                        pairing?.keyMade == true -> StepState.Done
+                        // Made off the main thread: StrongBox can take seconds.
+                        pairing != null && pairing.stopped == null -> StepState.Now
+                        else -> StepState.Next
+                    },
+                    "Device key made",
+                    "Kept in this phone's Android Keystore",
+                )
                 Step(
                     3,
                     when {
@@ -448,6 +461,7 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                         done()
                     }
                 }
+                model.replacing.value?.let { Replace(it, model::replace, model::keep) }
                 if (pairing == null) {
                     if (!typed) {
                         TextLink("Type the code instead →") { typed = true }
@@ -477,6 +491,28 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                 Gap(24.dp)
             }
         }
+    }
+}
+
+/**
+ * A link names a host already paired with another bridge: the person sees
+ * both addresses and chooses. Nothing connects, and no key is made, before
+ * Replace.
+ */
+@Composable
+private fun Replace(r: Replacing, replace: () -> Unit, keep: () -> Unit) {
+    val p = palette
+    val name = r.old.name
+    Column(
+        Modifier.padding(top = 12.dp).fillMaxWidth().border(1.dp, p.lineStrong, Shapes.control).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Replace $name?", style = Type.name, color = p.text)
+        Text("This phone is already paired with $name, at ${shownAddress(r.old.url)}.", style = Type.small, color = p.textMuted)
+        Text("This link pairs with another bridge under the same name, at ${shownAddress(r.link.url)}.", style = Type.small, color = p.textMuted)
+        Text("Replacing ends the pairing with ${shownAddress(r.old.url)} on this phone, and what it shows of it.", style = Type.small, color = p.textMuted)
+        PrimaryButton("Replace", onClick = replace)
+        TextLink("Keep $name", keep)
     }
 }
 
