@@ -6,8 +6,23 @@ package io.github.victorbonnet.enclos
  * fetch goes on, and how large an image is decoded and drawn.
  */
 object Attachments {
-    /** Above this size, a file is fetched when the person taps it, not when it is shown. */
+    /**
+     * On a metered network (mobile data, a hotspot), a file above this size
+     * is fetched when the person taps it, not when it is shown.
+     */
     const val FETCH_ON_TAP = 10_000_000L
+
+    /** The largest file the bridge sends (25 MiB): on an unmetered network, any file up to it comes by itself. */
+    const val MOST_SIZE = 25L * 1024 * 1024
+
+    /**
+     * Whether a file of [size] bytes is fetched as soon as it is shown, or
+     * waits for a tap: on an unmetered network, any file up to [MOST_SIZE];
+     * on a [metered] one, a file up to [FETCH_ON_TAP], so an agent cannot
+     * make the phone pull megabytes over mobile data unasked.
+     */
+    fun fetchesItself(size: Long, metered: Boolean): Boolean =
+        size <= if (metered) FETCH_ON_TAP else MOST_SIZE
 
     /** The longest name a file is kept under on the phone, its extension included. */
     const val MOST_NAME = 80

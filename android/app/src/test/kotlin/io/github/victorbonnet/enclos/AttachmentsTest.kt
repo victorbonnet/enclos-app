@@ -53,6 +53,20 @@ class AttachmentsTest {
     }
 
     @Test
+    fun a_large_file_waits_for_a_tap_on_a_metered_network_only() {
+        // Unmetered (Wi-Fi): anything the bridge sends comes by itself.
+        assertTrue(Attachments.fetchesItself(0, metered = false))
+        assertTrue(Attachments.fetchesItself(Attachments.FETCH_ON_TAP + 1, metered = false))
+        assertTrue(Attachments.fetchesItself(25L * 1024 * 1024, metered = false))
+        assertFalse(Attachments.fetchesItself(25L * 1024 * 1024 + 1, metered = false))
+        // Metered (mobile data): up to 10 MB by itself, above it on a tap.
+        assertTrue(Attachments.fetchesItself(0, metered = true))
+        assertTrue(Attachments.fetchesItself(10_000_000, metered = true))
+        assertFalse(Attachments.fetchesItself(10_000_001, metered = true))
+        assertFalse(Attachments.fetchesItself(25L * 1024 * 1024, metered = true))
+    }
+
+    @Test
     fun a_large_image_is_decoded_within_bounds() {
         // Was decoded whole (144 MB), above what Android draws.
         assertEquals(2, Images.sampleSize(6_000, 6_000, 4_096))

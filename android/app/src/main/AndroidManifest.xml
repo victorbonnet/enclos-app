@@ -5,6 +5,10 @@
     <!-- The bridge, over the tailnet -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Whether the network is metered (mobile data): a large file then
+         waits for a tap instead of coming by itself -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- No backup and no transfer to a new phone: the app holds device keys
          and will hold conversations. allowBackup="false" and
          fullBackupContent cover Android 11 and older; dataExtractionRules

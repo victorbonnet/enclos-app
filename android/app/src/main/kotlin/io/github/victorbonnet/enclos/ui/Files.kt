@@ -3,6 +3,10 @@ package io.github.victorbonnet.enclos.ui
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.os.Build
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
@@ -31,6 +35,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -74,34 +79,38 @@ import java.io.File
  * A message's files: an image drawn in the bubble, which opens full screen
  * to share; another file as a line with its name and size, which shares it.
  * Each is fetched from the bridge when it is first shown, or when tapped
- * once larger than [Attachments.FETCH_ON_TAP].
+ * if [Attachments.fetchesItself] says it waits: a large file on a metered
+ * network.
  */
 @Composable
 fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: (Attachment) -> Unit) {
     var opened by remember { mutableStateOf<Pair<Attachment, File>?>(null) }
+    val metered = rememberMetered()
     opened?.let { (a, file) -> Viewer(a, file) { opened = null } }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         attachments.forEach { a ->
             val state = states[a.id]
             // Fetched when first shown, and again when the system cleared
             // the cache since it was here: each time the message is shown.
-            // A large one waits for a tap, so an agent cannot make the
-            // phone pull megabytes over mobile data unasked.
-            LaunchedEffect(a.id, state) {
+            // A large one waits for a tap on a metered network, so an agent
+            // cannot make the phone pull megabytes over mobile data unasked;
+            // it comes by itself once the phone is on an unmetered one.
+            val itself = Attachments.fetchesItself(a.size, metered)
+            LaunchedEffect(a.id, state, itself) {
                 val gone = state is FileState.Ready && !withContext(Dispatchers.IO) { state.file.isFile }
-                if (a.size <= Attachments.FETCH_ON_TAP && (state == null || gone)) fetch(a)
+                if (itself && (state == null || gone)) fetch(a)
             }
             if (a.image) {
-                ImageFile(a, state, { fetch(a) }) { opened = a to it }
+                ImageFile(a, state, itself, { fetch(a) }) { opened = a to it }
             } else {
-                OtherFile(a, state, { fetch(a) })
+                OtherFile(a, state, itself, { fetch(a) })
             }
         }
     }
 }
 
 @Composable
-private fun ImageFile(a: Attachment, state: FileState?, retry: () -> Unit, open: (File) -> Unit) {
+private fun ImageFile(a: Attachment, state: FileState?, itself: Boolean, retry: () -> Unit, open: (File) -> Unit) {
     val p = palette
     val shape = Shapes.control
     when (state) {
@@ -113,7 +122,7 @@ private fun ImageFile(a: Attachment, state: FileState?, retry: () -> Unit, open:
                 Decoded.Pending -> Placeholder("Opening the image")
                 // Not an image Android can draw (an SVG chart, a damaged file),
                 // or cleared since: a file like any other, to share or fetch again.
-                Decoded.Unreadable -> OtherFile(a, state, retry)
+                Decoded.Unreadable -> OtherFile(a, state, itself, retry)
                 is Decoded.Drawn -> Image(
                     d.bitmap.asImageBitmap(),
                     contentDescription = a.name,
@@ -127,7 +136,7 @@ private fun ImageFile(a: Attachment, state: FileState?, retry: () -> Unit, open:
         }
         is FileState.Failed -> Placeholder("The image did not come: ${state.why}. Tap to try again.", retry)
         is FileState.Loading -> Placeholder("Loading the image · ${percent(state.done, state.size)}")
-        null -> if (a.size > Attachments.FETCH_ON_TAP) Placeholder("Image · ${size(a.size)} · tap to load it", retry) else Placeholder("Loading the image")
+        null -> if (!itself) Placeholder("Image · ${size(a.size)} · tap to load it", retry) else Placeholder("Loading the image")
     }
 }
 
@@ -152,7 +161,7 @@ private fun Placeholder(text: String, onClick: (() -> Unit)? = null) {
 
 /** A file that is not an image: its name and size; tap to share it once it is here. */
 @Composable
-private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit) {
+private fun OtherFile(a: Attachment, state: FileState?, itself: Boolean, retry: () -> Unit) {
     val p = palette
     val context = LocalContext.current
     Row(
@@ -179,7 +188,7 @@ private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit) {
                     is FileState.Loading -> "${size(a.size)} · ${percent(state.done, state.size)}"
                     is FileState.Failed -> "Did not come: ${state.why}. Tap to try again."
                     is FileState.Ready -> "${size(a.size)} · tap to share"
-                    null -> if (a.size > Attachments.FETCH_ON_TAP) "${size(a.size)} · tap to load it" else size(a.size)
+                    null -> if (!itself) "${size(a.size)} · tap to load it" else size(a.size)
                 },
                 style = Type.meta,
                 color = p.textFaint,
@@ -187,6 +196,40 @@ private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit) {
         }
     }
 }
+
+/**
+ * Whether the network the phone sends on is metered (mobile data, a
+ * hotspot), as Android says, followed as it changes. Through a VPN such as
+ * Tailscale, Android counts the VPN as metered when the network under it
+ * is. With no network, or before Android answers, it counts as metered:
+ * a large file then waits for a tap rather than coming unasked.
+ */
+@Composable
+private fun rememberMetered(): Boolean {
+    val context = LocalContext.current
+    val connectivity = remember(context) { context.getSystemService(ConnectivityManager::class.java) }
+    var metered by remember { mutableStateOf(connectivity?.isActiveNetworkMetered ?: true) }
+    DisposableEffect(connectivity) {
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                metered = !unmetered(capabilities)
+            }
+
+            override fun onLost(network: Network) {
+                metered = true
+            }
+        }
+        connectivity?.registerDefaultNetworkCallback(callback)
+        onDispose { connectivity?.unregisterNetworkCallback(callback) }
+    }
+    return metered
+}
+
+/** Whether Android counts a network as unmetered, also for now only (a 5G plan without a cap, from Android 11). */
+private fun unmetered(capabilities: NetworkCapabilities): Boolean =
+    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) ||
+        (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_TEMPORARILY_NOT_METERED))
 
 /** The viewer's ground: near black in both themes, as photo viewers have it, so the image is the only colour. */
 private val ViewerGround = Color(0xFF0B0C0B)
