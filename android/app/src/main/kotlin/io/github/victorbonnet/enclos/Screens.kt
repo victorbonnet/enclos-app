@@ -805,8 +805,10 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
         )
     }
     var now by remember { mutableLongStateOf(System.currentTimeMillis() / 1000) }
-    LaunchedEffect(pairing) {
-        while (pairing != null && !pairing.paired && pairing.stopped == null) {
+    // The countdown ticks while a pairing goes on, and while an opened link waits.
+    val waiting = model.openedLink.value != null
+    LaunchedEffect(pairing, waiting) {
+        while ((pairing != null && !pairing.paired && pairing.stopped == null) || (pairing == null && waiting)) {
             now = System.currentTimeMillis() / 1000
             delay(1000)
         }
@@ -836,6 +838,12 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
             }
             Column(Modifier.padding(horizontal = 16.dp)) {
                 Gap(16.dp)
+                // Opened from a link: what it names, and nothing done until the person says so.
+                val opened = model.openedLink.value
+                if (pairing == null && opened != null) {
+                    OpenedLink(opened, now, pair = { model.pair(opened) }, dismiss = { model.clearPairing() })
+                    Gap(8.dp)
+                }
                 val host = pairing?.host ?: "the host"
                 Step(
                     1,
@@ -940,6 +948,46 @@ private fun Replace(r: Replacing, replace: () -> Unit, keep: () -> Unit) {
         Text("Replacing ends the pairing with ${shownAddress(r.old.url)} on this phone, and what it shows of it.", style = Type.small, color = p.textMuted)
         PrimaryButton("Replace", onClick = replace)
         TextLink("Keep $name", keep)
+    }
+}
+
+/**
+ * A pairing link the app was opened with: the host and address it names and
+ * when it expires, then Pair or Not now. Any page or message can hold such
+ * a link, so nothing connects before Pair.
+ */
+@Composable
+private fun OpenedLink(link: String, now: Long, pair: () -> Unit, dismiss: () -> Unit) {
+    val p = palette
+    // Read as the pairing reads it: the same checks, the same address.
+    val read = remember(link) { readPairLink(link) }
+    Column(Modifier.fillMaxWidth().border(1.dp, p.lineStrong, Shapes.control).padding(14.dp)) {
+        val ok = read.getOrNull()
+        if (ok == null) {
+            Text("Not an enclos pairing link", style = Type.name, color = p.text)
+            // The app's own reason: never the link's text.
+            Text(read.exceptionOrNull()?.message.orEmpty(), style = Type.small, color = p.textMuted)
+            TextLink("Dismiss", dismiss)
+            return@Column
+        }
+        val parsed = ok.link
+        val left = (parsed.expires.toLong() - now).coerceAtLeast(0)
+        Text("Pair with ${parsed.host}?", style = Type.name, color = p.text)
+        Gap(2.dp)
+        Text(
+            ok.address + " · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired",
+            style = Type.code,
+            color = p.textFaint,
+        )
+        Gap(8.dp)
+        Text(
+            "From a link you opened. Pair only with a host of yours: its agents will reach this phone. The host asks you to accept in its terminal too.",
+            style = Type.small,
+            color = p.textMuted,
+        )
+        Gap(12.dp)
+        PrimaryButton("Pair", enabled = left > 0, onClick = pair)
+        TextLink("Not now", dismiss)
     }
 }
 

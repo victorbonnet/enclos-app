@@ -11,12 +11,10 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
-import io.github.victorbonnet.enclos.core.PairLink
 import io.github.victorbonnet.enclos.core.decodeBytes
 import io.github.victorbonnet.enclos.core.encodeBytes
 import io.github.victorbonnet.enclos.core.generateNoiseKeypair
 import io.github.victorbonnet.enclos.core.pairingProof
-import io.github.victorbonnet.enclos.core.parsePairLink
 import io.github.victorbonnet.enclos.ui.ThemeChoice
 import io.github.victorbonnet.enclos.ui.applyTheme
 import org.json.JSONException
@@ -108,7 +106,7 @@ fun renamed(conversations: MutableList<Conversation>, conversation: Conversation
 }
 
 /** A pairing link naming [old]'s name with another bridge: replaces [old] only once the person confirms. */
-data class Replacing(val link: PairLink, val old: Host)
+data class Replacing(val link: ReadLink, val old: Host)
 
 /** The pairing in progress: what the link said, and how far it went. */
 data class Pairing(
@@ -306,28 +304,22 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Pairs with the host whose link was scanned or typed. */
     fun pair(link: String) {
         replacing.value = null
-        val parsed = try {
-            parsePairLink(link)
-        } catch (e: Exception) {
-            pairLinkError.value = "Not an enclos pairing link: ${e.message}"
+        openedLink.value = null
+        // Read once, as the opened link's card read it: the same checks, the same address.
+        val read = readPairLink(link).getOrElse {
+            pairLinkError.value = "Not an enclos pairing link. ${it.message}"
             return
         }
-        // Its address must name a host to connect to: `https://` alone passes
-        // the link's own check, and makes no WebSocket address.
-        val address = runCatching { java.net.URI(parsed.url) }.getOrNull()
-        if (address?.scheme != "https" || address.host.isNullOrBlank()) {
-            pairLinkError.value = "Not an enclos pairing link: its address, ${parsed.url}, names no host"
-            return
-        }
+        val parsed = read.link
         pairLinkError.value = null
         // The link chooses the name it gives: a name already paired is
         // replaced only by its own bridge, or once the person confirms.
         when (val target = pairingTarget(paired, parsed.host, parsed.key)) {
-            PairingTarget.New -> start(parsed, null)
-            is PairingTarget.Again -> start(parsed, target.old)
+            PairingTarget.New -> start(read, null)
+            is PairingTarget.Again -> start(read, target.old)
             is PairingTarget.Other -> {
                 pairing.value = null
-                replacing.value = Replacing(parsed, target.old)
+                replacing.value = Replacing(read, target.old)
             }
         }
     }
@@ -346,16 +338,19 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         pairing.value = shown(r.link).copy(stopped = "Not paired: ${r.old.name} stays paired with ${shownAddress(r.old.url)}.")
     }
 
-    /** The pairing [link] starts, as the pairing screen shows it. */
-    private fun shown(link: PairLink) = Pairing(link.host, link.url.removePrefix("https://"), link.expires.toLong())
+    /** The pairing [read] starts, as the pairing screen shows it. */
+    private fun shown(read: ReadLink) = Pairing(read.link.host, read.address, read.link.expires.toLong())
 
     /**
      * Makes the keys, off the main thread (StrongBox can take seconds), then
      * connects and asks the bridge to pair; in place of [old] once accepted.
+     * A pairing that ends otherwise (refused, expired, the connection lost)
+     * deletes the key it made ([PairingAttempt.ended]).
      */
-    private fun start(parsed: PairLink, old: Host?) {
-        val attempt = PairingAttempt(parsed.host, parsed.url, parsed.key, old, Keys, ::decodeBytes)
-        pairing.value = shown(parsed)
+    private fun start(read: ReadLink, old: Host?) {
+        val parsed = read.link
+        val attempt = PairingAttempt(parsed.host, read.url, parsed.key, old, Keys, ::decodeBytes)
+        pairing.value = shown(read)
         work.execute {
             val noise = try {
                 attempt.makeDeviceKey()
@@ -368,7 +363,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             ui { pairing.value = pairing.value?.copy(keyMade = true) }
             lateinit var connection: BridgeConnection
             connection = BridgeConnection(
-                url = parsed.url,
+                url = read.url,
                 bridgeKey = parsed.key,
                 noisePrivate = { noise.privateKey },
                 first = { session ->
@@ -429,10 +424,37 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connect(host)
     }
 
+    /**
+     * A pairing link the system opened the app with (tapped in a browser, a
+     * chat): shown on the pairing screen, which pairs only once the person
+     * says so, since any page can hold such a link.
+     */
+    val openedLink = mutableStateOf<String?>(null)
+
+    /**
+     * The system opened the app with [link]; ignored while a pairing is under
+     * way, and when it was handled before: the system hands a link again
+     * when it restarts the app's task (after an update, from recents). The
+     * links' hashes are kept, not the links and their one-time codes; the
+     * last 20, as a link works for 5 minutes only.
+     */
+    fun opened(link: String) {
+        val now = pairing.value
+        val underWay = now != null && !now.paired && now.stopped == null
+        val handled = settings.getString("pair.links.handled", "").orEmpty().split(' ').filter { it.isNotEmpty() }
+        val kept = handledAfter(underWay, handled, linkHash(link)) ?: return
+        settings.edit(commit = true) { putString("pair.links.handled", kept.joinToString(" ")) }
+        pairing.value = null
+        replacing.value = null
+        pairLinkError.value = null
+        openedLink.value = link
+    }
+
     /** Forgets the pairing shown, to scan another code. */
     fun clearPairing() {
         pairing.value = null
         pairLinkError.value = null
+        openedLink.value = null
     }
 
     /**
