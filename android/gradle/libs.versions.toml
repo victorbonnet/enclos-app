@@ -6,6 +6,11 @@ kotlin = "2.4.21"
 androidx-compose-bom = "2026.09.00"
 androidx-activity-compose = "1.13.0"
 jna = "5.19.1"
+okhttp = "5.5.1"
+zxing-android-embedded = "4.3.0"
+androidx-lifecycle = "2.11.0"
+junit = "4.13.2"
+json = "20260814"
 
 [libraries]
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "androidx-compose-bom" }
@@ -14,8 +19,17 @@ androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
 androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity-compose" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "androidx-lifecycle" }
+# The WebSocket to each host's bridge
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+# Scanning the pairing QR code
+zxing-android-embedded = { module = "com.journeyapps:zxing-android-embedded", version.ref = "zxing-android-embedded" }
 # UniFFI's Kotlin bindings call the Rust core through JNA
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+# Unit tests on the JVM, for what needs no phone
+junit = { module = "junit:junit", version.ref = "junit" }
+# org.json for those tests: android.jar's copy is a stub off the phone
+json = { module = "org.json:json", version.ref = "json" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }
