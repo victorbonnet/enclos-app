@@ -12,6 +12,7 @@ androidx-pdf = "1.0.0-beta01"
 commonmark = "0.32.0"
 junit = "4.13.2"
 robolectric = "4.17"
+androidx-test-espresso = "3.7.0"
 
 [libraries]
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "androidx-compose-bom" }
@@ -44,6 +45,10 @@ junit = { module = "junit:junit", version.ref = "junit" }
 # store's SQLite, Compose
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
+# Compose tests wait for idle through Espresso. The Espresso ui-test-junit4
+# brings (3.5.0) calls InputManager.getInstance(), which Robolectric's
+# Android 17 no longer has; 3.7.0 asks the context for it
+androidx-test-espresso-core = { module = "androidx.test.espresso:espresso-core", version.ref = "androidx-test-espresso" }
 # The empty activity Compose tests show their content in, in debug builds only
 androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 

@@ -20,7 +20,7 @@ Supporting agents ask [questions with native choices](docs/spec.md#questions): s
 
 ## Build
 
-Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK and NDK, JDK 17 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).
+Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK and NDK, JDK 21 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).
 
 ```sh
 just android
