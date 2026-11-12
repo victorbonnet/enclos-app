@@ -159,10 +159,19 @@ fun AppBar(content: @Composable RowScope.() -> Unit) {
     )
 }
 
-/** The screen title under the app bar (`title-large`). */
+/**
+ * A tab's title (`title-large`), at the top of the screen with no bar above
+ * it, so the content starts high; the tab's one [action], if any, at its end.
+ */
 @Composable
-fun LargeTitle(text: String) {
-    Text(text, style = Type.titleLarge, color = palette.text, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp))
+fun LargeTitle(text: String, action: (@Composable () -> Unit)? = null) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 16.dp, bottom = 12.dp).defaultMinSize(minHeight = 48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, style = Type.titleLarge, color = palette.text, modifier = Modifier.weight(1f))
+        action?.invoke()
+    }
 }
 
 /** The extended floating action button: the screen's one primary action. */

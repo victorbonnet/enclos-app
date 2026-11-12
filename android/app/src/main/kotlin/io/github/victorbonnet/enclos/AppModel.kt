@@ -17,6 +17,8 @@ import io.github.victorbonnet.enclos.core.encodeBytes
 import io.github.victorbonnet.enclos.core.generateNoiseKeypair
 import io.github.victorbonnet.enclos.core.pairingProof
 import io.github.victorbonnet.enclos.core.parsePairLink
+import io.github.victorbonnet.enclos.ui.ThemeChoice
+import io.github.victorbonnet.enclos.ui.applyTheme
 import org.json.JSONException
 import org.json.JSONObject
 import java.util.UUID
@@ -89,6 +91,18 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val pairing = mutableStateOf<Pairing?>(null)
     /** Why the last link scanned or typed is not a pairing link. */
     val pairLinkError = mutableStateOf<String?>(null)
+
+    private val settings = application.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    /** Light or dark: the system's until the person chooses, then theirs, kept on this device. */
+    val theme = mutableStateOf(ThemeChoice.read(settings.getString("theme", null)))
+
+    fun chooseTheme(choice: ThemeChoice) {
+        theme.value = choice
+        // Written off the main thread (apply); Android writes pending preferences
+        // before it stops an activity, and from Android 12 keeps the mode itself.
+        settings.edit { if (choice == ThemeChoice.System) remove("theme") else putString("theme", choice.name) }
+        applyTheme(getApplication(), choice)
+    }
 
     private fun ui(block: () -> Unit) = main.post(block)
 
