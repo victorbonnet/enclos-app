@@ -180,8 +180,10 @@ fun NavBar(selected: Tab, onSelect: (Tab) -> Unit) {
         Row(Modifier.fillMaxWidth().height(80.dp).padding(top = 12.dp)) {
             Tab.entries.forEach { tab ->
                 val on = tab == selected
+                // The whole column takes the tap, with no press shown: the
+                // corners closing in on the tab chosen are its answer.
                 Column(
-                    Modifier.weight(1f).clickable(role = Role.Tab, onClick = { onSelect(tab) }),
+                    Modifier.weight(1f).clickable(interactionSource = null, indication = null, role = Role.Tab) { onSelect(tab) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {

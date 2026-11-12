@@ -10,13 +10,16 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
+import io.github.victorbonnet.enclos.core.PairLink
 import io.github.victorbonnet.enclos.core.decodeBytes
 import io.github.victorbonnet.enclos.core.encodeBytes
 import io.github.victorbonnet.enclos.core.generateNoiseKeypair
 import io.github.victorbonnet.enclos.core.pairingProof
 import io.github.victorbonnet.enclos.core.parsePairLink
+import org.json.JSONException
 import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.Executors
 
 /** An agent of a host, as its bridge lists it: `name` is `<sandbox>/<agent>`. */
 data class Agent(val host: String, val name: String, val runtime: String, val capabilities: List<String>) {
@@ -31,6 +34,9 @@ data class Line(val seq: Long, val from: String, val text: String, val kind: Str
 
 /** A conversation: its host, agent (`<sandbox>/<agent>`) and id. */
 data class Conversation(val host: String, val agent: String, val id: String)
+
+/** A pairing link naming [old]'s name with another bridge: replaces [old] only once the person confirms. */
+data class Replacing(val link: PairLink, val old: Host)
 
 /** The pairing in progress: what the link said, and how far it went. */
 data class Pairing(
@@ -50,10 +56,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private val hosts = Hosts(application)
     private val reads = application.getSharedPreferences("reads", Context.MODE_PRIVATE)
     private val main = Handler(Looper.getMainLooper())
+    /** Where the pairing keys are made: StrongBox can take seconds. */
+    private val work = Executors.newSingleThreadExecutor()
     /** By host: its connection while it is open or opening, none once it ended. */
     private val connections = mutableMapOf<String, BridgeConnection>()
     /** By host: failed attempts since it was last authenticated, for the backoff. */
     private val failures = mutableMapOf<String, Int>()
+    /** Hosts whose connection ended on a message the app cannot read: Reconnect or the next foreground retries them. */
+    private val unreadable = mutableSetOf<String>()
     /** Whether a screen of the app is visible: only then are ended connections retried. */
     private var foreground = false
 
@@ -77,6 +87,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     private fun ui(block: () -> Unit) = main.post(block)
 
+    /**
+     * A link that names a host already paired with another bridge, waiting
+     * for the person to confirm the replacement (docs/spec.md, Pairing).
+     */
+    val replacing = mutableStateOf<Replacing?>(null)
+
     /** Whether [host] is connected and authenticated. */
     fun connected(host: String) = status[host]?.startsWith("connected") == true
 
@@ -96,67 +112,127 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Pairs with the host whose link was scanned or typed. */
     fun pair(link: String) {
+        replacing.value = null
         val parsed = try {
             parsePairLink(link)
         } catch (e: Exception) {
             pairLinkError.value = "Not an enclos pairing link: ${e.message}"
             return
         }
+        // Its address must name a host to connect to: `https://` alone passes
+        // the link's own check, and makes no WebSocket address.
+        val address = runCatching { java.net.URI(parsed.url) }.getOrNull()
+        if (address?.scheme != "https" || address.host.isNullOrBlank()) {
+            pairLinkError.value = "Not an enclos pairing link: its address, ${parsed.url}, names no host"
+            return
+        }
         pairLinkError.value = null
-        pairing.value = Pairing(parsed.host, parsed.url.removePrefix("https://"), parsed.expires.toLong())
-        val noise = generateNoiseKeypair()
-        val alias = "enclos-device-${parsed.host}-${UUID.randomUUID()}"
-        Keys.newDeviceKey(alias)
-        pairing.value = pairing.value?.copy(keyMade = true)
-        lateinit var connection: BridgeConnection
-        connection = BridgeConnection(
-            url = parsed.url,
-            bridgeKey = parsed.key,
-            noisePrivate = noise.privateKey,
-            first = { session ->
-                message(
-                    "pair.request",
-                    "name" to Build.MODEL,
-                    "device_key" to encodeBytes(Keys.devicePublicKey(alias)),
-                    "proof" to encodeBytes(pairingProof(parsed.code, session.handshakeHash())),
-                )
-            },
-            onMessage = { m ->
-                when (m.optString("type")) {
-                    "pair.accepted" -> {
-                        val host = Host(
-                            name = parsed.host,
-                            url = parsed.url,
-                            bridgeKey = parsed.key,
-                            deviceId = m.getString("device"),
-                            noiseKeyWrapped = Keys.wrap(noise.privateKey),
-                            keyAlias = alias,
-                            pushKey = decodeBytes(m.getString("push_key")),
-                        )
-                        hosts.add(host)
-                        ui {
-                            paired.removeAll { it.name == host.name }
-                            paired.add(host)
-                            pairing.value = pairing.value?.copy(paired = true)
+        // The link chooses the name it gives: a name already paired is
+        // replaced only by its own bridge, or once the person confirms.
+        when (val target = pairingTarget(paired, parsed.host, parsed.key)) {
+            PairingTarget.New -> start(parsed, null)
+            is PairingTarget.Again -> start(parsed, target.old)
+            is PairingTarget.Other -> {
+                pairing.value = null
+                replacing.value = Replacing(parsed, target.old)
+            }
+        }
+    }
+
+    /** The person confirmed the replacement [replacing] asked about. */
+    fun replace() {
+        val r = replacing.value ?: return
+        replacing.value = null
+        start(r.link, r.old)
+    }
+
+    /** The person declined the replacement: [Replacing.old] stays paired. */
+    fun keep() {
+        val r = replacing.value ?: return
+        replacing.value = null
+        pairing.value = shown(r.link).copy(stopped = "Not paired: ${r.old.name} stays paired with ${shownAddress(r.old.url)}.")
+    }
+
+    /** The pairing [link] starts, as the pairing screen shows it. */
+    private fun shown(link: PairLink) = Pairing(link.host, link.url.removePrefix("https://"), link.expires.toLong())
+
+    /**
+     * Makes the keys, off the main thread (StrongBox can take seconds), then
+     * connects and asks the bridge to pair; in place of [old] once accepted.
+     */
+    private fun start(parsed: PairLink, old: Host?) {
+        val attempt = PairingAttempt(parsed.host, parsed.url, parsed.key, old, Keys, ::decodeBytes)
+        pairing.value = shown(parsed)
+        work.execute {
+            val noise = try {
+                attempt.makeDeviceKey()
+                generateNoiseKeypair()
+            } catch (e: Exception) {
+                attempt.ended()
+                ui { pairing.value = pairing.value?.copy(stopped = "Not paired: the device key could not be made (${e.message})") }
+                return@execute
+            }
+            ui { pairing.value = pairing.value?.copy(keyMade = true) }
+            lateinit var connection: BridgeConnection
+            connection = BridgeConnection(
+                url = parsed.url,
+                bridgeKey = parsed.key,
+                noisePrivate = noise.privateKey,
+                first = { session ->
+                    message(
+                        "pair.request",
+                        "name" to Build.MODEL,
+                        "device_key" to encodeBytes(Keys.devicePublicKey(attempt.alias)),
+                        "proof" to encodeBytes(pairingProof(parsed.code, session.handshakeHash())),
+                    )
+                },
+                // A field missing here ends the connection (BridgeConnection),
+                // and with it the attempt.
+                onMessage = { m ->
+                    when (m.optString("type")) {
+                        "pair.accepted" -> {
+                            val host = attempt.host(m, noise.privateKey)
+                            hosts.add(host)
+                            attempt.kept()
+                            ui { pairedWith(host, old) }
+                            connection.close()
                         }
-                        connection.close()
-                        ui { connect(host) }
+                        "pair.refused" -> {
+                            ui { pairing.value = pairing.value?.copy(stopped = "Refused on ${parsed.host}: ${m.optString("reason")}") }
+                            connection.close()
+                        }
                     }
-                    "pair.refused" -> {
-                        Keys.deleteDeviceKey(alias)
-                        ui { pairing.value = pairing.value?.copy(stopped = "Refused on ${parsed.host}: ${m.optString("reason")}") }
-                        connection.close()
+                },
+                onClosed = { why ->
+                    attempt.ended()
+                    ui {
+                        val now = pairing.value
+                        if (now != null && !now.paired && now.stopped == null) pairing.value = now.copy(stopped = "Not paired: $why")
                     }
-                }
-            },
-            onClosed = { why ->
-                ui {
-                    val now = pairing.value
-                    if (now != null && !now.paired && now.stopped == null) pairing.value = now.copy(stopped = "Not paired: $why")
-                }
-            },
-        )
-        connection.open()
+                },
+            )
+            connection.open()
+        }
+    }
+
+    /** [host] was paired, in place of [old] if it replaced it. */
+    private fun pairedWith(host: Host, old: Host?) {
+        paired.removeAll { it.name == host.name }
+        paired.add(host)
+        // Another bridge under the same name: nothing of the old one stays.
+        if (old != null && !old.bridgeKey.contentEquals(host.bridgeKey)) {
+            agents.removeAll { it.host == host.name }
+            conversations.filter { it.host == host.name }.forEach {
+                lines.remove(it.id)
+                typing.remove(it.id)
+            }
+            conversations.removeAll { it.host == host.name }
+            status.remove(host.name)
+            said.remove(host.name)
+        }
+        failures.remove(host.name)
+        pairing.value = pairing.value?.copy(paired = true)
+        connect(host)
     }
 
     /** Forgets the pairing shown, to scan another code. */
@@ -185,7 +261,19 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     "sig" to encodeBytes(Keys.sign(host.keyAlias, session.handshakeHash())),
                 )
             },
-            onMessage = { m -> ui { received(host, m) } },
+            // A message the app cannot read ends this connection, not the app:
+            // the two repositories release separately.
+            onMessage = { m ->
+                ui {
+                    try {
+                        received(host, m)
+                    } catch (e: JSONException) {
+                        // Not retried on its own: the next connection would get the same.
+                        if (connections[host.name] === connection) unreadable += host.name
+                        connection.fail("the bridge sent what the app cannot read: ${e.message}")
+                    }
+                }
+            },
             // A connection [connect] replaced says nothing of the new one.
             onClosed = { why -> ui { if (connections[host.name] === connection) ended(host, why) } },
         )
@@ -202,11 +290,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections.remove(host.name)
         status[host.name] = why
         typing.keys.filter { id -> conversations.any { it.id == id && it.host == host.name } }.forEach { typing.remove(it) }
-        if (!foreground) return
+        if (unreadable.remove(host.name) || !foreground) return
         val n = failures.getOrDefault(host.name, 0)
         failures[host.name] = n + 1
-        val wait = minOf(60_000L, 2_000L shl minOf(n, 5))
-        main.postDelayed({ if (foreground && host.name !in connections) reopen(host.name) }, wait)
+        main.postDelayed({ if (foreground && host.name !in connections) reopen(host.name) }, backoff(n))
     }
 
     /** The app came to the foreground: opens the connection of every host that has none. */
@@ -233,27 +320,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 connections[host.name]?.send(message("sync", "since" to 0))
             }
             "agents.list" -> {
+                val list = agentsIn(host.name, m)
                 agents.removeAll { it.host == host.name }
-                val list = m.getJSONArray("agents")
-                for (i in 0 until list.length()) {
-                    val a = list.getJSONObject(i)
-                    val capabilities = a.optJSONArray("capabilities")
-                    agents.add(
-                        Agent(
-                            host.name,
-                            a.getString("agent"),
-                            a.optString("runtime"),
-                            (0 until (capabilities?.length() ?: 0)).map { capabilities!!.getString(it) },
-                        ),
-                    )
-                }
+                agents.addAll(list)
             }
             "message" -> {
                 val id = m.getString("conversation")
+                val line = lineIn(m)
                 if (conversations.none { it.id == id }) {
                     conversations.add(Conversation(host.name, m.getString("agent"), id))
                 }
-                val line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"))
                 if (line.from == "agent") {
                     typing.remove(id)
                     // The bridge learns what an agent's channel can do once it
@@ -282,11 +358,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         return id
     }
 
-    fun send(conversation: Conversation, text: String) {
+    /** Sends [text] to [conversation]'s agent; why it was not sent, or `null` once it was. */
+    fun send(conversation: Conversation, text: String): String? {
         said.remove(conversation.host)
-        connections[conversation.host]?.send(
-            message("message.send", "conversation" to conversation.id, "text" to text),
-        )
+        val out = message("message.send", "conversation" to conversation.id, "text" to text)
+        if (!fits(out)) {
+            return "Too long to send: ${text.toByteArray(Charsets.UTF_8).size / 1000} KB, and at most about 63 KB go at once."
+        }
+        val sent = connections[conversation.host]?.send(out) == true
+        return if (sent) null else "Not sent: not connected to ${conversation.host}. Your message is still here."
     }
 
     fun reconnect(name: String) {
@@ -296,5 +376,25 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         connections.values.forEach { it.close() }
+        work.shutdown()
     }
 }
+
+/** The agents an `agents.list` from [host] names; throws [JSONException] when a field is missing. */
+fun agentsIn(host: String, m: JSONObject): List<Agent> {
+    val list = m.getJSONArray("agents")
+    return (0 until list.length()).map { i ->
+        val a = list.getJSONObject(i)
+        val capabilities = a.optJSONArray("capabilities")
+        Agent(
+            host,
+            a.getString("agent"),
+            a.optString("runtime"),
+            (0 until (capabilities?.length() ?: 0)).map { capabilities!!.getString(it) },
+        )
+    }
+}
+
+/** The line a `message` holds; throws [JSONException] when a field is missing. */
+fun lineIn(m: JSONObject): Line =
+    Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"))
