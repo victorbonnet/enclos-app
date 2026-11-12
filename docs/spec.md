@@ -22,6 +22,15 @@ Words are enclos's ([GLOSSARY.md](https://github.com/victorbonnet/enclos/blob/ma
 
 The pairing screen has three steps, always in this order: code read, device key made, accept on the host. Its copy states what happens, never how safe it is.
 
+**A link naming a host already paired.** A pairing link gives the host's name itself, so a name proves nothing; the bridge's key, which the Noise handshake checks, tells one bridge from another. When the link names a host this phone is already paired with:
+
+- **Same bridge key**: the app pairs again, as for a new host. Once the bridge accepts, the new pairing takes the old one's place and the old pairing's device key is deleted from the key store; what the host sent before is forgotten, as for any pairing again ([On the phone](#8-on-the-phone)).
+- **Another bridge key**: the app makes no key and does not connect. It shows a card, "Replace <host>?", with the paired bridge's address and the link's. **Keep <host>** leaves the pairing as it was. **Replace** pairs with the link's bridge; once it accepts, the old pairing, its device key and what the app showed of that host are gone.
+
+The replaced host still lists this phone as a paired device until it is removed on that host.
+
+**A pairing that is not accepted** (refused, the link expired, the connection ended, the key could not be made) deletes the device key it made. The keys are made off the main thread, and a failure to make them ends the pairing with its reason.
+
 ## 3. Connection
 
 - The app opens a connection to each paired host when it comes to the foreground, and keeps it while the phone lets it.
@@ -29,6 +38,8 @@ The pairing screen has three steps, always in this order: code read, device key 
 - On each connection the app asks for the host's agents and syncs the messages after the newest one it [keeps](#8-on-the-phone) from that host (every message, the first time); the bridge sends each message with the time it was stored.
 - In the background the app does not connect. Until push notifications are built, what arrives meanwhile is shown at the next sync.
 - When the bridge reports an error (an agent it could not reach), the conversation and Status show it, in the bridge's words.
+
+A message from the bridge that the app cannot read (a field missing, as from another version of `enclos app serve`) ends that host's connection, with that reason on screen. The app does not open it again on its own, since the next connection would get the same message: Reconnect does, or the app's next return to the foreground.
 
 ## 4. Screens
 
@@ -38,13 +49,13 @@ Three destinations, Inbox, Agents and Status, and two full screens over them, a 
 
 Every conversation with every agent of every host, the most recent first; a conversation with no message yet comes first. A row shows the agent's avatar (its initial inside the logo's corners, in `accent` while its host is connected), the agent's name, the conversation's [name](#names) (its address `host/sandbox/agent` while it has none), the time of the last message (today: `07:12`, this week: the weekday, else `3 Nov`), an "on its own" header when the agent sent it unprompted, the last message's words without markdown on two lines at most (the person's own prefixed "You:"), and the unread count. The extended button "New conversation" opens Agents. With no host paired, the inbox says how to pair one.
 
-**Search and filters.** A search field under the title finds conversations by their name, their agent's address, and what was said in them (the agent's messages as their words, without markdown), whatever the case and the accents; with several words, each must be found. A conversation found by a message shows that message, the newest that holds the most words, in place of the last, with the words in `accent`. Under the field, one filter at a time: All, Unread, and each agent when there are several (by its name, or `sandbox/agent` when two share one, or its whole address when two hosts have the same sandbox and agent). Nothing found says so.
+**Search and filters.** A search field under the title finds conversations by their name, their agent's address, and what was said in them (the agent's messages as their words, without markdown), whatever the case and the accents; with several words, each must be found, in the name or in any of its messages, not necessarily the same one. A conversation found by a message shows that message, the newest that holds the most words, in place of the last, with the words in `accent`. Search reads every message, so it runs off the main thread, each message's words worked out once while the app runs. Under the field, one filter at a time: All, Unread, and each agent when there are several (by its name, or `sandbox/agent` when two share one, or its whole address when two hosts have the same sandbox and agent). Nothing found says so.
 
 **Grouped by agent.** An action on the title's line groups the inbox by agent, and again shows it newest first; in `accent` while grouped, and kept on this device until changed, like the theme. Grouped, each agent has a header on `surface`: its avatar, its name, how many of its conversations show and its address, their unread total, and a chevron; the agent of the newest conversation comes first, and under each header its conversations, newest first, start with their name ("No name yet" while they have none), without the avatar. Tapping a header folds its conversations away, or opens them; folded headers stay folded while the app runs. Search and filters apply first: an agent with nothing found has no header.
 
 ### Names
 
-A conversation has a name: its agent's, from what was said in it (Hermes names each session; the plugin passes the model's summary on, not the first message's cut), or the person's. Tapping the name in a conversation's bar renames it; the person's name replaces the agent's, which no longer replaces it, and clearing it lets the agent name it again. The bridge keeps the name and sends it to every device of the person (enclos `docs/protocol.md`, A conversation's name).
+A conversation has a name: its agent's, from what was said in it (Hermes names each session; the plugin passes the model's summary on, not the first message's cut), or the person's. Tapping the name in a conversation's bar renames it; the person's name replaces the agent's, which no longer replaces it, and clearing it lets the agent name it again. The bridge keeps the name and sends it to every device of the person (enclos `docs/protocol.md`, A conversation's name), so a name is saved only while its host is connected: until then the rename dialog says so and cannot save. A name is shown without the characters that change how text reads unseen (bidirectional overrides, zero-width characters: the app's `Visible` rule), whoever gave it.
 
 ### Agents
 
@@ -60,8 +71,8 @@ The conversation's name in the bar (the agent's name while it has none), the age
 
 - The person's messages: right, on `button-bg`, shown exactly as typed.
 - The agent's: left, on `surface` with a hairline, [markdown](#5-messages) drawn, selectable to copy. One the agent sent on its own (`kind: notify`, such as a cron job's) has an "on its own" header; the protocol does not say which job.
-- **The agent at work**: three squares rising in turn, a 900 ms wave, from the moment the person's message is sent until the agent answers, and whenever the runtime says it is typing. It stops when the connection ends.
-- **What it does** (runtimes with the `tools` capability): above the working wave, "Working · n steps" and each tool the agent runs, one a line: its mark (a square pulsing in `accent` while it runs, a check once done, a cross if it failed or a policy refused it), its name in mono, what it does (`ls -la`, `weather Lyon`) and how long it took. When the answer arrives, its steps fold into one line above it ("3 steps", with a chevron), which opens them. Steps come live from the bridge, which does not keep them: the phone keeps them with the answer they led to, so they stay after the app restarts, on that phone only (another device, or this one after missing them, shows the answer without its steps).
+- **The agent at work**: three squares rising in turn, a 900 ms wave, from the moment the person's message is sent until the agent answers, and whenever the runtime says it is typing. It stops when the connection ends, when the bridge refuses the message (an `error` naming it, such as `agent_unavailable`), and after 10 minutes with no word from the agent.
+- **What it does** (runtimes with the `tools` capability): above the working wave, "Working · n steps" and each tool the agent runs, one a line: its mark (a square pulsing in `accent` while it runs, a check once done, a cross if it failed or a policy refused it), its name in mono, what it does (`ls -la`, `weather Lyon`) and how long it took. When the answer arrives, its steps fold into one line above it ("3 steps", with a chevron), which opens them. When the turn ends with no answer (the runtime stops typing), a step still running is marked done and the steps are no longer shown; an answer that follows still takes them, and the person's next message starts a turn with none. A tool's name and what it does show a hidden character as `⟨U+XXXX⟩` (the app's `Visible` rule). Steps come live from the bridge, which does not keep them: the phone keeps them with the answer they led to, so they stay after the app restarts, on that phone only (another device, or this one after missing them, shows the answer without its steps).
 - Under the messages, why the host is not connected, or what the bridge said, when there is something to say.
 
 Opening a conversation marks it read: unread counts are the agent's messages after the last one read, kept on this device only.
@@ -82,7 +93,7 @@ An agent's message is markdown ([ADR 0002](adr/0002-messages-are-markdown-drawn-
 | lists, ordered or not, nested | a mono marker in `text-faint`, then the item |
 | `> quote` | a 2 dp `accent` bar, the text in `text-muted` |
 | fenced or indented code | mono on `panel-deep`, scrolling sideways |
-| table | columns as wide as their widest cell (up to 240), header bold, hairlines between rows, scrolling sideways |
+| table | columns as wide as their widest cell (up to 240), header bold, hairlines between rows, scrolling sideways; at most 12 columns and 50 rows, the header included, with a line above saying how much is shown when there are more |
 | `---` | a hairline |
 | a single newline | a line break (CommonMark would join the lines; chat is written line by line) |
 
@@ -90,11 +101,13 @@ Nothing in a message is fetched or run:
 
 - an image (`![alt](url)`) shows as its alt text and `↗`, a link to it; the app never loads it;
 - HTML shows as its literal text;
-- a link opens, in the browser, only when it is `http`, `https` or `mailto`; any other scheme is plain text.
+- a link opens, in the browser, only when it is `http` or `https` with a host and no user-info (`https://bank.example@evil.example` reads as the bank), or `mailto`; anything else is plain text;
+- a link's text drops hidden characters (bidirectional overrides, zero-width characters: the app's `Visible` rule), so it cannot read as another address;
+- a `mailto` link opens the mail app with the recipient, subject and body the agent wrote; the person still decides to send it.
 
 The person's own messages are not markdown: they show as typed. Previews (inbox, and later notifications) are the words without the marks.
 
-**Files.** An agent's message may carry files: an image it made, a chart, a document (enclos `docs/protocol.md`, Files). The app fetches each from the bridge over the conversation's connection, in parts, when the message is first shown, and keeps it in its cache (never backed up). An image shows in the bubble, above the words, decoded at the screen's size; tapped, it opens full screen on `panel-deep`, with its name, Back and Share. Another file shows as a line with its name and size; tapped, it is shared. Share hands that one file to another app through the system's share sheet. A file that did not come says why and is fetched again when tapped; a fetch the connection broke goes on from where it was. A message with files and no words previews as "Image", or the file's name.
+**Files.** An agent's message may carry files: an image it made, a chart, a document (enclos `docs/protocol.md`, Files). The app fetches each from the bridge over the conversation's connection, in parts, when the message is first shown: on an unmetered network (Wi-Fi), any file up to the bridge's 25 MiB; on a metered one (mobile data, a hotspot, as the phone's system counts it), a file above 10 MB only when tapped, so an agent cannot make the phone pull it over mobile data unasked, and by itself once the phone is on an unmetered network again. With no network, or before the system says, the network counts as metered, and keeps it in its cache (never backed up), in a folder per host and file; a file whose id is not of the bridge's form (letters, digits and `-`, as a UUID) is not kept. A file's name shows without the characters that change how text reads unseen (the app's `Visible` rule): `report` U+202E `fdp.html` does not read as a PDF. An image shows in the bubble, above the words, decoded at the screen's size, in a box of its own shape held between 1:3 and 3:1, the image fitted inside; tapped, it opens full screen, edge to edge, on near black in both themes (as photo viewers do: the image is the only colour), with Back, its name and Share over it on a shade, which a tap on the image hides or shows. Pinch zooms it, up to 6×, around the fingers; while zoomed it moves with a finger, its edges held at the screen's; a double-tap zooms 2.5× on that point, or back to the whole image. It is decoded at up to 4,096 px on its longest side, to stay sharp when zoomed; an image is never decoded above 64 MB in memory, a smaller sample being taken (Android draws no bitmap above 100 MB). An image Android cannot decode (an SVG chart, a damaged file) shows as another file does. Another file shows as a line with its name and size; tapped, it is shared. Share hands that one file to another app through the system's share sheet. A file that did not come says why and is fetched again when tapped: a fetch the connection broke, a part out of order, or a file the phone could not write (storage full); it goes on from where it was. A message with files and no words previews as "Image", or the file's name.
 
 The runtime's plugin tells the agent what the app draws, so that it formats when it helps (Hermes: the plugin's `platform_hint`, in enclos).
 
@@ -102,7 +115,7 @@ The runtime's plugin tells the agent what the app draws, so that it formats when
 
 Short and functional, never decorative: something moves to show where it came from or went. Durations: 150 ms for a change in place, 250 ms for a screen or a message arriving, 150 ms for what leaves. Arriving decelerates, leaving accelerates.
 
-- A full screen arrives over the tabs: the tabs fade out drifting left, the screen fades in from a tenth of the width. Going back, the screen slides off to the right, opaque, the tabs drifting back under it; with the back gesture it follows the finger and goes or returns where it is let go.
+- A full screen arrives over the tabs: it slides in from the right edge, opaque, while the tabs drift a tenth of the width to the left under it. Going back is the same move reversed: the screen slides off to the right, uncovering the tabs drifting back. Both take 250 ms at an even pace, so a finger can drag the move: with the back gesture the screen follows the finger and goes or returns where it is let go.
 - Tabs fade through each other (200 ms); the corners close in on the tab chosen.
 - A message fades in while the others slide up; a conversation that moves to the top of the inbox slides there.
 - Badges, chips, pairing steps, the send button and the theme change smoothly.
@@ -116,7 +129,7 @@ Light or dark: the system's setting by default. Once the person chooses (System 
 
 - **Keys**: the device's signing key is made in, and never leaves, the platform's key store; the Noise key is wrapped by it.
 - **Stored**: the paired hosts (each bridge's address and key, the device's id there, the wrapped Noise key), the last message read per conversation, the theme.
-- **Conversations are kept on the phone**: each host's agents, the conversations and their names, every message with its files' descriptions, and the steps of each answer. They show when the app opens, before any connection, and while a host is unreachable; a sync then brings only what is newer. The copy is read off the main thread, in two passes: first what the first screens show (every conversation with its last message, and the last 40 messages of the 10 most recent), with the launch screen kept until then (at most a second) and the connections opened after it; then every other message, merged in. Until that second pass ends, search and unread counts see only the first pass's messages. The bridge stays the source: what the phone keeps is what the bridge sent, and a conversation started on the phone is kept once the bridge confirms it. Pairing again with a host forgets what it sent before. The copy is in the app's private storage, readable by the app only, and not encrypted by the app itself: it is as safe at rest as the phone's own storage encryption makes it. Files stay in the cache, which the system may clear: they are fetched again when shown.
+- **Conversations are kept on the phone**: each host's agents, the conversations and their names, every message with its files' descriptions, and the steps of each answer. They show when the app opens, before any connection, and while a host is unreachable; a sync then brings only what is newer. The copy is read off the main thread, in two passes: first what the first screens show (every conversation with its last message, and the last 40 messages of the 10 most recent), with the launch screen kept until then (at most a second) and the connections opened after it; then every other message, merged in. Until that second pass ends, search and unread counts see only the first pass's messages. The bridge stays the source: what the phone keeps is what the bridge sent, and a conversation started on the phone is kept once the bridge confirms it. Pairing again with a host forgets what it sent before. A message that cannot be written (a full disk) leaves no gap: no later message of that host is kept until the app starts again, so the next sync, which starts after the newest message kept, brings it back. A kept row the app can no longer read is skipped, not fatal. A conversation is known by its id: one that a host's bridge sends with the id of another host's conversation is ignored. The copy is in the app's private storage, readable by the app only, and not encrypted by the app itself: it is as safe at rest as the phone's own storage encryption makes it. Files stay in the cache, which the system may clear: they are fetched again when shown.
 - **Nothing leaves the phone** ([ADR 0003](adr/0003-nothing-of-the-app-leaves-the-phone.md)): no backup, no transfer to a new phone. A new phone pairs again.
 
 ## Platforms
@@ -149,4 +162,5 @@ Push notifications (the bridge encrypts a preview for the device; the app decryp
 ## To verify
 
 - **Transfer to a new phone** excludes the app's data: the rules say so, but no transfer was run (Android).
+- **A metered network through Tailscale**: Android counts the VPN as metered when the network under it is, so a large file waits on mobile data and comes by itself on Wi-Fi; the rule is tested, the network state on a phone was not (Android).
 - **iOS** equivalents in the table above: none is built.
