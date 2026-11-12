@@ -47,6 +47,13 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // Robolectric reads the app's merged manifest and resources.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -71,5 +78,8 @@ dependencies {
         }
     }
     debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.compose.ui.test.junit4)
 }

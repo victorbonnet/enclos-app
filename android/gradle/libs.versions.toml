@@ -11,6 +11,7 @@ androidx-browser = "1.10.0"
 androidx-pdf = "1.0.0-beta01"
 commonmark = "0.32.0"
 junit = "4.13.2"
+robolectric = "4.17"
 
 [libraries]
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "androidx-compose-bom" }
@@ -39,6 +40,12 @@ commonmark-ext-gfm-strikethrough = { module = "org.commonmark:commonmark-ext-gfm
 commonmark-ext-autolink = { module = "org.commonmark:commonmark-ext-autolink", version.ref = "commonmark" }
 # Unit tests on the JVM, for what needs no phone
 junit = { module = "junit:junit", version.ref = "junit" }
+# Android's own classes on the JVM, for the tests that need them: the
+# store's SQLite, Compose
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
+# The empty activity Compose tests show their content in, in debug builds only
+androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }

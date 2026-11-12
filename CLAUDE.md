@@ -15,7 +15,7 @@ The enclos mobile app: Android first, then iOS. It talks to the agents of every 
 - `core-ffi/`: the Rust core, exported to Kotlin (and later Swift) through UniFFI. It wraps `enclos-protocol` from the enclos repository, pinned to a commit (a git dependency, allowed for that repository alone in `deny.toml`) until the crate is on crates.io; it holds no logic of its own beyond that glue.
 - `tools/uniffi-bindgen/`: UniFFI's binding generator, a build tool that never ships in the app. It is a workspace of its own, with its own `Cargo.lock` and `deny.toml`, because it depends on an unmaintained crate the app must not (RUSTSEC-2026-0374). It must use the same `uniffi` release as `core-ffi`: `scripts/check-uniffi-versions.sh` checks it.
 - `docs/`: the spec (`spec.md`) and the ADRs (`adr/`).
-- `android/`: the Android app (Kotlin, Compose). JVM unit tests in `android/app/src/test/`.
+- `android/`: the Android app (Kotlin, Compose). JVM unit tests in `android/app/src/test/`; those that need Android's own classes (SQLite, Compose) run on Robolectric.
 - `scripts/build-core-android.sh`: builds the core for the app's ABIs and generates its Kotlin bindings into git-ignored folders of the app. Run it before Gradle (`just android` does both).
 
 ## Versions and dependencies
