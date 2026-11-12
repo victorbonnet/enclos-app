@@ -49,6 +49,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
@@ -366,12 +367,23 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val live = model.connected(conversation.host)
     val working = model.working(id)
     var draft by remember { mutableStateOf("") }
+    var unsent by remember { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
+    // Whether the person is at the newest: the first item (the list is
+    // reversed) at its very end. Read when a scroll ends, theirs or the
+    // list's own, not when a message arrives, which shifts the first
+    // visible item; within a long message, the offset says they scrolled up.
+    var atNewest by remember { mutableStateOf(true) }
+    LaunchedEffect(list) {
+        snapshotFlow { list.isScrollInProgress }.collect { scrolling ->
+            if (!scrolling) atNewest = list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset <= 4
+        }
+    }
     LaunchedEffect(lines.size, working) {
         model.markRead(id)
         // The list is anchored at the newest: follow what arrives, unless
         // the person scrolled up to read.
-        if (list.firstVisibleItemIndex <= 1) list.animateScrollToItem(0)
+        if (atNewest) list.animateScrollToItem(0)
     }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
@@ -412,9 +424,15 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 if (i == 0 || Times.day(lines[i - 1].time) != day) item(key = "day-${line.seq}") { Arriving { DaySeparator(day) } }
             }
         }
+        // Why the last message did not go: the draft stays until it does.
+        unsent?.let { SystemLine(it, Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) }
         Composer(draft, { draft = it }, "Message $agent") {
-            model.send(conversation, draft.trim())
-            draft = ""
+            unsent = model.send(conversation, draft.trim())
+            if (unsent == null) {
+                draft = ""
+                // What the person just sent shows, wherever they had scrolled.
+                atNewest = true
+            }
         }
     }
 }
@@ -452,7 +470,8 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                 .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                 .setPrompt("The code of enclos app pair")
                 .setBeepEnabled(false)
-                .setOrientationLocked(false)
+                // Portrait, as the app (the manifest)
+                .setOrientationLocked(true)
                 // A terminal with a dark theme draws the code light on
                 // dark: read it either way round.
                 .addExtra(Intents.Scan.SCAN_TYPE, Intents.Scan.MIXED_SCAN),
@@ -500,7 +519,17 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                         "${it.host} · ${it.address} · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired"
                     } ?: "Scan the code enclos app pair shows",
                 )
-                Step(2, if (pairing?.keyMade == true) StepState.Done else StepState.Next, "Device key made", "Kept in this phone's Android Keystore")
+                Step(
+                    2,
+                    when {
+                        pairing?.keyMade == true -> StepState.Done
+                        // Made off the main thread: StrongBox can take seconds.
+                        pairing != null && pairing.stopped == null -> StepState.Now
+                        else -> StepState.Next
+                    },
+                    "Device key made",
+                    "Kept in this phone's Android Keystore",
+                )
                 Step(
                     3,
                     when {
@@ -532,6 +561,7 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                         done()
                     }
                 }
+                model.replacing.value?.let { Replace(it, model::replace, model::keep) }
                 if (pairing == null) {
                     if (!typed) {
                         TextLink("Type the code instead →") { typed = true }
@@ -561,6 +591,28 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                 Gap(24.dp)
             }
         }
+    }
+}
+
+/**
+ * A link names a host already paired with another bridge: the person sees
+ * both addresses and chooses. Nothing connects, and no key is made, before
+ * Replace.
+ */
+@Composable
+private fun Replace(r: Replacing, replace: () -> Unit, keep: () -> Unit) {
+    val p = palette
+    val name = r.old.name
+    Column(
+        Modifier.padding(top = 12.dp).fillMaxWidth().border(1.dp, p.lineStrong, Shapes.control).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Replace $name?", style = Type.name, color = p.text)
+        Text("This phone is already paired with $name, at ${shownAddress(r.old.url)}.", style = Type.small, color = p.textMuted)
+        Text("This link pairs with another bridge under the same name, at ${shownAddress(r.link.url)}.", style = Type.small, color = p.textMuted)
+        Text("Replacing ends the pairing with ${shownAddress(r.old.url)} on this phone, and what it shows of it.", style = Type.small, color = p.textMuted)
+        PrimaryButton("Replace", onClick = replace)
+        TextLink("Keep $name", keep)
     }
 }
 
