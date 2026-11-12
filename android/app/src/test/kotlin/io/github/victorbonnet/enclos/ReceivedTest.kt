@@ -25,8 +25,8 @@ class ReceivedTest {
             "mac",
             JSONObject().put("agents", JSONArray().put(JSONObject().put("agent", "ada").put("runtime", "hermes"))),
         )
-        assertEquals(listOf(Agent("mac", "ada", "hermes")), agents)
+        assertEquals(listOf(Agent("mac", "ada", "hermes", emptyList())), agents)
         val line = lineIn(JSONObject().put("seq", 3).put("from", "agent").put("text", "hi").put("kind", "notify"))
-        assertEquals(Line(3, "agent", "hi", "notify"), line)
+        assertEquals(Line(3, "agent", "hi", "notify", 0), line)
     }
 }

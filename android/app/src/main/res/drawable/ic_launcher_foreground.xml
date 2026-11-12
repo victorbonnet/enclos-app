@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Home base mark, from enclos's assets/enclos-icon-dark.svg (64 x 64),
+     in Forest, the primary, for a white ground; bold, with room around it, as
+     the system's icons have: on the adaptive icon's 108 x 108 canvas the
+     frame spans 37 to 71 (34dp, scale 17/22 from 29.27), its strokes 5.5dp,
+     the centre square 11dp, about 55% of a round mask's width in all. Square
+     corners, as the mark has them: each outer corner is 28dp from the
+     centre, well inside the mask's 36dp radius. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.77273"
+        android:scaleY="0.77273"
+        android:translateX="29.273"
+        android:translateY="29.273">
+        <path
+            android:pathData="M24,10H10v14m30,-14h14v14M10,40v14h14m30,-14v14H40"
+            android:strokeWidth="7.15"
+            android:strokeColor="#173C31" />
+        <path
+            android:fillColor="#173C31"
+            android:pathData="M24.85,24.85h14.3v14.3h-14.3z" />
+    </group>
+</vector>

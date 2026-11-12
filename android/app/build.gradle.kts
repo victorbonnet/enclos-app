@@ -10,8 +10,10 @@ kotlin {
 
 android {
     namespace = "io.github.victorbonnet.enclos"
+    // The newest stable SDK platform: platforms;android-37.2
     compileSdk = 37
     ndkVersion = libs.versions.ndk.get()
+    compileSdkMinor = 2
 
     defaultConfig {
         applicationId = "io.github.victorbonnet.enclos"

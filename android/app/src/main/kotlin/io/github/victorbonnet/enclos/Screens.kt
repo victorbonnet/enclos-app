@@ -1,0 +1,586 @@
+package io.github.victorbonnet.enclos
+
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
+import com.google.zxing.client.android.Intents
+import io.github.victorbonnet.enclos.core.coreVersion
+import io.github.victorbonnet.enclos.ui.AgentAvatar
+import io.github.victorbonnet.enclos.ui.AppBar
+import io.github.victorbonnet.enclos.ui.Bubble
+import io.github.victorbonnet.enclos.ui.CapabilityChip
+import io.github.victorbonnet.enclos.ui.Composer
+import io.github.victorbonnet.enclos.ui.ConnectionDot
+import io.github.victorbonnet.enclos.ui.Corners
+import io.github.victorbonnet.enclos.ui.DaySeparator
+import io.github.victorbonnet.enclos.ui.Fab
+import io.github.victorbonnet.enclos.ui.Gap
+import io.github.victorbonnet.enclos.ui.Glyph
+import io.github.victorbonnet.enclos.ui.Glyphs
+import io.github.victorbonnet.enclos.ui.Hairline
+import io.github.victorbonnet.enclos.ui.IconButton
+import io.github.victorbonnet.enclos.ui.LargeTitle
+import io.github.victorbonnet.enclos.ui.PrimaryButton
+import io.github.victorbonnet.enclos.ui.Shapes
+import io.github.victorbonnet.enclos.ui.SystemLine
+import io.github.victorbonnet.enclos.ui.TextLink
+import io.github.victorbonnet.enclos.ui.Type
+import io.github.victorbonnet.enclos.ui.TypingBubble
+import io.github.victorbonnet.enclos.ui.UnreadBadge
+import io.github.victorbonnet.enclos.ui.palette
+import kotlinx.coroutines.delay
+
+/** The header of a message an agent sent on its own, such as a cron job's: the protocol does not say which job. */
+private const val ON_ITS_OWN = "on its own"
+
+/** What a runtime's channel can do, from the capabilities its plugin announced; none before it was reached. */
+private fun channel(agent: Agent): Pair<String, Boolean>? = when {
+    agent.capabilities.isEmpty() -> null
+    "notify" in agent.capabilities -> "full channel" to true
+    else -> "request/reply" to false
+}
+
+// ---------- Inbox ----------
+
+/** Every conversation with every agent, on every host, newest first. */
+@Composable
+fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> Unit, pair: () -> Unit) {
+    // A conversation with no message yet sorts first: it was just started.
+    val sorted = model.conversations.sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: Long.MAX_VALUE }
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            AppBar { Spacer(Modifier.weight(1f)) }
+            LargeTitle("Inbox")
+            when {
+                model.paired.isEmpty() -> Empty(
+                    "No host yet.",
+                    "On a host, run enclos app serve, then enclos app pair, and scan its code.",
+                    "Pair a host →",
+                    pair,
+                )
+                sorted.isEmpty() -> Empty("No conversation yet.", "Start one with an agent.", "Agents →", newConversation)
+                else -> LazyColumn(Modifier.weight(1f)) {
+                    item { Hairline() }
+                    items(sorted, key = { it.id }) { c ->
+                        ConversationRow(model, c) { open(c.id) }
+                    }
+                    item { Spacer(Modifier.height(88.dp)) }
+                }
+            }
+        }
+        if (model.paired.isNotEmpty()) {
+            Fab("New conversation", Glyphs.compose, newConversation, Modifier.align(Alignment.BottomEnd).padding(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.Empty(title: String, text: String, action: String, onAction: () -> Unit) {
+    Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+        Hairline()
+        Gap(24.dp)
+        Text(title, style = Type.name, color = palette.text)
+        Gap(4.dp)
+        Text(text, style = Type.small, color = palette.textMuted)
+        TextLink(action, onAction)
+    }
+}
+
+/** A conversation in the inbox: the agent, its address, the time, the last message and the unread count. */
+@Composable
+private fun ConversationRow(model: AppModel, c: Conversation, onClick: () -> Unit) {
+    val p = palette
+    val last = model.lines[c.id]?.lastOrNull()
+    val unread = model.unread(c.id)
+    val agent = c.agent.substringAfter('/')
+    Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            AgentAvatar(agent, live = model.connected(c.host))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(agent, style = Type.name, color = p.text, maxLines = 1)
+                    Text(
+                        "${c.host}/${c.agent}",
+                        style = Type.code,
+                        color = p.textFaint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(bottom = 2.dp),
+                    )
+                    if (last != null) {
+                        Text(Times.inList(last.time), style = Type.code, color = if (unread > 0) p.accent else p.textFaint, modifier = Modifier.padding(bottom = 2.dp))
+                    }
+                }
+                if (last?.kind == "notify") {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Glyph(Glyphs.clock, p.accent, size = 14.dp)
+                        Text(ON_ITS_OWN, style = Type.meta, color = p.accent)
+                    }
+                }
+                Row(Modifier.padding(top = 3.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        when {
+                            last == null -> "No message yet"
+                            last.from == "agent" -> last.text
+                            else -> "You: ${last.text}"
+                        },
+                        style = Type.small,
+                        color = if (unread > 0) p.text else p.textMuted,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (unread > 0) UnreadBadge(unread)
+                }
+            }
+        }
+        Hairline()
+    }
+}
+
+// ---------- Agents ----------
+
+/** Hosts, their sandboxes and their agents, whatever the runtime; tap an agent to start a conversation. */
+@Composable
+fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, pair: () -> Unit) {
+    val p = palette
+    Column(Modifier.fillMaxSize()) {
+        AppBar {
+            Spacer(Modifier.weight(1f))
+            IconButton(Glyphs.qr, "Pair a host", pair)
+        }
+        LargeTitle("Agents")
+        if (model.paired.isEmpty()) {
+            Empty("No host yet.", "On a host, run enclos app serve, then enclos app pair, and scan its code.", "Pair a host →", pair)
+            return
+        }
+        LazyColumn(Modifier.weight(1f)) {
+            model.paired.forEach { host ->
+                val live = model.connected(host.name)
+                item(key = "host-${host.name}") {
+                    Column {
+                        Hairline()
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            ConnectionDot(live)
+                            Text(host.name, style = Type.code.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold), color = p.text)
+                            Text(
+                                if (live) "connected · tailnet" else model.status[host.name] ?: "not connected",
+                                style = Type.code,
+                                color = p.textFaint,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                            )
+                        }
+                    }
+                }
+                model.agents.filter { it.host == host.name }.groupBy { it.sandbox }.forEach { (sandbox, agents) ->
+                    item(key = "sandbox-${host.name}-$sandbox") {
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 34.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(sandbox, style = Type.code.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold), color = p.text)
+                            Text(agents.first().runtime.replaceFirstChar { it.uppercase() }, style = Type.small, color = p.textMuted)
+                            channel(agents.first())?.let { (text, full) -> CapabilityChip(text, full) }
+                        }
+                    }
+                    items(agents, key = { "agent-${it.address}" }) { agent ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable(onClickLabel = "New conversation", onClick = { start(agent) })
+                                .padding(start = 34.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            AgentAvatar(agent.agent, live, small = true)
+                            Column(Modifier.weight(1f)) {
+                                Text(agent.agent, style = Type.name.copy(fontSize = 15.sp), color = p.text)
+                                Text(agent.address, style = Type.code, color = p.textFaint)
+                            }
+                            Glyph(Glyphs.plus, p.accent, size = 20.dp)
+                        }
+                    }
+                }
+            }
+            item { Gap(16.dp) }
+        }
+    }
+}
+
+// ---------- Status ----------
+
+/** A read-only view of the paired hosts and their connections. Nothing here acts on sandboxes. */
+@Composable
+fun StatusScreen(model: AppModel, pair: () -> Unit) {
+    val p = palette
+    Column(Modifier.fillMaxSize()) {
+        AppBar { Spacer(Modifier.weight(1f)) }
+        LargeTitle("Status")
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            Hairline()
+            model.paired.forEach { host ->
+                val live = model.connected(host.name)
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        ConnectionDot(live)
+                        Text(host.name, style = Type.code.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold), color = p.text)
+                    }
+                    Gap(4.dp)
+                    Text(model.status[host.name] ?: "not connected", style = Type.small, color = p.textMuted)
+                    model.said[host.name]?.let { Text("The bridge said: $it", style = Type.small, color = p.textMuted) }
+                    Text(host.url.removePrefix("https://"), style = Type.code, color = p.textFaint)
+                    if (!live) TextLink("Reconnect →") { model.reconnect(host.name) }
+                }
+                Hairline()
+            }
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                TextLink("Pair a host →", pair)
+                Text("core ${coreVersion()}", style = Type.code, color = p.textFaint)
+            }
+        }
+    }
+}
+
+// ---------- Conversation ----------
+
+/** One conversation with one agent: messages both ways, and what the agent sent on its own. */
+@Composable
+fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
+    val p = palette
+    val conversation = model.conversations.firstOrNull { it.id == id } ?: return
+    val lines = model.lines[id].orEmpty()
+    val agent = conversation.agent.substringAfter('/')
+    val live = model.connected(conversation.host)
+    val typing = model.typing[id] == true
+    var draft by remember { mutableStateOf("") }
+    var unsent by remember { mutableStateOf<String?>(null) }
+    val list = rememberLazyListState()
+    LaunchedEffect(lines.size, typing) {
+        model.markRead(id)
+        val count = list.layoutInfo.totalItemsCount
+        if (count > 0) list.animateScrollToItem(count - 1)
+    }
+    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
+        AppBar {
+            IconButton(Glyphs.back, "Back", back)
+            AgentAvatar(agent, live, small = true)
+            Column(Modifier.weight(1f)) {
+                Text(agent, style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp), color = p.text, maxLines = 1)
+                Text("${conversation.host}/${conversation.agent}", style = Type.code, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Hairline()
+        LazyColumn(
+            Modifier.weight(1f),
+            state = list,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            lines.forEachIndexed { i, line ->
+                val day = Times.day(line.time)
+                if (i == 0 || Times.day(lines[i - 1].time) != day) item(key = "day-${line.seq}") { DaySeparator(day) }
+                item(key = line.seq) {
+                    Bubble(
+                        text = line.text,
+                        time = Times.clock(line.time),
+                        outgoing = line.from != "agent",
+                        header = if (line.kind == "notify") ON_ITS_OWN else null,
+                    )
+                }
+            }
+            if (typing) item(key = "typing") { TypingBubble(agent) }
+            if (!live) item(key = "status") { SystemLine(model.status[conversation.host] ?: "not connected") }
+            model.said[conversation.host]?.let { item(key = "said") { SystemLine("The bridge said: $it") } }
+        }
+        // Why the last message did not go: the draft stays until it does.
+        unsent?.let { SystemLine(it, Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) }
+        Composer(draft, { draft = it }, "Message $agent") {
+            unsent = model.send(conversation, draft.trim())
+            if (unsent == null) draft = ""
+        }
+    }
+}
+
+// ---------- Pairing ----------
+
+/** Pairs the phone with one host: scan the code `enclos app pair` shows, then accept in the terminal. */
+@Composable
+fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
+    val p = palette
+    val pairing = model.pairing.value
+    var typed by remember { mutableStateOf(false) }
+    var link by remember { mutableStateOf("") }
+    val scan = rememberLauncherForActivityResult(ScanContract()) { result ->
+        result.contents?.let { model.pair(it) }
+    }
+    val launch = {
+        scan.launch(
+            ScanOptions()
+                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                .setPrompt("The code of enclos app pair")
+                .setBeepEnabled(false)
+                // Portrait, as the app (the manifest)
+                .setOrientationLocked(true)
+                // A terminal with a dark theme draws the code light on
+                // dark: read it either way round.
+                .addExtra(Intents.Scan.SCAN_TYPE, Intents.Scan.MIXED_SCAN),
+        )
+    }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis() / 1000) }
+    LaunchedEffect(pairing) {
+        while (pairing != null && !pairing.paired && pairing.stopped == null) {
+            now = System.currentTimeMillis() / 1000
+            delay(1000)
+        }
+    }
+    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
+        AppBar {
+            IconButton(Glyphs.back, "Back", back)
+            Text("Pair a host", style = Type.heading, color = p.text, modifier = Modifier.weight(1f))
+        }
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            // The viewfinder is the logo: the Home base corners frame the code.
+            Box(
+                Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(300.dp).background(p.panelDeep)
+                    .clickable(enabled = pairing == null, onClickLabel = "Scan the code", role = Role.Button, onClick = launch),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(Modifier.size(180.dp), contentAlignment = Alignment.Center) {
+                    Corners(p.lime, Modifier.size(180.dp), stroke = 3.dp, arm = 0.22f)
+                    Box(Modifier.size(17.dp).background(p.lime))
+                }
+                Text(
+                    if (pairing == null) "Tap to scan the code from enclos app pair" else "Code read",
+                    style = Type.code,
+                    color = p.panelMuted,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
+                )
+            }
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                Gap(16.dp)
+                val host = pairing?.host ?: "the host"
+                Step(
+                    1,
+                    if (pairing != null) StepState.Done else StepState.Now,
+                    "Code read",
+                    pairing?.let {
+                        val left = (it.expires - now).coerceAtLeast(0)
+                        "${it.host} · ${it.address} · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired"
+                    } ?: "Scan the code enclos app pair shows",
+                )
+                Step(
+                    2,
+                    when {
+                        pairing?.keyMade == true -> StepState.Done
+                        // Made off the main thread: StrongBox can take seconds.
+                        pairing != null && pairing.stopped == null -> StepState.Now
+                        else -> StepState.Next
+                    },
+                    "Device key made",
+                    "Kept in this phone's Android Keystore",
+                )
+                Step(
+                    3,
+                    when {
+                        pairing?.paired == true -> StepState.Done
+                        pairing?.keyMade == true && pairing.stopped == null -> StepState.Now
+                        else -> StepState.Next
+                    },
+                    "Accept on $host",
+                    if (pairing?.paired == true) "Paired." else "Your terminal asks:",
+                )
+                if (pairing != null && !pairing.paired && pairing.stopped == null) {
+                    // The terminal's question, with what only the host knows left as a placeholder.
+                    Text(
+                        "${Build.MODEL} (tailscale login: <your login>) wants to pair. Accept? [y/N]",
+                        style = Type.meta.copy(fontSize = 11.5.sp, lineHeight = 18.sp),
+                        color = p.panelMuted,
+                        modifier = Modifier.padding(top = 12.dp).fillMaxWidth().background(p.panelDeep).padding(12.dp),
+                    )
+                }
+                pairing?.stopped?.let {
+                    Gap(12.dp)
+                    SystemLine(it)
+                    TextLink("Scan another code →") { model.clearPairing() }
+                }
+                if (pairing?.paired == true) {
+                    Gap(16.dp)
+                    PrimaryButton("Done") {
+                        model.clearPairing()
+                        done()
+                    }
+                }
+                model.replacing.value?.let { Replace(it, model::replace, model::keep) }
+                if (pairing == null) {
+                    if (!typed) {
+                        TextLink("Type the code instead →") { typed = true }
+                    } else {
+                        Gap(12.dp)
+                        BasicTextField(
+                            value = link,
+                            onValueChange = { link = it },
+                            textStyle = Type.code.copy(color = p.text, fontSize = 13.sp),
+                            cursorBrush = SolidColor(p.accent),
+                            modifier = Modifier.fillMaxWidth(),
+                            decorationBox = { field ->
+                                Box(
+                                    Modifier.fillMaxWidth().border(1.dp, p.lineStrong, Shapes.control).padding(12.dp)
+                                        .semantics { contentDescription = "Pairing link" },
+                                ) {
+                                    if (link.isEmpty()) Text("enclos://pair?…", style = Type.code.copy(fontSize = 13.sp), color = p.textFaint)
+                                    field()
+                                }
+                            },
+                        )
+                        Gap(8.dp)
+                        PrimaryButton("Pair", enabled = link.isNotBlank()) { model.pair(link) }
+                    }
+                    model.pairLinkError.value?.let { Gap(8.dp); Text(it, style = Type.small, color = p.textMuted) }
+                }
+                Gap(24.dp)
+            }
+        }
+    }
+}
+
+/**
+ * A link names a host already paired with another bridge: the person sees
+ * both addresses and chooses. Nothing connects, and no key is made, before
+ * Replace.
+ */
+@Composable
+private fun Replace(r: Replacing, replace: () -> Unit, keep: () -> Unit) {
+    val p = palette
+    val name = r.old.name
+    Column(
+        Modifier.padding(top = 12.dp).fillMaxWidth().border(1.dp, p.lineStrong, Shapes.control).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Replace $name?", style = Type.name, color = p.text)
+        Text("This phone is already paired with $name, at ${shownAddress(r.old.url)}.", style = Type.small, color = p.textMuted)
+        Text("This link pairs with another bridge under the same name, at ${shownAddress(r.link.url)}.", style = Type.small, color = p.textMuted)
+        Text("Replacing ends the pairing with ${shownAddress(r.old.url)} on this phone, and what it shows of it.", style = Type.small, color = p.textMuted)
+        PrimaryButton("Replace", onClick = replace)
+        TextLink("Keep $name", keep)
+    }
+}
+
+private enum class StepState { Done, Now, Next }
+
+/** A pairing step: done in a filled `accent` square, current outlined in `accent`, next in `line-strong`. */
+@Composable
+private fun Step(n: Int, state: StepState, title: String, detail: String) {
+    val p = palette
+    Column {
+        Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            val box = Modifier.size(24.dp)
+            Box(
+                when (state) {
+                    StepState.Done -> box.background(p.accent)
+                    StepState.Now -> box.border(2.dp, p.accent)
+                    StepState.Next -> box.border(1.dp, p.lineStrong)
+                },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (state == StepState.Done) {
+                    Glyph(Glyphs.check, p.bg, size = 16.dp)
+                } else {
+                    Text("$n", style = Type.code.copy(fontWeight = FontWeight.SemiBold), color = if (state == StepState.Now) p.accent else p.textMuted)
+                }
+            }
+            Column(Modifier.weight(1f)) {
+                Text(title, style = Type.name.copy(fontSize = 15.sp), color = p.text)
+                Text(detail, style = Type.small, color = p.textMuted)
+            }
+        }
+        Hairline()
+    }
+}
+
+// ---------- Times ----------
+
+/** Times as the screens write them, in the phone's zone. */
+object Times {
+    private val zone get() = java.time.ZoneId.systemDefault()
+    private fun date(seconds: Long) = java.time.Instant.ofEpochSecond(seconds).atZone(zone)
+    private val hm = java.time.format.DateTimeFormatter.ofPattern("HH:mm")
+    private val weekday = java.time.format.DateTimeFormatter.ofPattern("EEE")
+    private val dayMonth = java.time.format.DateTimeFormatter.ofPattern("d MMM")
+    private val full = java.time.format.DateTimeFormatter.ofPattern("EEE d MMM")
+
+    /** `07:12`. */
+    fun clock(seconds: Long): String = date(seconds).format(hm)
+
+    /** In a list: the time today, the weekday this week, else the date. */
+    fun inList(seconds: Long): String {
+        val d = date(seconds).toLocalDate()
+        val today = java.time.LocalDate.now(zone)
+        return when {
+            d == today -> clock(seconds)
+            d.isAfter(today.minusDays(7)) -> date(seconds).format(weekday)
+            else -> date(seconds).format(dayMonth)
+        }
+    }
+
+    /** Between messages, in lowercase: `today`, `yesterday`, `mon 3 nov`. */
+    fun day(seconds: Long): String {
+        val d = date(seconds).toLocalDate()
+        val today = java.time.LocalDate.now(zone)
+        return when (d) {
+            today -> "today"
+            today.minusDays(1) -> "yesterday"
+            else -> date(seconds).format(full).lowercase()
+        }
+    }
+}
