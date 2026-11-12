@@ -6,7 +6,7 @@ Status: a proposal being built, Android only. The app pairs with a host's bridge
 
 ## Build
 
-Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK and NDK, JDK 17 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).
+Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK, the NDK version named in `android/gradle/libs.versions.toml` (`sdkmanager "ndk;<version>"`), JDK 17 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).
 
 ```sh
 just android
