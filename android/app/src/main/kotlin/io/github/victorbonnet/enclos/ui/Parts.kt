@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -257,7 +258,12 @@ fun Bubble(text: String, time: String, outgoing: Boolean, header: String? = null
                     Text(header, style = Type.meta, color = p.accent)
                 }
             }
-            Text(text, style = Type.message, color = if (outgoing) p.buttonText else p.text)
+            // The agent writes markdown, drawn; what the person typed shows as typed.
+            if (outgoing) {
+                Text(text, style = Type.message, color = p.buttonText)
+            } else {
+                SelectionContainer { MarkdownText(text, p.text) }
+            }
             Text(
                 time,
                 style = Type.meta,

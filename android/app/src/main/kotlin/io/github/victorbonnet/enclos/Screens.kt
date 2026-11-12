@@ -76,6 +76,7 @@ import io.github.victorbonnet.enclos.ui.Glyphs
 import io.github.victorbonnet.enclos.ui.Hairline
 import io.github.victorbonnet.enclos.ui.IconButton
 import io.github.victorbonnet.enclos.ui.LargeTitle
+import io.github.victorbonnet.enclos.ui.Markdown
 import io.github.victorbonnet.enclos.ui.PrimaryButton
 import io.github.victorbonnet.enclos.ui.Shapes
 import io.github.victorbonnet.enclos.ui.SystemLine
@@ -179,7 +180,8 @@ private fun ConversationRow(model: AppModel, c: Conversation, onClick: () -> Uni
                     Text(
                         when {
                             last == null -> "No message yet"
-                            last.from == "agent" -> last.text
+                            // The words, without the markdown's marks.
+                            last.from == "agent" -> remember(last.text) { Markdown.plain(last.text) }
                             else -> "You: ${last.text}"
                         },
                         style = Type.small,
