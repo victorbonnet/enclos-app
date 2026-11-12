@@ -22,6 +22,15 @@ Words are enclos's ([GLOSSARY.md](https://github.com/victorbonnet/enclos/blob/ma
 
 The pairing screen has three steps, always in this order: code read, device key made, accept on the host. Its copy states what happens, never how safe it is.
 
+**A link naming a host already paired.** A pairing link gives the host's name itself, so a name proves nothing; the bridge's key, which the Noise handshake checks, tells one bridge from another. When the link names a host this phone is already paired with:
+
+- **Same bridge key**: the app pairs again, as for a new host. Once the bridge accepts, the new pairing takes the old one's place, the old pairing's device key is deleted from the key store, and what the app shows of the host stays.
+- **Another bridge key**: the app makes no key and does not connect. It shows a card, "Replace <host>?", with the paired bridge's address and the link's. **Keep <host>** leaves the pairing as it was. **Replace** pairs with the link's bridge; once it accepts, the old pairing, its device key and what the app showed of that host are gone.
+
+The replaced host still lists this phone as a paired device until it is removed on that host.
+
+**A pairing that is not accepted** (refused, the link expired, the connection ended, the key could not be made) deletes the device key it made. The keys are made off the main thread, and a failure to make them ends the pairing with its reason.
+
 ## 3. Connection
 
 - The app opens a connection to each paired host when it comes to the foreground, and keeps it while the phone lets it.
@@ -29,6 +38,8 @@ The pairing screen has three steps, always in this order: code read, device key 
 - On each connection the app asks for the host's agents and syncs every message since the start; the bridge sends each message with the time it was stored.
 - In the background the app does not connect. Until push notifications are built, what arrives meanwhile is shown at the next sync.
 - When the bridge reports an error (an agent it could not reach), the conversation and Status show it, in the bridge's words.
+
+A message from the bridge that the app cannot read (a field missing, as from another version of `enclos app serve`) ends that host's connection, with that reason on screen. The app does not open it again on its own, since the next connection would get the same message: Reconnect does, or the app's next return to the foreground.
 
 ## 4. Screens
 
@@ -38,11 +49,11 @@ Three destinations, Inbox, Agents and Status, and two full screens over them, a 
 
 Every conversation with every agent of every host, the most recent first; a conversation with no message yet comes first. A row shows the agent's avatar (its initial inside the logo's corners, in `accent` while its host is connected), the agent's name, the conversation's [name](#names) (its address `host/sandbox/agent` while it has none), the time of the last message (today: `07:12`, this week: the weekday, else `3 Nov`), an "on its own" header when the agent sent it unprompted, the last message's words without markdown on two lines at most (the person's own prefixed "You:"), and the unread count. The extended button "New conversation" opens Agents. With no host paired, the inbox says how to pair one.
 
-**Search and filters.** A search field under the title finds conversations by their name, their agent's address, and what was said in them (the agent's messages as their words, without markdown), whatever the case and the accents; with several words, each must be found. A conversation found by a message shows that message, the newest that holds the most words, in place of the last, with the words in `accent`. Under the field, one filter at a time: All, Unread, and each agent when there are several (by its name, or `sandbox/agent` when two share one). Nothing found says so.
+**Search and filters.** A search field under the title finds conversations by their name, their agent's address, and what was said in them (the agent's messages as their words, without markdown), whatever the case and the accents; with several words, each must be found, in the name or in any of its messages, not necessarily the same one. A conversation found by a message shows that message, the newest that holds the most words, in place of the last, with the words in `accent`. Search reads every message, so it runs off the main thread, each message's words worked out once while the app runs. Under the field, one filter at a time: All, Unread, and each agent when there are several (by its name, or `sandbox/agent` when two share one). Nothing found says so.
 
 ### Names
 
-A conversation has a name: its agent's, from what was said in it (Hermes names each session; the plugin passes the model's summary on, not the first message's cut), or the person's. Tapping the name in a conversation's bar renames it; the person's name replaces the agent's, which no longer replaces it, and clearing it lets the agent name it again. The bridge keeps the name and sends it to every device of the person (enclos `docs/protocol.md`, A conversation's name).
+A conversation has a name: its agent's, from what was said in it (Hermes names each session; the plugin passes the model's summary on, not the first message's cut), or the person's. Tapping the name in a conversation's bar renames it; the person's name replaces the agent's, which no longer replaces it, and clearing it lets the agent name it again. The bridge keeps the name and sends it to every device of the person (enclos `docs/protocol.md`, A conversation's name), so a name is saved only while its host is connected: until then the rename dialog says so and cannot save. A name is shown without the characters that change how text reads unseen (bidirectional overrides, zero-width characters: the app's `Visible` rule), whoever gave it.
 
 ### Agents
 
@@ -58,8 +69,8 @@ The conversation's name in the bar (the agent's name while it has none), the age
 
 - The person's messages: right, on `button-bg`, shown exactly as typed.
 - The agent's: left, on `surface` with a hairline, [markdown](#5-messages) drawn, selectable to copy. One the agent sent on its own (`kind: notify`, such as a cron job's) has an "on its own" header; the protocol does not say which job.
-- **The agent at work**: three squares rising in turn, a 900 ms wave, from the moment the person's message is sent until the agent answers, and whenever the runtime says it is typing. It stops when the connection ends.
-- **What it does** (runtimes with the `tools` capability): above the working wave, "Working · n steps" and each tool the agent runs, one a line: its mark (a square pulsing in `accent` while it runs, a check once done, a cross if it failed or a policy refused it), its name in mono, what it does (`ls -la`, `weather Lyon`) and how long it took. When the answer arrives, its steps fold into one line above it ("3 steps", with a chevron), which opens them. Steps come live from the bridge, which does not keep them: they are not shown again after the app restarts.
+- **The agent at work**: three squares rising in turn, a 900 ms wave, from the moment the person's message is sent until the agent answers, and whenever the runtime says it is typing. It stops when the connection ends, when the bridge refuses the message (an `error` naming it, such as `agent_unavailable`), and after 10 minutes with no word from the agent.
+- **What it does** (runtimes with the `tools` capability): above the working wave, "Working · n steps" and each tool the agent runs, one a line: its mark (a square pulsing in `accent` while it runs, a check once done, a cross if it failed or a policy refused it), its name in mono, what it does (`ls -la`, `weather Lyon`) and how long it took. When the answer arrives, its steps fold into one line above it ("3 steps", with a chevron), which opens them. When the turn ends with no answer (the runtime stops typing), a step still running is marked done and the steps are no longer shown; an answer that follows still takes them, and the person's next message starts a turn with none. A tool's name and what it does show a hidden character as `⟨U+XXXX⟩` (the app's `Visible` rule). Steps come live from the bridge, which does not keep them: they are not shown again after the app restarts.
 - Under the messages, why the host is not connected, or what the bridge said, when there is something to say.
 
 Opening a conversation marks it read: unread counts are the agent's messages after the last one read, kept on this device only.
@@ -80,7 +91,7 @@ An agent's message is markdown ([ADR 0002](adr/0002-messages-are-markdown-drawn-
 | lists, ordered or not, nested | a mono marker in `text-faint`, then the item |
 | `> quote` | a 2 dp `accent` bar, the text in `text-muted` |
 | fenced or indented code | mono on `panel-deep`, scrolling sideways |
-| table | columns as wide as their widest cell (up to 240), header bold, hairlines between rows, scrolling sideways |
+| table | columns as wide as their widest cell (up to 240), header bold, hairlines between rows, scrolling sideways; at most 12 columns and 50 rows, the header included, with a line above saying how much is shown when there are more |
 | `---` | a hairline |
 | a single newline | a line break (CommonMark would join the lines; chat is written line by line) |
 
@@ -88,7 +99,9 @@ Nothing in a message is fetched or run:
 
 - an image (`![alt](url)`) shows as its alt text and `↗`, a link to it; the app never loads it;
 - HTML shows as its literal text;
-- a link opens, in the browser, only when it is `http`, `https` or `mailto`; any other scheme is plain text.
+- a link opens, in the browser, only when it is `http` or `https` with a host and no user-info (`https://bank.example@evil.example` reads as the bank), or `mailto`; anything else is plain text;
+- a link's text drops hidden characters (bidirectional overrides, zero-width characters: the app's `Visible` rule), so it cannot read as another address;
+- a `mailto` link opens the mail app with the recipient, subject and body the agent wrote; the person still decides to send it.
 
 The person's own messages are not markdown: they show as typed. Previews (inbox, and later notifications) are the words without the marks.
 
@@ -100,7 +113,7 @@ The runtime's plugin tells the agent what the app draws, so that it formats when
 
 Short and functional, never decorative: something moves to show where it came from or went. Durations: 150 ms for a change in place, 250 ms for a screen or a message arriving, 150 ms for what leaves. Arriving decelerates, leaving accelerates.
 
-- A full screen arrives over the tabs: the tabs fade out drifting left, the screen fades in from a tenth of the width. Going back, the screen slides off to the right, opaque, the tabs drifting back under it; with the back gesture it follows the finger and goes or returns where it is let go.
+- A full screen arrives over the tabs: it slides in from the right edge, opaque, while the tabs drift a tenth of the width to the left under it. Going back is the same move reversed: the screen slides off to the right, uncovering the tabs drifting back. Both take 250 ms at an even pace, so a finger can drag the move: with the back gesture the screen follows the finger and goes or returns where it is let go.
 - Tabs fade through each other (200 ms); the corners close in on the tab chosen.
 - A message fades in while the others slide up; a conversation that moves to the top of the inbox slides there.
 - Badges, chips, pairing steps, the send button and the theme change smoothly.

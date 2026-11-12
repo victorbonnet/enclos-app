@@ -5,11 +5,13 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
+import io.github.victorbonnet.enclos.core.PairLink
 import io.github.victorbonnet.enclos.core.decodeBytes
 import io.github.victorbonnet.enclos.core.encodeBytes
 import io.github.victorbonnet.enclos.core.generateNoiseKeypair
@@ -17,6 +19,7 @@ import io.github.victorbonnet.enclos.core.pairingProof
 import io.github.victorbonnet.enclos.core.parsePairLink
 import io.github.victorbonnet.enclos.ui.ThemeChoice
 import io.github.victorbonnet.enclos.ui.applyTheme
+import org.json.JSONException
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -76,6 +79,35 @@ data class Conversation(
     val titledBy: String? = null,
 )
 
+/**
+ * A conversation's name as the bridge sent it, ready to show: without the
+ * characters that change how text reads unseen (an agent names it from what
+ * was said), and none when nothing visible is left.
+ */
+fun shownTitle(sent: String?): String? = sent?.let { Visible.stripped(it).trim() }?.ifEmpty { null }
+
+/**
+ * Names [conversation] in [conversations] (an empty [title] clears its
+ * name) once [send] passed the name to its bridge. When it could not (not
+ * connected), nothing changes: a name never looks saved, then comes back
+ * as it was at the next sync. Returns whether it was sent.
+ */
+fun renamed(conversations: MutableList<Conversation>, conversation: Conversation, title: String, send: (String) -> Boolean): Boolean {
+    val name = title.trim()
+    if (!send(name)) return false
+    val at = conversations.indexOfFirst { it.id == conversation.id }
+    if (at >= 0) {
+        conversations[at] = conversations[at].copy(
+            title = name.ifEmpty { null },
+            titledBy = if (name.isEmpty()) null else "person",
+        )
+    }
+    return true
+}
+
+/** A pairing link naming [old]'s name with another bridge: replaces [old] only once the person confirms. */
+data class Replacing(val link: PairLink, val old: Host)
+
 /** The pairing in progress: what the link said, and how far it went. */
 data class Pairing(
     val host: String,
@@ -94,10 +126,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private val hosts = Hosts(application)
     private val reads = application.getSharedPreferences("reads", Context.MODE_PRIVATE)
     private val main = Handler(Looper.getMainLooper())
+    /** Where the pairing keys are made: StrongBox can take seconds. */
+    private val work = Executors.newSingleThreadExecutor()
     /** By host: its connection while it is open or opening, none once it ended. */
     private val connections = mutableMapOf<String, BridgeConnection>()
     /** By host: failed attempts since it was last authenticated, for the backoff. */
     private val failures = mutableMapOf<String, Int>()
+    /** Hosts whose connection ended on a message the app cannot read: Reconnect or the next foreground retries them. */
+    private val unreadable = mutableSetOf<String>()
     /** Whether a screen of the app is visible: only then are ended connections retried. */
     private var foreground = false
 
@@ -113,6 +149,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val typing = mutableStateMapOf<String, Boolean>()
     /** By conversation: a message was sent and the agent has not answered yet. */
     private val awaiting = mutableStateMapOf<String, Boolean>()
+    /** The messages behind [awaiting], by id: a refusal of one names it. */
+    private val unanswered = Awaiting()
     /** By conversation: the tools the agent runs now, live from the bridge. */
     val steps = mutableStateMapOf<String, List<Step>>()
     /**
@@ -134,12 +172,19 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     fun chooseTheme(choice: ThemeChoice) {
         theme.value = choice
-        // Written at once (commit), not later: a choice must survive the app being stopped right after.
-        settings.edit(commit = true) { if (choice == ThemeChoice.System) remove("theme") else putString("theme", choice.name) }
+        // Written off the main thread (apply); Android writes pending preferences
+        // before it stops an activity, and from Android 12 keeps the mode itself.
+        settings.edit { if (choice == ThemeChoice.System) remove("theme") else putString("theme", choice.name) }
         applyTheme(getApplication(), choice)
     }
 
     private fun ui(block: () -> Unit) = main.post(block)
+
+    /**
+     * A link that names a host already paired with another bridge, waiting
+     * for the person to confirm the replacement (docs/spec.md, Pairing).
+     */
+    val replacing = mutableStateOf<Replacing?>(null)
 
     /** Whether [host] is connected and authenticated. */
     fun connected(host: String) = status[host]?.startsWith("connected") == true
@@ -168,67 +213,129 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Pairs with the host whose link was scanned or typed. */
     fun pair(link: String) {
+        replacing.value = null
         val parsed = try {
             parsePairLink(link)
         } catch (e: Exception) {
             pairLinkError.value = "Not an enclos pairing link: ${e.message}"
             return
         }
+        // Its address must name a host to connect to: `https://` alone passes
+        // the link's own check, and makes no WebSocket address.
+        val address = runCatching { java.net.URI(parsed.url) }.getOrNull()
+        if (address?.scheme != "https" || address.host.isNullOrBlank()) {
+            pairLinkError.value = "Not an enclos pairing link: its address, ${parsed.url}, names no host"
+            return
+        }
         pairLinkError.value = null
-        pairing.value = Pairing(parsed.host, parsed.url.removePrefix("https://"), parsed.expires.toLong())
-        val noise = generateNoiseKeypair()
-        val alias = "enclos-device-${parsed.host}-${UUID.randomUUID()}"
-        Keys.newDeviceKey(alias)
-        pairing.value = pairing.value?.copy(keyMade = true)
-        lateinit var connection: BridgeConnection
-        connection = BridgeConnection(
-            url = parsed.url,
-            bridgeKey = parsed.key,
-            noisePrivate = noise.privateKey,
-            first = { session ->
-                message(
-                    "pair.request",
-                    "name" to Build.MODEL,
-                    "device_key" to encodeBytes(Keys.devicePublicKey(alias)),
-                    "proof" to encodeBytes(pairingProof(parsed.code, session.handshakeHash())),
-                )
-            },
-            onMessage = { m ->
-                when (m.optString("type")) {
-                    "pair.accepted" -> {
-                        val host = Host(
-                            name = parsed.host,
-                            url = parsed.url,
-                            bridgeKey = parsed.key,
-                            deviceId = m.getString("device"),
-                            noiseKeyWrapped = Keys.wrap(noise.privateKey),
-                            keyAlias = alias,
-                            pushKey = decodeBytes(m.getString("push_key")),
-                        )
-                        hosts.add(host)
-                        ui {
-                            paired.removeAll { it.name == host.name }
-                            paired.add(host)
-                            pairing.value = pairing.value?.copy(paired = true)
+        // The link chooses the name it gives: a name already paired is
+        // replaced only by its own bridge, or once the person confirms.
+        when (val target = pairingTarget(paired, parsed.host, parsed.key)) {
+            PairingTarget.New -> start(parsed, null)
+            is PairingTarget.Again -> start(parsed, target.old)
+            is PairingTarget.Other -> {
+                pairing.value = null
+                replacing.value = Replacing(parsed, target.old)
+            }
+        }
+    }
+
+    /** The person confirmed the replacement [replacing] asked about. */
+    fun replace() {
+        val r = replacing.value ?: return
+        replacing.value = null
+        start(r.link, r.old)
+    }
+
+    /** The person declined the replacement: [Replacing.old] stays paired. */
+    fun keep() {
+        val r = replacing.value ?: return
+        replacing.value = null
+        pairing.value = shown(r.link).copy(stopped = "Not paired: ${r.old.name} stays paired with ${shownAddress(r.old.url)}.")
+    }
+
+    /** The pairing [link] starts, as the pairing screen shows it. */
+    private fun shown(link: PairLink) = Pairing(link.host, link.url.removePrefix("https://"), link.expires.toLong())
+
+    /**
+     * Makes the keys, off the main thread (StrongBox can take seconds), then
+     * connects and asks the bridge to pair; in place of [old] once accepted.
+     */
+    private fun start(parsed: PairLink, old: Host?) {
+        val attempt = PairingAttempt(parsed.host, parsed.url, parsed.key, old, Keys, ::decodeBytes)
+        pairing.value = shown(parsed)
+        work.execute {
+            val noise = try {
+                attempt.makeDeviceKey()
+                generateNoiseKeypair()
+            } catch (e: Exception) {
+                attempt.ended()
+                ui { pairing.value = pairing.value?.copy(stopped = "Not paired: the device key could not be made (${e.message})") }
+                return@execute
+            }
+            ui { pairing.value = pairing.value?.copy(keyMade = true) }
+            lateinit var connection: BridgeConnection
+            connection = BridgeConnection(
+                url = parsed.url,
+                bridgeKey = parsed.key,
+                noisePrivate = noise.privateKey,
+                first = { session ->
+                    message(
+                        "pair.request",
+                        "name" to Build.MODEL,
+                        "device_key" to encodeBytes(Keys.devicePublicKey(attempt.alias)),
+                        "proof" to encodeBytes(pairingProof(parsed.code, session.handshakeHash())),
+                    )
+                },
+                // A field missing here ends the connection (BridgeConnection),
+                // and with it the attempt.
+                onMessage = { m ->
+                    when (m.optString("type")) {
+                        "pair.accepted" -> {
+                            val host = attempt.host(m, noise.privateKey)
+                            hosts.add(host)
+                            attempt.kept()
+                            ui { pairedWith(host, old) }
+                            connection.close()
                         }
-                        connection.close()
-                        ui { connect(host) }
+                        "pair.refused" -> {
+                            ui { pairing.value = pairing.value?.copy(stopped = "Refused on ${parsed.host}: ${m.optString("reason")}") }
+                            connection.close()
+                        }
                     }
-                    "pair.refused" -> {
-                        Keys.deleteDeviceKey(alias)
-                        ui { pairing.value = pairing.value?.copy(stopped = "Refused on ${parsed.host}: ${m.optString("reason")}") }
-                        connection.close()
+                },
+                onClosed = { why ->
+                    attempt.ended()
+                    ui {
+                        val now = pairing.value
+                        if (now != null && !now.paired && now.stopped == null) pairing.value = now.copy(stopped = "Not paired: $why")
                     }
-                }
-            },
-            onClosed = { why ->
-                ui {
-                    val now = pairing.value
-                    if (now != null && !now.paired && now.stopped == null) pairing.value = now.copy(stopped = "Not paired: $why")
-                }
-            },
-        )
-        connection.open()
+                },
+            )
+            connection.open()
+        }
+    }
+
+    /** [host] was paired, in place of [old] if it replaced it. */
+    private fun pairedWith(host: Host, old: Host?) {
+        paired.removeAll { it.name == host.name }
+        paired.add(host)
+        // Another bridge under the same name: nothing of the old one stays.
+        if (old != null && !old.bridgeKey.contentEquals(host.bridgeKey)) {
+            agents.removeAll { it.host == host.name }
+            conversations.filter { it.host == host.name }.forEach {
+                lines.remove(it.id)
+                typing.remove(it.id)
+                answered(it.id)
+                steps.remove(it.id)
+            }
+            conversations.removeAll { it.host == host.name }
+            status.remove(host.name)
+            said.remove(host.name)
+        }
+        failures.remove(host.name)
+        pairing.value = pairing.value?.copy(paired = true)
+        connect(host)
     }
 
     /** Forgets the pairing shown, to scan another code. */
@@ -257,7 +364,19 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     "sig" to encodeBytes(Keys.sign(host.keyAlias, session.handshakeHash())),
                 )
             },
-            onMessage = { m -> ui { received(host, m) } },
+            // A message the app cannot read ends this connection, not the app:
+            // the two repositories release separately.
+            onMessage = { m ->
+                ui {
+                    try {
+                        received(host, m)
+                    } catch (e: JSONException) {
+                        // Not retried on its own: the next connection would get the same.
+                        if (connections[host.name] === connection) unreadable += host.name
+                        connection.fail("the bridge sent what the app cannot read: ${e.message}")
+                    }
+                }
+            },
             // A connection [connect] replaced says nothing of the new one.
             onClosed = { why -> ui { if (connections[host.name] === connection) ended(host, why) } },
         )
@@ -276,18 +395,17 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // Nothing will come over a closed connection: stop showing the agent at work.
         val ids = conversations.filter { it.host == host.name }.map { it.id }.toSet()
         typing.keys.filter { it in ids }.forEach { typing.remove(it) }
-        awaiting.keys.filter { it in ids }.forEach { awaiting.remove(it) }
+        ids.forEach { answered(it) }
         steps.keys.filter { it in ids }.forEach { steps.remove(it) }
         // Files being fetched from it stop; asked again, they go on from where they were.
         fetching.filterValues { it.host == host.name }.keys.forEach {
             fetching.remove(it)
             files[it] = FileState.Failed("the connection ended")
         }
-        if (!foreground) return
+        if (unreadable.remove(host.name) || !foreground) return
         val n = failures.getOrDefault(host.name, 0)
         failures[host.name] = n + 1
-        val wait = minOf(60_000L, 2_000L shl minOf(n, 5))
-        main.postDelayed({ if (foreground && host.name !in connections) reopen(host.name) }, wait)
+        main.postDelayed({ if (foreground && host.name !in connections) reopen(host.name) }, backoff(n))
     }
 
     /** The app came to the foreground: opens the connection of every host that has none. */
@@ -314,20 +432,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 connections[host.name]?.send(message("sync", "since" to 0))
             }
             "agents.list" -> {
+                val list = agentsIn(host.name, m)
                 agents.removeAll { it.host == host.name }
-                val list = m.getJSONArray("agents")
-                for (i in 0 until list.length()) {
-                    val a = list.getJSONObject(i)
-                    val capabilities = a.optJSONArray("capabilities")
-                    agents.add(
-                        Agent(
-                            host.name,
-                            a.getString("agent"),
-                            a.optString("runtime"),
-                            (0 until (capabilities?.length() ?: 0)).map { capabilities!!.getString(it) },
-                        ),
-                    )
-                }
+                agents.addAll(list)
             }
             // A conversation and its name: at each sync (so an empty one is
             // known too), when one starts, and when its name changes.
@@ -337,7 +444,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     host.name,
                     m.getString("agent"),
                     id,
-                    m.optString("title").ifBlank { null },
+                    shownTitle(m.optString("title")),
                     m.optString("titled_by").ifBlank { null },
                 )
                 val at = conversations.indexOfFirst { it.id == id }
@@ -345,27 +452,28 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "message" -> {
                 val id = m.getString("conversation")
+                val line = lineIn(m)
                 if (conversations.none { it.id == id }) {
                     conversations.add(Conversation(host.name, m.getString("agent"), id))
                 }
-                val files = m.optJSONArray("attachments")
-                // An id names a folder on the phone: only the bridge's form is kept.
-                val attached = (0 until (files?.length() ?: 0)).map {
-                    val a = files!!.getJSONObject(it)
-                    // The name as the agent wrote it, without what would make
-                    // it read as another (`report` U+202E `fdp.html`).
-                    val name = Visible.stripped(a.optString("name")).trim().ifEmpty { "file" }
-                    Attachment(a.getString("id"), a.optString("mime"), name, a.optLong("size"))
-                }.filter { Attachments.validId(it.id) }
-                val line = Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached)
                 if (line.from == "agent") {
-                    typing.remove(id)
-                    awaiting.remove(id)
-                    // The steps that led to this message go with it.
-                    steps.remove(id)?.takeIf { it.isNotEmpty() }?.let { stepsOf[line.seq] = it }
+                    val agent = m.getString("agent")
+                    // Only a reply answers the person; any other kind (notify,
+                    // and later ones) leaves the turn and its steps alone.
+                    if (line.kind == "reply") {
+                        // An answer ends the turn: the steps that led to it go with it.
+                        typing.remove(id)
+                        answered(id)
+                        steps.remove(id)?.takeIf { it.isNotEmpty() }?.let { stepsOf[line.seq] = it }
+                    } else if (agents.none { it.host == host.name && it.name == agent && "typing" in it.capabilities }) {
+                        // A message on its own (a cron job's) while the agent
+                        // works keeps the turn's steps and its working state;
+                        // only a runtime that says nothing of its typing has
+                        // no other sign that a turn ended.
+                        answered(id)
+                    }
                     // The bridge learns what an agent's channel can do once it
                     // reached it, which an agent's message shows: ask again.
-                    val agent = m.getString("agent")
                     if (agents.any { it.host == host.name && it.name == agent && it.capabilities.isEmpty() }) {
                         connections[host.name]?.send(message("agents"))
                     }
@@ -379,7 +487,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     typing[id] = true
                 } else {
                     typing.remove(id)
-                    awaiting.remove(id)
+                    answered(id)
+                    // The turn ended: a step that never ended no longer runs.
+                    steps[id]?.let { steps[id] = settled(it) }
                 }
             }
             // A part of a file: written where it goes, then the next asked for.
@@ -387,23 +497,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             // A tool the agent starts, or ends: added, or marked done.
             "tool" -> {
                 val id = m.getString("conversation")
-                val call = m.getString("call")
-                val now = steps[id].orEmpty()
-                val at = now.indexOfFirst { it.call == call }
-                steps[id] = if (m.optString("phase") == "end") {
-                    val ended = { s: Step ->
-                        s.copy(
-                            done = true,
-                            ok = m.optBoolean("ok", true),
-                            durationMs = if (m.has("duration_ms")) m.getLong("duration_ms") else null,
-                        )
-                    }
-                    if (at >= 0) now.toMutableList().also { it[at] = ended(it[at]) } else now + ended(Step(call, m.getString("name"), null))
-                } else if (at < 0) {
-                    now + Step(call, m.getString("name"), m.optString("label").ifBlank { null })
-                } else {
-                    now
-                }
+                steps[id] = stepped(
+                    steps[id].orEmpty(),
+                    call = m.getString("call"),
+                    phase = m.optString("phase"),
+                    name = m.getString("name"),
+                    label = m.optString("label").ifBlank { null },
+                    ok = m.optBoolean("ok", true),
+                    durationMs = if (m.has("duration_ms")) m.getLong("duration_ms") else null,
+                )
             }
             "error" -> {
                 // An error about a file asked for fails that file; else it is the bridge's word.
@@ -413,6 +515,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     files[file] = FileState.Failed(m.optString("message"))
                 } else {
                     said[host.name] = m.optString("message")
+                    // The bridge refused a message of the person's (the agent is
+                    // not reachable, say): nothing will answer it now.
+                    unanswered.refused(m.optString("of"))?.let { stillAwaiting(it) }
                 }
             }
         }
@@ -426,10 +531,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         return id
     }
 
-    /**
-     * Names [conversation] (an empty [title] clears its name, and the agent
-     * may name it again); shown at once, and confirmed by the bridge.
-     */
     // Files. Fetched from the bridge over the conversation's connection, a
     // part at a time, into the app's cache (never backed up), one folder per
     // attachment under the file's own name, which sharing shows.
@@ -540,26 +641,48 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun rename(conversation: Conversation, title: String) {
-        val name = title.trim()
-        val at = conversations.indexOfFirst { it.id == conversation.id }
-        if (at >= 0) {
-            conversations[at] = conversation.copy(
-                title = name.ifEmpty { null },
-                titledBy = if (name.isEmpty()) null else "person",
-            )
+    /**
+     * Names [conversation] (an empty [title] clears its name, and the agent
+     * may name it again): sent to the bridge, then shown. Returns false,
+     * changing nothing, when its host is not connected.
+     */
+    fun rename(conversation: Conversation, title: String): Boolean =
+        renamed(conversations, conversation, title) { name ->
+            connected(conversation.host) &&
+                connections[conversation.host]?.send(
+                    message("conversation.rename", "conversation" to conversation.id, "title" to name),
+                ) == true
         }
-        connections[conversation.host]?.send(
-            message("conversation.rename", "conversation" to conversation.id, "title" to name),
-        )
+
+    /** Each message's folded words, for search, kept while the app runs. */
+    val folds = Folds()
+
+    /** Sends [text] to [conversation]'s agent; why it was not sent, or `null` once it was. */
+    fun send(conversation: Conversation, text: String): String? {
+        said.remove(conversation.host)
+        val out = message("message.send", "conversation" to conversation.id, "text" to text)
+        if (!fits(out)) {
+            return "Too long to send: ${text.toByteArray(Charsets.UTF_8).size / 1000} KB, and at most about 63 KB go at once."
+        }
+        val sent = connections[conversation.host]?.send(out) == true
+        if (!sent) return "Not sent: not connected to ${conversation.host}. Your message is still here."
+        unanswered.sent(out.getString("id"), conversation.id, SystemClock.elapsedRealtime())
+        awaiting[conversation.id] = true
+        // A new turn: steps left by one that ended with no answer are not its own.
+        steps.remove(conversation.id)
+        main.postDelayed({ stillAwaiting(conversation.id) }, unanswered.limit)
+        return null
     }
 
-    fun send(conversation: Conversation, text: String) {
-        said.remove(conversation.host)
-        val sent = connections[conversation.host]?.send(
-            message("message.send", "conversation" to conversation.id, "text" to text),
-        ) == true
-        if (sent) awaiting[conversation.id] = true
+    /** Stops showing the agent at work on [conversation] once no message of it waits. */
+    private fun stillAwaiting(conversation: String) {
+        if (!unanswered.waiting(conversation, SystemClock.elapsedRealtime())) awaiting.remove(conversation)
+    }
+
+    /** The agent answered in [conversation], its turn ended, or nothing more will come. */
+    private fun answered(conversation: String) {
+        unanswered.answered(conversation)
+        awaiting.remove(conversation)
     }
 
     fun reconnect(name: String) {
@@ -569,6 +692,36 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         connections.values.forEach { it.close() }
+        work.shutdown()
         disk.shutdown()
     }
+}
+
+/** The agents an `agents.list` from [host] names; throws [JSONException] when a field is missing. */
+fun agentsIn(host: String, m: JSONObject): List<Agent> {
+    val list = m.getJSONArray("agents")
+    return (0 until list.length()).map { i ->
+        val a = list.getJSONObject(i)
+        val capabilities = a.optJSONArray("capabilities")
+        Agent(
+            host,
+            a.getString("agent"),
+            a.optString("runtime"),
+            (0 until (capabilities?.length() ?: 0)).map { capabilities!!.getString(it) },
+        )
+    }
+}
+
+/** The line a `message` holds; throws [JSONException] when a field is missing. */
+fun lineIn(m: JSONObject): Line {
+    val files = m.optJSONArray("attachments")
+    // An id names a folder on the phone: only the bridge's form is kept.
+    val attached = (0 until (files?.length() ?: 0)).map {
+        val a = files!!.getJSONObject(it)
+        // The name as the agent wrote it, without what would make
+        // it read as another (`report` U+202E `fdp.html`).
+        val name = Visible.stripped(a.optString("name")).trim().ifEmpty { "file" }
+        Attachment(a.getString("id"), a.optString("mime"), name, a.optLong("size"))
+    }.filter { Attachments.validId(it.id) }
+    return Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached)
 }
