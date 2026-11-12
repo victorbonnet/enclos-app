@@ -36,7 +36,41 @@ data class Agent(val host: String, val name: String, val runtime: String, val ca
 data class Line(val seq: Long, val from: String, val text: String, val kind: String, val time: Long)
 
 /** A conversation: its host, agent (`<sandbox>/<agent>`) and id. */
-data class Conversation(val host: String, val agent: String, val id: String)
+data class Conversation(
+    val host: String,
+    val agent: String,
+    val id: String,
+    /** Its name: the agent's, from what was said, or the person's. */
+    val title: String? = null,
+    /** Who named it: `agent` or `person`. */
+    val titledBy: String? = null,
+)
+
+/**
+ * A conversation's name as the bridge sent it, ready to show: without the
+ * characters that change how text reads unseen (an agent names it from what
+ * was said), and none when nothing visible is left.
+ */
+fun shownTitle(sent: String?): String? = sent?.let { Visible.stripped(it).trim() }?.ifEmpty { null }
+
+/**
+ * Names [conversation] in [conversations] (an empty [title] clears its
+ * name) once [send] passed the name to its bridge. When it could not (not
+ * connected), nothing changes: a name never looks saved, then comes back
+ * as it was at the next sync. Returns whether it was sent.
+ */
+fun renamed(conversations: MutableList<Conversation>, conversation: Conversation, title: String, send: (String) -> Boolean): Boolean {
+    val name = title.trim()
+    if (!send(name)) return false
+    val at = conversations.indexOfFirst { it.id == conversation.id }
+    if (at >= 0) {
+        conversations[at] = conversations[at].copy(
+            title = name.ifEmpty { null },
+            titledBy = if (name.isEmpty()) null else "person",
+        )
+    }
+    return true
+}
 
 /** A pairing link naming [old]'s name with another bridge: replaces [old] only once the person confirms. */
 data class Replacing(val link: PairLink, val old: Host)
@@ -354,6 +388,20 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 agents.removeAll { it.host == host.name }
                 agents.addAll(list)
             }
+            // A conversation and its name: at each sync (so an empty one is
+            // known too), when one starts, and when its name changes.
+            "conversation" -> {
+                val id = m.getString("conversation")
+                val known = Conversation(
+                    host.name,
+                    m.getString("agent"),
+                    id,
+                    shownTitle(m.optString("title")),
+                    m.optString("titled_by").ifBlank { null },
+                )
+                val at = conversations.indexOfFirst { it.id == id }
+                if (at < 0) conversations.add(known) else if (conversations[at] != known) conversations[at] = known
+            }
             "message" -> {
                 val id = m.getString("conversation")
                 val line = lineIn(m)
@@ -398,6 +446,22 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections[agent.host]?.send(message("conversation.new", "conversation" to id, "agent" to agent.name))
         return id
     }
+
+    /**
+     * Names [conversation] (an empty [title] clears its name, and the agent
+     * may name it again): sent to the bridge, then shown. Returns false,
+     * changing nothing, when its host is not connected.
+     */
+    fun rename(conversation: Conversation, title: String): Boolean =
+        renamed(conversations, conversation, title) { name ->
+            connected(conversation.host) &&
+                connections[conversation.host]?.send(
+                    message("conversation.rename", "conversation" to conversation.id, "title" to name),
+                ) == true
+        }
+
+    /** Each message's folded words, for search, kept while the app runs. */
+    val folds = Folds()
 
     /** Sends [text] to [conversation]'s agent; why it was not sent, or `null` once it was. */
     fun send(conversation: Conversation, text: String): String? {

@@ -47,7 +47,13 @@ Three destinations, Inbox, Agents and Status, and two full screens over them, a 
 
 ### Inbox
 
-Every conversation with every agent of every host, the most recent first; a conversation with no message yet comes first. A row shows the agent's avatar (its initial inside the logo's corners, in `accent` while its host is connected), the agent's name, its address `host/sandbox/agent`, the time of the last message (today: `07:12`, this week: the weekday, else `3 Nov`), an "on its own" header when the agent sent it unprompted, the last message's words without markdown on two lines at most (the person's own prefixed "You:"), and the unread count. The extended button "New conversation" opens Agents. With no host paired, the inbox says how to pair one.
+Every conversation with every agent of every host, the most recent first; a conversation with no message yet comes first. A row shows the agent's avatar (its initial inside the logo's corners, in `accent` while its host is connected), the agent's name, the conversation's [name](#names) (its address `host/sandbox/agent` while it has none), the time of the last message (today: `07:12`, this week: the weekday, else `3 Nov`), an "on its own" header when the agent sent it unprompted, the last message's words without markdown on two lines at most (the person's own prefixed "You:"), and the unread count. The extended button "New conversation" opens Agents. With no host paired, the inbox says how to pair one.
+
+**Search and filters.** A search field under the title finds conversations by their name, their agent's address, and what was said in them (the agent's messages as their words, without markdown), whatever the case and the accents; with several words, each must be found, in the name or in any of its messages, not necessarily the same one. A conversation found by a message shows that message, the newest that holds the most words, in place of the last, with the words in `accent`. Search reads every message, so it runs off the main thread, each message's words worked out once while the app runs. Under the field, one filter at a time: All, Unread, and each agent when there are several (by its name, or `sandbox/agent` when two share one). Nothing found says so.
+
+### Names
+
+A conversation has a name: its agent's, from what was said in it (Hermes names each session; the plugin passes the model's summary on, not the first message's cut), or the person's. Tapping the name in a conversation's bar renames it; the person's name replaces the agent's, which no longer replaces it, and clearing it lets the agent name it again. The bridge keeps the name and sends it to every device of the person (enclos `docs/protocol.md`, A conversation's name), so a name is saved only while its host is connected: until then the rename dialog says so and cannot save. A name is shown without the characters that change how text reads unseen (bidirectional overrides, zero-width characters: the app's `Visible` rule), whoever gave it.
 
 ### Agents
 
@@ -59,7 +65,7 @@ Read-only: each paired host, its connection (who it is connected as, or why not)
 
 ### Conversation
 
-The agent's name and address in the bar. Messages bottom-up, anchored at the newest: the screen follows what arrives unless the person scrolled up to read, and stays anchored when the keyboard opens. A day separator in lowercase (`today`, `yesterday`, `mon 3 nov`) starts each day. Each message has its time (`HH:mm`).
+The conversation's name in the bar (the agent's name while it has none), the agent and its address under it; tapping them renames it. Messages bottom-up, anchored at the newest: the screen follows what arrives unless the person scrolled up to read, and stays anchored when the keyboard opens. A day separator in lowercase (`today`, `yesterday`, `mon 3 nov`) starts each day. Each message has its time (`HH:mm`).
 
 - The person's messages: right, on `button-bg`, shown exactly as typed.
 - The agent's: left, on `surface` with a hairline, [markdown](#5-messages) drawn, selectable to copy. One the agent sent on its own (`kind: notify`, such as a cron job's) has an "on its own" header; the protocol does not say which job.
@@ -142,7 +148,7 @@ Light or dark: the system's setting by default. Once the person chooses (System 
 
 ## Not built yet
 
-Push notifications (the bridge encrypts a preview for the device; the app decrypts it and fetches the message over the tailnet; two actions only, Reply and Mark read), search, sharing (ADR 0043), an app lock, conversation titles, landscape, the notification card of the design.
+Push notifications (the bridge encrypts a preview for the device; the app decrypts it and fetches the message over the tailnet; two actions only, Reply and Mark read), sharing (ADR 0043), an app lock, landscape, the notification card of the design.
 
 ## To verify
 
