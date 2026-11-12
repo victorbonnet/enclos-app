@@ -305,8 +305,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun pair(link: String) {
         replacing.value = null
         openedLink.value = null
-        // Read once, as the opened link's card read it: the same checks, the same address.
-        val read = readPairLink(link).getOrElse {
+        // The enclos:// link, also from the https link to a bridge's pairing
+        // page; read once, as the opened link's card read it: the same
+        // checks, the same address.
+        val read = readPairLink(pairLink(link)).getOrElse {
             pairLinkError.value = "Not an enclos pairing link. ${it.message}"
             return
         }
