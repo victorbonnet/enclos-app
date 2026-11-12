@@ -1,5 +1,6 @@
 package io.github.victorbonnet.enclos
 
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -73,5 +74,31 @@ class AgentPhotosTest {
         // Another host has its own limit.
         assertTrue(versions.accept(PhotoKey("pi", "lab/a1"), v(1, "y"), listed = true))
         assertFalse(versions.cached(PhotoKey("mac", "lab/a4"), v(1, "z")))
+    }
+
+    @Test
+    fun a_refused_photo_says_why() {
+        val versions = PhotoVersions(maxPerHost = 1)
+        assertEquals(PhotoRefusal.Unlisted, versions.refusal(PhotoKey("mac", "lab/gone"), v(1, "x"), listed = false))
+        assertTrue(versions.accept(PhotoKey("mac", "lab/a1"), v(2, "x"), listed = true))
+        assertEquals(PhotoRefusal.Older, versions.refusal(PhotoKey("mac", "lab/a1"), v(1, "y"), listed = true))
+        // The host already has as many photos as this phone keeps: its confirmation of this phone's edit is not taken.
+        assertEquals(PhotoRefusal.Full, versions.refusal(PhotoKey("mac", "lab/a2"), v(1, "z"), listed = true))
+        assertFalse(versions.accept(PhotoKey("mac", "lab/a2"), v(1, "z"), listed = true))
+        assertTrue(photoRefusalText(PhotoRefusal.Full).contains("$MAX_PHOTOS_PER_HOST"))
+        assertNull(versions.refusal(PhotoKey("mac", "lab/a1"), v(3, "w"), listed = true))
+    }
+
+    @Test
+    fun an_avatar_message_without_its_agent_or_revision_is_ignored() {
+        assertEquals("lab/main" to 4L, avatarHeader(JSONObject("""{"type":"agent.avatar","agent":"lab/main","revision":4,"version":null}""")))
+        listOf(
+            """{"type":"agent.avatar","revision":4}""",
+            """{"type":"agent.avatar","agent":"lab/main"}""",
+            """{"type":"agent.avatar","agent":"","revision":4}""",
+            """{"type":"agent.avatar","agent":null,"revision":4}""",
+            """{"type":"agent.avatar","agent":"lab/main","revision":"soon"}""",
+            """{"type":"agent.avatar","agent":7,"revision":4}""",
+        ).forEach { assertNull(it, avatarHeader(JSONObject(it))) }
     }
 }

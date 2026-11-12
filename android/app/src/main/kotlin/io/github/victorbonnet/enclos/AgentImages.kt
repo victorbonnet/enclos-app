@@ -49,6 +49,26 @@ data class PhotoKey(val host: String, val agent: String) {
 /** Which photo the host says an agent has: [hash] null for none. */
 data class PhotoVersion(val revision: Long, val hash: String?)
 
+/** Why a photo the host sent is not taken. */
+enum class PhotoRefusal { Unlisted, Older, Full }
+
+/**
+ * The agent and revision an `agent.avatar` message names, or null when either
+ * is missing or malformed: such a message is ignored, not fatal.
+ */
+fun avatarHeader(m: JSONObject): Pair<String, Long>? {
+    val agent = (m.opt("agent") as? String)?.takeIf { it.isNotBlank() } ?: return null
+    val revision = m.opt("revision") as? Number ?: return null
+    return agent to revision.toLong()
+}
+
+/** What the person reads when the host saved this phone's photo but the phone does not take it. */
+fun photoRefusalText(refusal: PhotoRefusal): String = when (refusal) {
+    PhotoRefusal.Full -> "The host saved the photo, but this phone shows photos for at most $MAX_PHOTOS_PER_HOST agents of one host, so it does not show this one."
+    PhotoRefusal.Unlisted -> "The host saved the photo, but no longer lists this agent."
+    PhotoRefusal.Older -> "The host saved the photo, but a newer one has replaced it. Refresh to see it."
+}
+
 /**
  * Which photo each agent shows, as its host last said. A host's agent list is
  * its word on every agent it lists, a lower revision too (its database may have
@@ -85,14 +105,20 @@ class PhotoVersions(
     }
 
     /**
-     * `agent.avatar` for [key]: whether to take it. Refused for an agent its host
-     * does not list, an older revision, or a new photo past the host's limit.
+     * `agent.avatar` for [key]: why not to take it, or null to take it. Refused for an
+     * agent its host does not list, an older revision, or a new photo past the host's limit.
      */
-    fun accept(key: PhotoKey, version: PhotoVersion, listed: Boolean): Boolean {
-        if (!listed) return false
+    fun refusal(key: PhotoKey, version: PhotoVersion, listed: Boolean): PhotoRefusal? {
+        if (!listed) return PhotoRefusal.Unlisted
         val current = versions[key]
-        if (current != null && version.revision < current.revision) return false
-        if (version.hash != null && current?.hash == null && photos(key.host) >= maxPerHost) return false
+        if (current != null && version.revision < current.revision) return PhotoRefusal.Older
+        if (version.hash != null && current?.hash == null && photos(key.host) >= maxPerHost) return PhotoRefusal.Full
+        return null
+    }
+
+    /** `agent.avatar` for [key]: whether it is taken, as [refusal] decides. */
+    fun accept(key: PhotoKey, version: PhotoVersion, listed: Boolean): Boolean {
+        if (refusal(key, version, listed) != null) return false
         versions[key] = version
         return true
     }
@@ -202,17 +228,22 @@ class AgentImages(
         }, 60_000)
     }
     fun received(host: String, m: JSONObject) {
-        val key = PhotoKey(host, m.getString("agent"))
+        val (name, revision) = avatarHeader(m) ?: return
+        val key = PhotoKey(host, name)
         val of = m.optString("of")
         if (!hostExists(host) || (of.isNotEmpty() && requests[of]?.key != key)) return
-        if (of.isNotEmpty()) {
-            val pending = requests.remove(of)
-            if (pending?.write == true) { busy.remove(key); errors.remove(key) }
-        }
-        val revision = m.getLong("revision")
+        val wrote = of.isNotEmpty() && requests.remove(of)?.write == true
+        if (wrote) { busy.remove(key); errors.remove(key) }
         val version = m.optString("version").takeUnless { m.isNull("version") || it.isBlank() }
         // Only for an agent this host lists; its revision and the host's limit decide the rest.
-        if (!versions.accept(key, PhotoVersion(revision, version), listed = agent(key) != null)) return
+        val photo = PhotoVersion(revision, version)
+        val refused = versions.refusal(key, photo, listed = agent(key) != null)
+        if (refused != null) {
+            // This phone's own edit, confirmed by the host: say why it does not show.
+            if (wrote) errors[key] = photoRefusalText(refused)
+            return
+        }
+        versions.accept(key, photo, listed = true)
         if (version == null) { dropPicture(key); return }
         val generation = epoch(key)
         val encoded = m.optString("image")
