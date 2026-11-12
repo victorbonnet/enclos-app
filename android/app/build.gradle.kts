@@ -5,7 +5,7 @@ plugins {
 }
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
 }
 
 android {
@@ -47,6 +47,17 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // Robolectric reads the app's merged manifest and resources.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            // Robolectric's Android 17 sets a file descriptor's number
+            // through the JDK's jdk.internal.access, which Java 21 keeps
+            // to itself unless exported.
+            all { it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED") }
+        }
+    }
 }
 
 dependencies {
@@ -71,5 +82,9 @@ dependencies {
         }
     }
     debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.androidx.test.espresso.core)
 }

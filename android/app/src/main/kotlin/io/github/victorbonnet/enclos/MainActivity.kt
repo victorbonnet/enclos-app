@@ -44,7 +44,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.ui.EnclosTheme
@@ -198,13 +197,12 @@ class MainActivity : ComponentActivity() {
             }
             EnclosTheme(dark) {
                 CompositionLocalProvider(LocalAgentPictures provides model.agentImages.pictures) {
-                    val locked = model.locked.value
-                    Box(Modifier.fillMaxSize()) {
-                        // Kept under the lock, so the screen the person was on is there once unlocked;
-                        // hidden from accessibility services meanwhile.
-                        Box(if (locked) Modifier.fillMaxSize().clearAndSetSemantics {} else Modifier.fillMaxSize()) { Screens(model) }
-                        if (locked) LockScreen(model, unlock = ::unlock, leave = { moveTaskToBack(true) })
-                    }
+                    // Locked, the lock screen is all that is composed; unlocked, the screens come back where they were.
+                    LockGate(
+                        model.locked.value,
+                        lockScreen = { LockScreen(model, unlock = ::unlock, leave = { moveTaskToBack(true) }) },
+                        screens = { Screens(model) },
+                    )
                 }
             }
         }
