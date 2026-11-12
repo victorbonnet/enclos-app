@@ -202,12 +202,14 @@ fun NavBar(selected: Tab, onSelect: (Tab) -> Unit) {
         Row(Modifier.fillMaxWidth().height(80.dp).padding(top = 12.dp)) {
             Tab.entries.forEach { tab ->
                 val on = tab == selected
-                // The corners close in on the tab chosen, and open out of the one left.
+                // The whole column takes the tap, with no press shown: the
+                // corners closing in on the tab chosen are its answer, and
+                // they open out of the one left.
                 val enclosed by animateFloatAsState(if (on) 1f else 0f, Motion.change(Motion.MEDIUM), label = "enclosed")
                 val tint by animateColorAsState(if (on) palette.accent else palette.textMuted, Motion.change(), label = "tint")
                 val label by animateColorAsState(if (on) palette.text else palette.textMuted, Motion.change(), label = "label")
                 Column(
-                    Modifier.weight(1f).clickable(role = Role.Tab, onClick = { onSelect(tab) }),
+                    Modifier.weight(1f).clickable(interactionSource = null, indication = null, role = Role.Tab) { onSelect(tab) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
