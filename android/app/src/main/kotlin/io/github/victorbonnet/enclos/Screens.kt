@@ -6,6 +6,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import io.github.victorbonnet.enclos.ui.ThemeChoice
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -67,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -173,9 +176,20 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
         }
     }
     val found = if (query.isBlank()) listed else searched ?: listed
+    val grouped = model.grouped.value
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            LargeTitle("Inbox")
+            // Grouping by agent sits on the title's line, in `accent` while on.
+            LargeTitle("Inbox", action = if (sorted.isEmpty()) null else {
+                {
+                    IconButton(
+                        Glyphs.group,
+                        if (grouped) "Show newest first" else "Group by agent",
+                        { model.group(!grouped) },
+                        tint = if (grouped) palette.accent else palette.textMuted,
+                    )
+                }
+            })
             when {
                 model.paired.isEmpty() -> Empty(
                     "No host yet.",
@@ -199,9 +213,29 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
                                 )
                             }
                         }
-                        // A conversation that moves to the top slides there.
-                        items(found, key = { it.conversation.id }) { f ->
-                            Arriving { ConversationRow(model, f.conversation, f.match, query) { open(f.conversation.id) } }
+                        if (grouped) {
+                            // Each agent under its header, the most recently active first;
+                            // a header folds its conversations away.
+                            byAgent(found).forEach { group ->
+                                val shut = group.address in model.folded
+                                item(key = "agent:${group.address}") {
+                                    Arriving {
+                                        AgentHeader(model, group, shut) {
+                                            if (shut) model.folded.remove(group.address) else model.folded.add(group.address)
+                                        }
+                                    }
+                                }
+                                if (!shut) {
+                                    items(group.found, key = { it.conversation.id }) { f ->
+                                        Arriving { ConversationRow(model, f.conversation, f.match, query, grouped = true) { open(f.conversation.id) } }
+                                    }
+                                }
+                            }
+                        } else {
+                            // A conversation that moves to the top slides there.
+                            items(found, key = { it.conversation.id }) { f ->
+                                Arriving { ConversationRow(model, f.conversation, f.match, query) { open(f.conversation.id) } }
+                            }
                         }
                         item { Spacer(Modifier.height(88.dp)) }
                     }
@@ -261,14 +295,11 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
 @Composable
 private fun Filters(conversations: List<Conversation>, chosen: InboxFilter, onChoose: (InboxFilter) -> Unit) {
     val agents = conversations.map { "${it.host}/${it.agent}" }.distinct().sorted()
-    val names = agents.map { it.substringAfterLast('/') }
+    val labels = agentLabels(agents)
     val options = buildList {
         add(InboxFilter.All to "All")
         add(InboxFilter.Unread to "Unread")
-        // An agent by its name, or by sandbox and name when two share one.
-        if (agents.size > 1) agents.forEachIndexed { i, a ->
-            add(InboxFilter.OfAgent(a) to if (names.count { it == names[i] } > 1) a.substringAfter('/') else names[i])
-        }
+        if (agents.size > 1) agents.forEach { a -> add(InboxFilter.OfAgent(a) to labels.getValue(a)) }
     }
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 10.dp),
@@ -306,37 +337,51 @@ private fun highlighted(text: String, query: String, accent: Color): AnnotatedSt
  * search found, and the unread count.
  */
 @Composable
-private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, query: String, onClick: () -> Unit) {
+private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, query: String, grouped: Boolean = false, onClick: () -> Unit) {
     val p = palette
     val last = model.lines[c.id]?.lastOrNull()
     val unread = model.unread(c.id)
     val agent = c.agent.substringAfter('/')
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            AgentAvatar(agent, live = model.connected(c.host))
+        // Under its agent's header, a row starts where the header's name does, without the avatar.
+        val start = if (grouped) 74.dp else 16.dp
+        Row(Modifier.fillMaxWidth().padding(start = start, end = 16.dp, top = 12.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            if (!grouped) AgentAvatar(agent, live = model.connected(c.host))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(agent, style = Type.name, color = p.text, maxLines = 1)
-                    // Its name, as the agent or the person gave it; the address until then.
-                    val title = c.title
-                    if (title != null) {
+                    if (grouped) {
+                        // The agent is in the header: the conversation's name leads.
                         Text(
-                            highlighted(title, query, p.accent),
-                            style = Type.small,
-                            color = p.textMuted,
+                            c.title?.let { highlighted(it, query, p.accent) } ?: AnnotatedString("No name yet"),
+                            style = Type.name,
+                            color = if (c.title != null) p.text else p.textMuted,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f).padding(bottom = 1.dp),
+                            modifier = Modifier.weight(1f),
                         )
                     } else {
-                        Text(
-                            "${c.host}/${c.agent}",
-                            style = Type.code,
-                            color = p.textFaint,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f).padding(bottom = 2.dp),
-                        )
+                        Text(agent, style = Type.name, color = p.text, maxLines = 1)
+                        // Its name, as the agent or the person gave it; the address until then.
+                        val title = c.title
+                        if (title != null) {
+                            Text(
+                                highlighted(title, query, p.accent),
+                                style = Type.small,
+                                color = p.textMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f).padding(bottom = 1.dp),
+                            )
+                        } else {
+                            Text(
+                                "${c.host}/${c.agent}",
+                                style = Type.code,
+                                color = p.textFaint,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f).padding(bottom = 2.dp),
+                            )
+                        }
                     }
                     if (last != null) {
                         Text(Times.inList(last.time), style = Type.code, color = if (unread > 0) p.accent else p.textFaint, modifier = Modifier.padding(bottom = 2.dp))
@@ -371,6 +416,52 @@ private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, quer
                     ) { UnreadBadge(unread.coerceAtLeast(1)) }
                 }
             }
+        }
+        Hairline()
+    }
+}
+
+/**
+ * An agent's header in the grouped inbox, on `surface`: its avatar, name and
+ * address, how many of its conversations show, their unread total, and a
+ * chevron, down while open; tapping it folds them away or opens them.
+ */
+@Composable
+private fun AgentHeader(model: AppModel, group: Group, shut: Boolean, onToggle: () -> Unit) {
+    val p = palette
+    val host = group.address.substringBefore('/')
+    val name = group.address.substringAfterLast('/')
+    val unread = group.found.sumOf { model.unread(it.conversation.id) }
+    val turn by animateFloatAsState(if (shut) 0f else 90f, Motion.change(), label = "chevron")
+    val count = group.found.size
+    Column(
+        Modifier.fillMaxWidth().background(p.surface)
+            .clickable(onClickLabel = if (shut) "Show $name's conversations" else "Fold $name's conversations", onClick = onToggle)
+            .semantics { heading() },
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            AgentAvatar(name, live = model.connected(host))
+            Column(Modifier.weight(1f)) {
+                Text(name, style = Type.name, color = p.text, maxLines = 1)
+                // The count first: a long address is what gets cut.
+                Text(
+                    "$count ${if (count == 1) "conversation" else "conversations"} · ${group.address}",
+                    style = Type.code,
+                    color = p.textFaint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            AnimatedVisibility(
+                visible = unread > 0,
+                enter = fadeIn(Motion.enter(Motion.SHORT)) + scaleIn(Motion.enter(Motion.SHORT), initialScale = 0.6f),
+                exit = fadeOut(Motion.exit()) + scaleOut(Motion.exit(), targetScale = 0.6f),
+            ) { UnreadBadge(unread.coerceAtLeast(1)) }
+            Box(Modifier.rotate(turn)) { Glyph(Glyphs.chevron, p.textMuted, size = 20.dp) }
         }
         Hairline()
     }

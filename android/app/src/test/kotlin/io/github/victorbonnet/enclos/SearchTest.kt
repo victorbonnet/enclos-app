@@ -82,4 +82,21 @@ class SearchTest {
         assertEquals(4, folded)
         assertEquals(2L, search(all, { lines[it].orEmpty() }, { 0 }, "rain", InboxFilter.All, folds::of).single().match?.seq)
     }
+
+    @Test
+    fun grouped_by_agent_in_the_order_of_each_agents_newest_conversation() {
+        val again = Conversation("mac", "lab/main", "c-4")
+        val groups = byAgent(listOf(code, weather, pi, again).map { Found(it, null) })
+        assertEquals(listOf("mac/lab/coder", "mac/lab/main", "pi/home/main"), groups.map { it.address })
+        assertEquals(listOf("c-1", "c-4"), groups[1].found.map { it.conversation.id })
+    }
+
+    @Test
+    fun an_agent_is_labelled_by_the_shortest_of_its_names_no_other_has() {
+        val labels = agentLabels(listOf("mac/lab/coder", "mac/lab/main", "mac/home/main", "pi/home/main"))
+        assertEquals("coder", labels["mac/lab/coder"])
+        assertEquals("lab/main", labels["mac/lab/main"])
+        assertEquals("mac/home/main", labels["mac/home/main"])
+        assertEquals("pi/home/main", labels["pi/home/main"])
+    }
 }
