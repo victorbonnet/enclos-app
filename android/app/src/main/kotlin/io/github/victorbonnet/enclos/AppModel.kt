@@ -32,6 +32,19 @@ data class Agent(val host: String, val name: String, val runtime: String, val ca
     val address: String get() = "$host/$name"
 }
 
+/**
+ * A tool the agent ran while it worked on an answer: [label] says what it
+ * did; [done] once it ended, [ok] whether it worked.
+ */
+data class Step(
+    val call: String,
+    val name: String,
+    val label: String?,
+    val done: Boolean = false,
+    val ok: Boolean = true,
+    val durationMs: Long? = null,
+)
+
 /** A message of a conversation; [time] in seconds since the Unix epoch. */
 data class Line(val seq: Long, val from: String, val text: String, val kind: String, val time: Long)
 
@@ -118,6 +131,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private val awaiting = mutableStateMapOf<String, Boolean>()
     /** The messages behind [awaiting], by id: a refusal of one names it. */
     private val unanswered = Awaiting()
+    /** By conversation: the tools the agent runs now, live from the bridge. */
+    val steps = mutableStateMapOf<String, List<Step>>()
+    /**
+     * By the `seq` of the agent's message they led to: the steps of that
+     * answer. In memory only: the bridge does not keep steps.
+     */
+    val stepsOf = mutableStateMapOf<Long, List<Step>>()
     /** By conversation: the last message read on this device, kept across launches. */
     private val lastRead = mutableStateMapOf<String, Long>().apply {
         reads.all.forEach { (id, seq) -> if (seq is Long) put(id, seq) }
@@ -154,7 +174,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * message until the agent answers, and whenever its runtime says it is
      * writing, so there is something to see before the first `typing`.
      */
-    fun working(conversation: String) = typing[conversation] == true || awaiting[conversation] == true
+    fun working(conversation: String) =
+        typing[conversation] == true || awaiting[conversation] == true || steps[conversation].orEmpty().any { !it.done }
 
     /** The agent's messages in [conversation] not read on this device yet. */
     fun unread(conversation: String): Int {
@@ -286,6 +307,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 lines.remove(it.id)
                 typing.remove(it.id)
                 answered(it.id)
+                steps.remove(it.id)
             }
             conversations.removeAll { it.host == host.name }
             status.remove(host.name)
@@ -354,6 +376,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val ids = conversations.filter { it.host == host.name }.map { it.id }.toSet()
         typing.keys.filter { it in ids }.forEach { typing.remove(it) }
         ids.forEach { answered(it) }
+        steps.keys.filter { it in ids }.forEach { steps.remove(it) }
         if (unreadable.remove(host.name) || !foreground) return
         val n = failures.getOrDefault(host.name, 0)
         failures[host.name] = n + 1
@@ -409,11 +432,23 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     conversations.add(Conversation(host.name, m.getString("agent"), id))
                 }
                 if (line.from == "agent") {
-                    typing.remove(id)
-                    answered(id)
+                    val agent = m.getString("agent")
+                    // Only a reply answers the person; any other kind (notify,
+                    // and later ones) leaves the turn and its steps alone.
+                    if (line.kind == "reply") {
+                        // An answer ends the turn: the steps that led to it go with it.
+                        typing.remove(id)
+                        answered(id)
+                        steps.remove(id)?.takeIf { it.isNotEmpty() }?.let { stepsOf[line.seq] = it }
+                    } else if (agents.none { it.host == host.name && it.name == agent && "typing" in it.capabilities }) {
+                        // A message on its own (a cron job's) while the agent
+                        // works keeps the turn's steps and its working state;
+                        // only a runtime that says nothing of its typing has
+                        // no other sign that a turn ended.
+                        answered(id)
+                    }
                     // The bridge learns what an agent's channel can do once it
                     // reached it, which an agent's message shows: ask again.
-                    val agent = m.getString("agent")
                     if (agents.any { it.host == host.name && it.name == agent && it.capabilities.isEmpty() }) {
                         connections[host.name]?.send(message("agents"))
                     }
@@ -428,7 +463,22 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     typing.remove(id)
                     answered(id)
+                    // The turn ended: a step that never ended no longer runs.
+                    steps[id]?.let { steps[id] = settled(it) }
                 }
+            }
+            // A tool the agent starts, or ends: added, or marked done.
+            "tool" -> {
+                val id = m.getString("conversation")
+                steps[id] = stepped(
+                    steps[id].orEmpty(),
+                    call = m.getString("call"),
+                    phase = m.optString("phase"),
+                    name = m.getString("name"),
+                    label = m.optString("label").ifBlank { null },
+                    ok = m.optBoolean("ok", true),
+                    durationMs = if (m.has("duration_ms")) m.getLong("duration_ms") else null,
+                )
             }
             "error" -> {
                 said[host.name] = m.optString("message")
@@ -474,6 +524,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (!sent) return "Not sent: not connected to ${conversation.host}. Your message is still here."
         unanswered.sent(out.getString("id"), conversation.id, SystemClock.elapsedRealtime())
         awaiting[conversation.id] = true
+        // A new turn: steps left by one that ended with no answer are not its own.
+        steps.remove(conversation.id)
         main.postDelayed({ stillAwaiting(conversation.id) }, unanswered.limit)
         return null
     }
