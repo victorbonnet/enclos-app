@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -75,8 +76,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val agents = mutableStateListOf<Agent>()
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
-    /** By conversation: whether the agent is writing. */
+    /** By conversation: whether the agent said it is writing (`typing`). */
     val typing = mutableStateMapOf<String, Boolean>()
+    /** By conversation: a message was sent and the agent has not answered yet. */
+    private val awaiting = mutableStateMapOf<String, Boolean>()
+    /** The messages behind [awaiting], by id: a refusal of one names it. */
+    private val unanswered = Awaiting()
     /** By conversation: the last message read on this device, kept across launches. */
     private val lastRead = mutableStateMapOf<String, Long>().apply {
         reads.all.forEach { (id, seq) -> if (seq is Long) put(id, seq) }
@@ -95,6 +100,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Whether [host] is connected and authenticated. */
     fun connected(host: String) = status[host]?.startsWith("connected") == true
+
+    /**
+     * Whether the agent is working on [conversation]: from the person's
+     * message until the agent answers, and whenever its runtime says it is
+     * writing, so there is something to see before the first `typing`.
+     */
+    fun working(conversation: String) = typing[conversation] == true || awaiting[conversation] == true
 
     /** The agent's messages in [conversation] not read on this device yet. */
     fun unread(conversation: String): Int {
@@ -225,6 +237,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             conversations.filter { it.host == host.name }.forEach {
                 lines.remove(it.id)
                 typing.remove(it.id)
+                answered(it.id)
             }
             conversations.removeAll { it.host == host.name }
             status.remove(host.name)
@@ -289,7 +302,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
         status[host.name] = why
-        typing.keys.filter { id -> conversations.any { it.id == id && it.host == host.name } }.forEach { typing.remove(it) }
+        // Nothing will come over a closed connection: stop showing the agent at work.
+        val ids = conversations.filter { it.host == host.name }.map { it.id }.toSet()
+        typing.keys.filter { it in ids }.forEach { typing.remove(it) }
+        ids.forEach { answered(it) }
         if (unreadable.remove(host.name) || !foreground) return
         val n = failures.getOrDefault(host.name, 0)
         failures[host.name] = n + 1
@@ -332,6 +348,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (line.from == "agent") {
                     typing.remove(id)
+                    answered(id)
                     // The bridge learns what an agent's channel can do once it
                     // reached it, which an agent's message shows: ask again.
                     val agent = m.getString("agent")
@@ -344,9 +361,19 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "typing" -> {
                 val id = m.getString("conversation")
-                if (m.optBoolean("on")) typing[id] = true else typing.remove(id)
+                if (m.optBoolean("on")) {
+                    typing[id] = true
+                } else {
+                    typing.remove(id)
+                    answered(id)
+                }
             }
-            "error" -> said[host.name] = m.optString("message")
+            "error" -> {
+                said[host.name] = m.optString("message")
+                // The bridge refused a message of the person's (the agent is
+                // not reachable, say): nothing will answer it now.
+                unanswered.refused(m.optString("of"))?.let { stillAwaiting(it) }
+            }
         }
     }
 
@@ -366,7 +393,22 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             return "Too long to send: ${text.toByteArray(Charsets.UTF_8).size / 1000} KB, and at most about 63 KB go at once."
         }
         val sent = connections[conversation.host]?.send(out) == true
-        return if (sent) null else "Not sent: not connected to ${conversation.host}. Your message is still here."
+        if (!sent) return "Not sent: not connected to ${conversation.host}. Your message is still here."
+        unanswered.sent(out.getString("id"), conversation.id, SystemClock.elapsedRealtime())
+        awaiting[conversation.id] = true
+        main.postDelayed({ stillAwaiting(conversation.id) }, unanswered.limit)
+        return null
+    }
+
+    /** Stops showing the agent at work on [conversation] once no message of it waits. */
+    private fun stillAwaiting(conversation: String) {
+        if (!unanswered.waiting(conversation, SystemClock.elapsedRealtime())) awaiting.remove(conversation)
+    }
+
+    /** The agent answered in [conversation], its turn ended, or nothing more will come. */
+    private fun answered(conversation: String) {
+        unanswered.answered(conversation)
+        awaiting.remove(conversation)
     }
 
     fun reconnect(name: String) {

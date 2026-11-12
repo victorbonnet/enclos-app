@@ -1,5 +1,12 @@
 package io.github.victorbonnet.enclos.ui
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -26,9 +33,14 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.PI
+import kotlin.math.sin
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
@@ -181,22 +193,36 @@ fun NavBar(selected: Tab, onSelect: (Tab) -> Unit) {
             Tab.entries.forEach { tab ->
                 val on = tab == selected
                 // The whole column takes the tap, with no press shown: the
-                // corners closing in on the tab chosen are its answer.
+                // corners closing in on the tab chosen are its answer, and
+                // they open out of the one left.
+                val enclosed by animateFloatAsState(if (on) 1f else 0f, Motion.change(Motion.MEDIUM), label = "enclosed")
+                val tint by animateColorAsState(if (on) palette.accent else palette.textMuted, Motion.change(), label = "tint")
+                val label by animateColorAsState(if (on) palette.text else palette.textMuted, Motion.change(), label = "label")
                 Column(
                     Modifier.weight(1f).clickable(interactionSource = null, indication = null, role = Role.Tab) { onSelect(tab) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Box(Modifier.width(56.dp).height(32.dp), contentAlignment = Alignment.Center) {
-                        if (on) Corners(palette.accent, Modifier.width(56.dp).height(32.dp), stroke = 2.5.dp, arm = 0.21f)
+                        Corners(
+                            palette.accent,
+                            Modifier.width(56.dp).height(32.dp).graphicsLayer {
+                                alpha = enclosed
+                                val scale = 1.25f - 0.25f * enclosed
+                                scaleX = scale
+                                scaleY = scale
+                            },
+                            stroke = 2.5.dp,
+                            arm = 0.21f,
+                        )
                         val icon = when (tab) {
                             Tab.Inbox -> Glyphs.inbox
                             Tab.Agents -> Glyphs.agents
                             Tab.Status -> Glyphs.status
                         }
-                        Glyph(icon, if (on) palette.accent else palette.textMuted)
+                        Glyph(icon, tint)
                     }
-                    Text(tab.label, style = Type.label.copy(fontSize = 12.sp), color = if (on) palette.text else palette.textMuted)
+                    Text(tab.label, style = Type.label.copy(fontSize = 12.sp), color = label)
                 }
             }
         }
@@ -242,15 +268,43 @@ fun Bubble(text: String, time: String, outgoing: Boolean, header: String? = null
     }
 }
 
-/** The agent is writing: three squares in a bubble of the agent's shape. */
+/**
+ * The agent is working: three squares in a bubble of the agent's shape,
+ * rising and brightening one after the other, a wave that loops every
+ * 900 ms. They stand still when the person turned animations off.
+ */
 @Composable
-fun TypingBubble(agent: String) {
+fun WorkingBubble(agent: String) {
+    val still = animationsOff()
+    val wave = rememberInfiniteTransition(label = "working")
+    val phase by wave.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing)),
+        label = "phase",
+    )
+    val lift = with(LocalDensity.current) { 4.dp.toPx() }
     Row(
         Modifier.clip(Shapes.bubbleIn).background(palette.surface).border(BorderStroke(1.dp, palette.line), Shapes.bubbleIn)
-            .padding(12.dp).semantics { contentDescription = "$agent is typing" },
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) { repeat(3) { Box(Modifier.size(6.dp).background(palette.textFaint)) } }
+            .padding(horizontal = 12.dp, vertical = 14.dp).semantics { contentDescription = "$agent is working" },
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(3) { i ->
+            Box(
+                Modifier.size(6.dp).graphicsLayer {
+                    // Read here, the phase redraws the squares without recomposing them.
+                    val bump = if (still) 0f else bump((phase - i * 0.18f + 1f) % 1f)
+                    translationY = -lift * bump
+                    alpha = 0.4f + 0.6f * bump
+                }.background(palette.accent),
+            )
+        }
+    }
 }
+
+/** 0 → 1 → 0 over the first half of the cycle, then rest: one square's rise. */
+private fun bump(t: Float): Float = if (t < 0.5f) sin(PI.toFloat() * t / 0.5f) else 0f
 
 /** A line about the conversation that is not a message, such as why the host is not connected. */
 @Composable
@@ -296,12 +350,14 @@ fun Composer(value: String, onValue: (String) -> Unit, placeholder: String, onSe
                 },
             )
             val enabled = value.isNotBlank()
+            val ground by animateColorAsState(if (enabled) p.buttonBg else p.surface, Motion.change(), label = "send")
+            val arrow by animateColorAsState(if (enabled) p.buttonText else p.textFaint, Motion.change(), label = "arrow")
             Box(
-                Modifier.size(44.dp).clip(Shapes.control).background(if (enabled) p.buttonBg else p.surface)
+                Modifier.size(44.dp).clip(Shapes.control).background(ground)
                     .clickable(enabled = enabled, onClickLabel = "Send", role = Role.Button, onClick = onSend)
                     .semantics { contentDescription = "Send" },
                 contentAlignment = Alignment.Center,
-            ) { Glyph(Glyphs.send, if (enabled) p.buttonText else p.textFaint) }
+            ) { Glyph(Glyphs.send, arrow) }
         }
     }
 }

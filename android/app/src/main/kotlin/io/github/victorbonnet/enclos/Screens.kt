@@ -2,6 +2,16 @@ package io.github.victorbonnet.enclos
 
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,6 +46,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
@@ -70,8 +81,9 @@ import io.github.victorbonnet.enclos.ui.Shapes
 import io.github.victorbonnet.enclos.ui.SystemLine
 import io.github.victorbonnet.enclos.ui.TextLink
 import io.github.victorbonnet.enclos.ui.Type
-import io.github.victorbonnet.enclos.ui.TypingBubble
+import io.github.victorbonnet.enclos.ui.Motion
 import io.github.victorbonnet.enclos.ui.UnreadBadge
+import io.github.victorbonnet.enclos.ui.WorkingBubble
 import io.github.victorbonnet.enclos.ui.palette
 import kotlinx.coroutines.delay
 
@@ -106,8 +118,9 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
                 sorted.isEmpty() -> Empty("No conversation yet.", "Start one with an agent.", "Agents →", newConversation)
                 else -> LazyColumn(Modifier.weight(1f)) {
                     item { Hairline() }
+                    // A conversation that moves to the top slides there.
                     items(sorted, key = { it.id }) { c ->
-                        ConversationRow(model, c) { open(c.id) }
+                        Arriving { ConversationRow(model, c) { open(c.id) } }
                     }
                     item { Spacer(Modifier.height(88.dp)) }
                 }
@@ -175,7 +188,11 @@ private fun ConversationRow(model: AppModel, c: Conversation, onClick: () -> Uni
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    if (unread > 0) UnreadBadge(unread)
+                    AnimatedVisibility(
+                        visible = unread > 0,
+                        enter = fadeIn(Motion.enter(Motion.SHORT)) + scaleIn(Motion.enter(Motion.SHORT), initialScale = 0.6f),
+                        exit = fadeOut(Motion.exit()) + scaleOut(Motion.exit(), targetScale = 0.6f),
+                    ) { UnreadBadge(unread.coerceAtLeast(1)) }
                 }
             }
         }
@@ -233,7 +250,11 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, pair: () -> Unit) {
                         ) {
                             Text(sandbox, style = Type.code.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold), color = p.text)
                             Text(agents.first().runtime.replaceFirstChar { it.uppercase() }, style = Type.small, color = p.textMuted)
-                            channel(agents.first())?.let { (text, full) -> CapabilityChip(text, full) }
+                            // Known once the bridge reached the agent: it fades in then.
+                            val chip = channel(agents.first())
+                            AnimatedVisibility(chip != null, enter = fadeIn(Motion.enter()), exit = fadeOut(Motion.exit())) {
+                                chip?.let { (text, full) -> CapabilityChip(text, full) }
+                            }
                         }
                     }
                     items(agents, key = { "agent-${it.address}" }) { agent ->
@@ -302,14 +323,25 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val lines = model.lines[id].orEmpty()
     val agent = conversation.agent.substringAfter('/')
     val live = model.connected(conversation.host)
-    val typing = model.typing[id] == true
+    val working = model.working(id)
     var draft by remember { mutableStateOf("") }
     var unsent by remember { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
-    LaunchedEffect(lines.size, typing) {
+    // Whether the person is at the newest: the first item (the list is
+    // reversed) at its very end. Read when a scroll ends, theirs or the
+    // list's own, not when a message arrives, which shifts the first
+    // visible item; within a long message, the offset says they scrolled up.
+    var atNewest by remember { mutableStateOf(true) }
+    LaunchedEffect(list) {
+        snapshotFlow { list.isScrollInProgress }.collect { scrolling ->
+            if (!scrolling) atNewest = list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset <= 4
+        }
+    }
+    LaunchedEffect(lines.size, working) {
         model.markRead(id)
-        val count = list.layoutInfo.totalItemsCount
-        if (count > 0) list.animateScrollToItem(count - 1)
+        // The list is anchored at the newest: follow what arrives, unless
+        // the person scrolled up to read.
+        if (atNewest) list.animateScrollToItem(0)
     }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
@@ -321,35 +353,61 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             }
         }
         Hairline()
+        // Newest first, drawn from the bottom up: the conversation stays
+        // anchored at its last message when the keyboard opens or a message
+        // arrives. What arrives fades in while the rest slides up.
         LazyColumn(
             Modifier.weight(1f),
             state = list,
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            reverseLayout = true,
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Bottom),
         ) {
-            lines.forEachIndexed { i, line ->
-                val day = Times.day(line.time)
-                if (i == 0 || Times.day(lines[i - 1].time) != day) item(key = "day-${line.seq}") { DaySeparator(day) }
+            model.said[conversation.host]?.let { item(key = "said") { Arriving { SystemLine("The bridge said: $it") } } }
+            if (!live) item(key = "status") { Arriving { SystemLine(model.status[conversation.host] ?: "not connected") } }
+            if (working) item(key = "working") { Arriving { WorkingBubble(agent) } }
+            for (i in lines.indices.reversed()) {
+                val line = lines[i]
                 item(key = line.seq) {
-                    Bubble(
-                        text = line.text,
-                        time = Times.clock(line.time),
-                        outgoing = line.from != "agent",
-                        header = if (line.kind == "notify") ON_ITS_OWN else null,
-                    )
+                    Arriving {
+                        Bubble(
+                            text = line.text,
+                            time = Times.clock(line.time),
+                            outgoing = line.from != "agent",
+                            header = if (line.kind == "notify") ON_ITS_OWN else null,
+                        )
+                    }
                 }
+                val day = Times.day(line.time)
+                if (i == 0 || Times.day(lines[i - 1].time) != day) item(key = "day-${line.seq}") { Arriving { DaySeparator(day) } }
             }
-            if (typing) item(key = "typing") { TypingBubble(agent) }
-            if (!live) item(key = "status") { SystemLine(model.status[conversation.host] ?: "not connected") }
-            model.said[conversation.host]?.let { item(key = "said") { SystemLine("The bridge said: $it") } }
         }
         // Why the last message did not go: the draft stays until it does.
         unsent?.let { SystemLine(it, Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) }
         Composer(draft, { draft = it }, "Message $agent") {
             unsent = model.send(conversation, draft.trim())
-            if (unsent == null) draft = ""
+            if (unsent == null) {
+                draft = ""
+                // What the person just sent shows, wherever they had scrolled.
+                atNewest = true
+            }
         }
     }
+}
+
+/**
+ * An item of a lazy list that fades in when it arrives, slides to its new
+ * place when others arrive, and fades out when it goes.
+ */
+@Composable
+private fun LazyItemScope.Arriving(content: @Composable () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().animateItem(
+            fadeInSpec = Motion.enter(),
+            placementSpec = Motion.enter(),
+            fadeOutSpec = Motion.exit(),
+        ),
+    ) { content() }
 }
 
 // ---------- Pairing ----------
@@ -524,19 +582,17 @@ private fun Step(n: Int, state: StepState, title: String, detail: String) {
     val p = palette
     Column {
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            val box = Modifier.size(24.dp)
-            Box(
-                when (state) {
-                    StepState.Done -> box.background(p.accent)
-                    StepState.Now -> box.border(2.dp, p.accent)
-                    StepState.Next -> box.border(1.dp, p.lineStrong)
-                },
-                contentAlignment = Alignment.Center,
-            ) {
-                if (state == StepState.Done) {
-                    Glyph(Glyphs.check, p.bg, size = 16.dp)
-                } else {
-                    Text("$n", style = Type.code.copy(fontWeight = FontWeight.SemiBold), color = if (state == StepState.Now) p.accent else p.textMuted)
+            // A step fills in as it is done, rather than switching.
+            val fill by animateColorAsState(if (state == StepState.Done) p.accent else p.accent.copy(alpha = 0f), Motion.change(Motion.MEDIUM), label = "fill")
+            val edge by animateColorAsState(if (state == StepState.Next) p.lineStrong else p.accent, Motion.change(), label = "edge")
+            val width by animateDpAsState(if (state == StepState.Now) 2.dp else 1.dp, Motion.change(), label = "width")
+            Box(Modifier.size(24.dp).background(fill).border(width, edge), contentAlignment = Alignment.Center) {
+                Crossfade(state == StepState.Done, animationSpec = Motion.change(), label = "mark") { done ->
+                    if (done) {
+                        Glyph(Glyphs.check, p.bg, size = 16.dp)
+                    } else {
+                        Text("$n", style = Type.code.copy(fontWeight = FontWeight.SemiBold), color = if (state == StepState.Now) p.accent else p.textMuted)
+                    }
                 }
             }
             Column(Modifier.weight(1f)) {
