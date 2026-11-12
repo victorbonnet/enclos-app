@@ -58,4 +58,18 @@ class ConversationMetadataTest {
         assertFalse(acceptsConversationMetadata(original.copy(revision = 9), original.copy(host = "pi")))
         assertFalse(acceptsConversationMetadata(original, original.copy(revision = -1)))
     }
+
+    @Test
+    fun every_message_about_a_clashing_conversation_is_left_out_not_only_its_lines() {
+        val mac = listOf(Conversation("mac", "lab/main", "home.lab.main", title = "Home", home = true, revision = 1))
+        // Host pi's typing, tool steps and group state would otherwise land on mac's Home.
+        listOf("conversation", "message", "typing", "tool", "group.state").forEach {
+            assertTrue(it, leftOutForClash(mac, "pi", it, "home.lab.main"))
+        }
+        assertFalse(leftOutForClash(mac, "mac", "typing", "home.lab.main"))
+        assertFalse(leftOutForClash(mac, "pi", "typing", "home.lab.coder"))
+        assertFalse(leftOutForClash(mac, "pi", "typing", null))
+        // A policy request naming that conversation is about the sandbox: it still reaches the inbox.
+        assertFalse(leftOutForClash(mac, "pi", "approval", "home.lab.main"))
+    }
 }

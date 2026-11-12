@@ -119,6 +119,17 @@ fun acceptsConversationMetadata(current: Conversation?, incoming: Conversation):
 fun heldByAnotherHost(conversations: List<Conversation>, host: String, id: String): Boolean =
     conversations.any { it.id == id && it.host != host }
 
+/** The messages whose `conversation` names what this phone keeps by that id: the conversation, its lines, typing, steps, a group's state. */
+val conversationScoped = setOf("conversation", "message", "group.state", "typing", "tool")
+
+/**
+ * Whether a message of [type] from [host] about conversation [id] is left out: it names
+ * a conversation another host's has the id of, so it would land on that one. A policy
+ * request that names a conversation is not about the conversation's own state, and stays.
+ */
+fun leftOutForClash(conversations: List<Conversation>, host: String, type: String, id: String?): Boolean =
+    type in conversationScoped && id != null && heldByAnotherHost(conversations, host, id)
+
 /** A dialog may hold an older row: naming changes only the current row's title fields. */
 internal fun renameConversationLocally(conversations: MutableList<Conversation>, id: String, title: String) {
     val at = conversations.indexOfFirst { it.id == id }
@@ -627,6 +638,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun received(host: Host, m: JSONObject) {
+        // Once for every message about a conversation: another host's with the same id keeps it.
+        val about = m.optString("conversation").ifBlank { null }
+        if (about != null && leftOutForClash(conversations, host.name, m.optString("type"), about)) {
+            return refusedClash(host.name, about, m.optString("agent").ifBlank { null })
+        }
         when (m.optString("type")) {
             "sandbox.policy", "sandbox.policy.preview" -> {
                 val of = m.optString("of")
@@ -704,7 +720,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     archived = m.optBoolean("archived", false),
                     revision = m.optLong("revision", 0),
                 )
-                if (heldByAnotherHost(conversations, host.name, id)) return refusedClash(host.name, id)
                 val at = conversations.indexOfFirst { it.id == id }
                 if (!acceptsConversationMetadata(conversations.getOrNull(at), known)) return
                 if (at < 0 || conversations[at] != known) {
@@ -726,7 +741,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "message" -> {
                 val id = m.getString("conversation")
-                if (heldByAnotherHost(conversations, host.name, id)) return refusedClash(host.name, id)
                 if (conversations.none { it.id == id }) {
                     val started = Conversation(host.name, m.getString("agent"), id)
                     conversations.add(started)
@@ -1074,8 +1088,17 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             archiveProblems[key] = "Not saved: the connection ended. Reconnect to check the archive state."
             return false
         }
-        archiveRequests[command.getString("id")] = key
+        val id = command.getString("id")
+        archiveRequests[id] = key
         archivePending[key] = archived
+        // As for policy and photo requests: no answer in a minute, and the person may try again.
+        main.postDelayed({
+            if (archiveRequests[id] == key) {
+                archiveRequests.remove(id)
+                archivePending.remove(key)
+                archiveProblems[key] = "The host has not confirmed the archive state. Reconnect and check it before trying again."
+            }
+        }, 60_000)
         return true
     }
 
@@ -1085,10 +1108,21 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     val clashes = mutableStateMapOf<String, Set<String>>()
 
-    private fun refusedClash(host: String, id: String) {
+    /** By host: the agents (`sandbox/agent`) whose conversation was left out for that reason. */
+    private val clashAgents = mutableStateMapOf<String, Set<String>>()
+
+    /** How many of [host]'s conversations are left out because another host's has the same id. */
+    fun leftOut(host: String): Int = clashes[host]?.size ?: 0
+
+    /** Whether a conversation of [agent] (its Home, most often) is left out because another host's has the same id. */
+    fun leftOut(agent: Agent): Boolean = agent.name in clashAgents[agent.host].orEmpty()
+
+    private fun refusedClash(host: String, id: String, agent: String?) {
+        if (agent != null && agent !in clashAgents[host].orEmpty()) clashAgents[host] = clashAgents[host].orEmpty() + agent
         if (id in clashes[host].orEmpty()) return
         clashes[host] = clashes[host].orEmpty() + id
-        android.util.Log.w("enclos", "a conversation of $host has the id of another host's and is left out")
+        // No host name in the log: the screens say which.
+        android.util.Log.w("enclos", "a conversation has the id of another host's and is left out")
     }
 
     private fun clearArchiveRequests(host: String, problem: String? = null) {
@@ -1182,7 +1216,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
-        archiveRequests.clear(); archivePending.clear(); archiveProblems.clear(); clashes.clear()
+        archiveRequests.clear(); archivePending.clear(); archiveProblems.clear(); clashes.clear(); clashAgents.clear()
         agentImages.clear(paired.map { it.name })
         sandboxPolicies.clear(); policyBusy.clear(); policyFresh.clear(); policyErrors.clear(); policyReviews.clear(); policyRequests.clear()
         saving.execute { policyCache.edit { clear() } }
@@ -1220,6 +1254,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
         clashes.remove(host)
+        clashAgents.remove(host)
         clearArchiveRequests(host)
         archiveProblems.keys.filter { it.host == host }.forEach { archiveProblems.remove(it) }
         agentImages.forget(host)

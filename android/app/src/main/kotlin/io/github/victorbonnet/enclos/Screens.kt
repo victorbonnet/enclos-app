@@ -1052,6 +1052,15 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
                 FoldHeading(host.name, open, 0, query.isBlank(), lead = { ConnectionDot(live) }) { model.fold(key) }
             }
             if (!open) return@forEach
+            val leftOut = model.leftOut(host.name)
+            if (leftOut > 0) {
+                item(key = "$key-clash") {
+                    Text(
+                        "$leftOut ${if (leftOut == 1) "conversation" else "conversations"} of this host not shown: another paired host has an agent with the same sandbox and name, whose conversations use the same ids.",
+                        style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            }
             if (its.isEmpty()) {
                 item(key = "$key-none") {
                     Text("No agent yet: the host lists them once connected.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
