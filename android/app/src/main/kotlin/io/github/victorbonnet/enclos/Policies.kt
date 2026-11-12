@@ -11,6 +11,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.ui.*
@@ -169,6 +170,22 @@ fun SandboxPolicyScreen(model: AppModel, address: String, back: () -> Unit) {
             },
         )
     }
+    val context = LocalContext.current
+    // Saving asks for the biometric or screen lock first, whatever the
+    // app-lock setting; cancelled, nothing is sent.
+    val save = { saving: PolicyReview ->
+        model.policyErrors.remove(address)
+        (context as? MainActivity)?.unlocker?.let { unlocker ->
+            Confirm.decide(
+                "Save the policy",
+                screenLock = AppLock.available(context),
+                ask = unlocker::ask,
+                send = { model.applyPolicy(address, saving) },
+                held = { why -> model.policyErrors[address] = listOfNotNull("Nothing was saved.", why).joinToString(" ") },
+            )
+        }
+        Unit
+    }
     if (review != null) AlertDialog(
         onDismissRequest = { if (!busy) model.policyReviews.remove(address) },
         title = { Text("Review policy change") },
@@ -177,9 +194,10 @@ fun SandboxPolicyScreen(model: AppModel, address: String, back: () -> Unit) {
                 review.changes.forEach { Text(Visible.revealed(it), style = Type.small) }
                 if (review.restart) Text("All running work in this sandbox will stop. Its services restart under the updated policy.", style = Type.small)
                 Text("Every agent will learn the active policy after it is saved.", style = Type.small)
+                model.policyErrors[address]?.let { Text(it, style = Type.small) }
             }
         },
-        confirmButton = { TextButton(enabled = policyReviewSavable(review, policy, live, fresh, busy), onClick = { model.applyPolicy(address, review) }) { Text(if (busy) "Saving…" else if (review.restart) "Save & restart" else "Save policy") } },
+        confirmButton = { TextButton(enabled = policyReviewSavable(review, policy, live, fresh, busy), onClick = { save(review) }) { Text(if (busy) "Saving…" else if (review.restart) "Save & restart" else "Save policy") } },
         dismissButton = { TextButton(enabled = !busy, onClick = { model.policyReviews.remove(address) }) { Text("Cancel") } },
     )
 }
