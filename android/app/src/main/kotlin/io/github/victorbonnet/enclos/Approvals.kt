@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -95,14 +96,30 @@ private fun PolicyDecisionButtons(model: AppModel, request: PolicyRequest) {
     val p = palette
     val busy = request.key in model.decidingApprovals || request.state == "applying"
     val live = model.connected(request.host) && model.approvalsFresh[request.host] == true
+    val context = LocalContext.current
+    // Each decision asks for the biometric or screen lock first, whatever
+    // the app-lock setting; cancelled, nothing is sent.
+    val decide = { approve: Boolean ->
+        model.approvalErrors.remove(request.key)
+        (context as? MainActivity)?.unlocker?.let { unlocker ->
+            Confirm.decide(
+                if (approve) "Approve the request" else "Deny the request",
+                screenLock = AppLock.available(context),
+                ask = unlocker::ask,
+                send = { model.decideApproval(request, approve) },
+                held = { why -> model.approvalErrors[request.key] = listOfNotNull("Nothing was sent.", why).joinToString(" ") },
+            )
+        }
+        Unit
+    }
     if (request.pending || busy) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) {
                 PrimaryButton(if (busy) "Saving decision…" else if (request.restart) "Approve & restart" else "Approve",
-                    enabled = live && !busy && request.available) { model.decideApproval(request, true) }
+                    enabled = live && !busy && request.available) { decide(true) }
             }
             Box(Modifier.weight(1f).height(48.dp).clip(Shapes.control).border(1.dp, p.lineStrong, Shapes.control)
-                .clickable(enabled = live && !busy, role = Role.Button) { model.decideApproval(request, false) }, contentAlignment = Alignment.Center) {
+                .clickable(enabled = live && !busy, role = Role.Button) { decide(false) }, contentAlignment = Alignment.Center) {
                 Text("Deny", style = Type.label, color = if (live && !busy) p.text else p.textFaint)
             }
         }

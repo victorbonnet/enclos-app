@@ -32,7 +32,7 @@ object AppLock {
 
 /**
  * Asks the person to prove it is them, the phone's own way: from Android
- * 11, a biometric (fingerprint, face) or the screen lock; on Android 10,
+ * 11, a strong biometric (fingerprint, face) or the screen lock; on Android 10,
  * the same through its older call; on Android 9, the screen lock. Made
  * with the activity, before it starts, as Android requires for the
  * screen-lock page it may open.
@@ -56,7 +56,8 @@ class Unlocker(private val activity: ComponentActivity) {
         waiting = done
         when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> biometric(title) {
-                setAllowedAuthenticators(Authenticators.BIOMETRIC_WEAK or Authenticators.DEVICE_CREDENTIAL)
+                // Strong (class 3) only: a weak face unlock, which a photo may fool, does not open the app.
+                setAllowedAuthenticators(Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL)
             }
             Build.VERSION.SDK_INT == Build.VERSION_CODES.Q -> biometric(title) {
                 @Suppress("DEPRECATION")
