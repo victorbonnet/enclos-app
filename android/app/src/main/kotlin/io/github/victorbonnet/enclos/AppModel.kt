@@ -17,6 +17,7 @@ import io.github.victorbonnet.enclos.core.pairingProof
 import io.github.victorbonnet.enclos.core.parsePairLink
 import io.github.victorbonnet.enclos.ui.ThemeChoice
 import io.github.victorbonnet.enclos.ui.applyTheme
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -590,11 +591,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             bridgeKey = host.bridgeKey,
             noisePrivate = { Keys.unwrap(host.noiseKeyWrapped) },
             first = { session ->
-                message(
-                    "auth",
-                    "device" to host.deviceId,
-                    "sig" to encodeBytes(Keys.sign(host.keyAlias, session.handshakeHash())),
-                )
+                message("auth", *authFields(host.deviceId, encodeBytes(Keys.sign(host.keyAlias, session.handshakeHash()))))
             },
             // A connection [connect] replaced, or that Forget or Clear cache
             // closed, says nothing more: closing is asynchronous, and a late
