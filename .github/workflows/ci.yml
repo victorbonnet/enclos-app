@@ -53,6 +53,19 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
       - name: Build the Rust core and its Kotlin bindings
         run: sh scripts/build-core-android.sh
+      # The project's one debug signing key (docs/adr/0004), so this APK
+      # installs over any other build. Runs without the secret (Dependabot's,
+      # a fork's) sign with a throwaway key, and say so.
+      - name: Put the shared debug signing key in place
+        env:
+          KEYSTORE: ${{ secrets.ENCLOS_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE" ]; then
+            echo "::warning::No ENCLOS_DEBUG_KEYSTORE_B64 secret: this APK is signed with a throwaway key and installs only after uninstalling the app"
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/enclos-debug.keystore"
+          echo "ENCLOS_DEBUG_KEYSTORE=$RUNNER_TEMP/enclos-debug.keystore" >> "$GITHUB_ENV"
       - name: Build, test and lint the app
         working-directory: android
         run: ./gradlew --no-daemon :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
