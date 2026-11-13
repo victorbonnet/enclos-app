@@ -48,6 +48,12 @@ object Keys : PairingKeys {
         keyStore().deleteEntry(alias)
     }
 
+    /** Deletes every device signing key whose alias is not in [used]. */
+    fun deleteUnused(used: Set<String>) {
+        val store = keyStore()
+        unusedDeviceKeys(store.aliases().toList(), used).forEach { store.deleteEntry(it) }
+    }
+
     /** The signing key's public half as SEC1: 0x04, then X and Y, 32 bytes each. */
     fun devicePublicKey(alias: String): ByteArray {
         val key = keyStore().getCertificate(alias).publicKey as ECPublicKey
@@ -97,3 +103,10 @@ object Keys : PairingKeys {
         return cipher.doFinal(wrapped.copyOfRange(12, wrapped.size))
     }
 }
+
+/** What every device signing key's alias starts with, the host's name after it. */
+internal const val DEVICE_KEY_PREFIX = "enclos-device-"
+
+/** The device signing keys among [aliases] that no paired host uses; never the Noise wrapping key. */
+internal fun unusedDeviceKeys(aliases: List<String>, used: Set<String>): List<String> =
+    aliases.filter { it.startsWith(DEVICE_KEY_PREFIX) && it !in used }

@@ -158,7 +158,19 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         }
     }
 
-    /** Forgets all that [host] sent: it was paired again, as another device. */
+    /** Forgets all that every host sent: the cache was cleared; each syncs again. */
+    fun clear() {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            listOf("messages", "conversations", "agents").forEach { db.delete(it, null, null) }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** Forgets all that [host] sent: it was paired again as another device, or forgotten. */
     fun forget(host: String) {
         val db = writableDatabase
         db.beginTransaction()
@@ -199,6 +211,20 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
     private fun attachments(list: List<Attachment>) = JSONArray(
         list.map { JSONObject().put("id", it.id).put("mime", it.mime).put("name", it.name).put("size", it.size) },
     ).toString()
+
+    /** The ids of the files of every message kept from [host], to delete them when it is forgotten. */
+    fun attachmentIds(host: String): List<String> =
+        readableDatabase.rawQuery("SELECT attachments FROM messages WHERE host = ? AND attachments IS NOT NULL", arrayOf(host)).use { c ->
+            val ids = mutableListOf<String>()
+            while (c.moveToNext()) {
+                try {
+                    attachments(c.getString(0)).mapTo(ids) { it.id }
+                } catch (e: org.json.JSONException) {
+                    // A row that cannot be read names no file to delete.
+                }
+            }
+            ids
+        }
 
     private fun attachments(json: String?): List<Attachment> {
         val a = JSONArray(json ?: return emptyList())

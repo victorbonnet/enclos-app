@@ -54,7 +54,7 @@ class PairingAttempt(
     private val keys: PairingKeys,
     /** Bytes as the protocol writes them in JSON; the core's `decodeBytes` on a phone. */
     private val decode: (String) -> ByteArray,
-    val alias: String = "enclos-device-$name-${UUID.randomUUID()}",
+    val alias: String = "$DEVICE_KEY_PREFIX$name-${UUID.randomUUID()}",
 ) {
     @Volatile private var kept = false
     private val ended = AtomicBoolean(false)

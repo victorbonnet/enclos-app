@@ -164,6 +164,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // Off the main thread, on the writes' own, before any write: first
         // what the first screens show, then every message, merged in.
         saving.execute {
+            // Signing keys no host uses (a pairing that ended, a host paired
+            // again, a Forget the app was stopped in): deleted, as nothing
+            // else ever would. No pairing is under way: the launch screen is up.
+            try {
+                Keys.deleteUnused(hosts.all().mapTo(HashSet()) { it.keyAlias })
+            } catch (e: Exception) {
+                // The Keystore's or the preferences' failure: tried again at the next start.
+                android.util.Log.w("enclos", "unused keys not deleted: ${e.javaClass.simpleName}")
+            }
             val recent = read { recent() }
             // The connections open next: their HTTP client is built here, not on the main thread.
             BridgeConnection.prepare()
@@ -492,14 +501,18 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 )
             },
             // A message the app cannot read ends this connection, not the app:
-            // the two repositories release separately.
+            // the two repositories release separately. A connection [connect]
+            // replaced, or that Forget or Clear cache closed, says nothing
+            // more: closing is asynchronous, and a late message would refill
+            // what was just deleted, or a forgotten host.
             onMessage = { m ->
                 ui {
+                    if (connections[host.name] !== connection) return@ui
                     try {
                         received(host, m)
                     } catch (e: JSONException) {
                         // Not retried on its own: the next connection would get the same.
-                        if (connections[host.name] === connection) unreadable += host.name
+                        unreadable += host.name
                         connection.fail("the bridge sent what the app cannot read: ${e.message}")
                     }
                 }
@@ -731,6 +744,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun fileOf(host: String, a: Attachment) = java.io.File(folderOf(host, a), Attachments.fileName(a.name))
     private fun partOf(host: String, a: Attachment) = java.io.File(folderOf(host, a), ".part")
 
+    /** The folder of [host]'s attachment [id], to delete; none for an id that is not one folder's name. */
+    private fun attachmentFolder(host: String, id: String) =
+        if (attachmentFolderName(id)) java.io.File(java.io.File(java.io.File(getApplication<Application>().cacheDir, "attachments"), Attachments.hostFolder(host)), id) else null
+
     /** Fetches [a] from [host]'s bridge, or finds it on the phone; again after a failure. */
     fun fetch(host: String, a: Attachment) {
         if (a.id in fetching) return
@@ -863,6 +880,82 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         awaiting.remove(conversation)
     }
 
+    /**
+     * Forgets host [name] on this phone: tells its bridge to unpair this
+     * device when connected (`device.forget`; else it stays listed there
+     * until `enclos app unpair`), then deletes the device's keys for it and
+     * all the phone kept from it: agents, conversations, messages, files,
+     * how far they were read. Returns whether the bridge was told.
+     */
+    fun forgetHost(name: String): Boolean {
+        val host = paired.firstOrNull { it.name == name } ?: return false
+        // Sent before the close, which OkHttp queues after it.
+        val told = connections[name]?.send(message("device.forget")) == true
+        connections.remove(name)?.close()
+        failures.remove(name)
+        hosts.remove(name)
+        // The Keystore off the main thread; should it fail, the next start's sweep deletes the key.
+        saving.execute {
+            try {
+                Keys.deleteDeviceKey(host.keyAlias)
+            } catch (e: Exception) {
+                android.util.Log.w("enclos", "the forgotten host's key was not deleted: ${e.javaClass.simpleName}")
+            }
+        }
+        paired.removeAll { it.name == name }
+        status.remove(name)
+        said.remove(name)
+        folded.removeAll { it.startsWith("$name/") }
+        val ids = conversations.filter { it.host == name }.map { it.id }.toSet()
+        val attached = ids.flatMap { lines[it].orEmpty() }.flatMap { it.attachments }
+        unreadable.remove(name)
+        ids.forEach {
+            typing.remove(it)
+            answered(it)
+            steps.remove(it)
+            lastRead.remove(it)
+        }
+        reads.edit { ids.forEach { remove(it) } }
+        attached.forEach {
+            fetching.remove(it.id)
+            files.remove(it.id)
+        }
+        // The files, off the main thread, after what is queued: those of the
+        // messages shown, and those of messages kept but not read yet (the
+        // second pass of the read may not have ended, or failed), before the
+        // store forgets them ([forget] queues that next).
+        saving.execute {
+            val kept = try {
+                store.attachmentIds(name)
+            } catch (e: android.database.SQLException) {
+                emptyList()
+            }
+            (attached.map { it.id } + kept).toSet().forEach { id -> attachmentFolder(name, id)?.deleteRecursively() }
+        }
+        forget(name)
+        return told
+    }
+
+    /**
+     * Clears what this phone keeps (conversations, messages, agents,
+     * downloaded files) and syncs everything again from each bridge.
+     * Pairings stay, and so does how far each conversation was read.
+     */
+    fun clearCache() {
+        conversations.clear()
+        lines.clear()
+        agents.clear()
+        kept.clear()
+        steps.clear()
+        fetching.clear()
+        asked.clear()
+        files.clear()
+        save { clear() }
+        saving.execute { java.io.File(getApplication<Application>().cacheDir, "attachments").deleteRecursively() }
+        // Each connection again, its sync from the start.
+        if (foreground && ready) paired.forEach { connect(it) }
+    }
+
     fun reconnect(name: String) {
         failures.remove(name)
         reopen(name)
@@ -990,3 +1083,9 @@ internal fun readStep(here: Long, bridge: Long, newest: Long): ReadStep = when {
  */
 internal fun settledRead(here: Long, unsettled: Long, newest: Long): Long? =
     minOf(unsettled, newest).takeIf { it > here }
+
+/**
+ * Whether a bridge's attachment id names one folder of `cache/attachments`
+ * and nothing above it: deleting the folder of `..` would delete the cache.
+ */
+internal fun attachmentFolderName(id: String) = id.isNotEmpty() && id != "." && id != ".." && '/' !in id && '\\' !in id
