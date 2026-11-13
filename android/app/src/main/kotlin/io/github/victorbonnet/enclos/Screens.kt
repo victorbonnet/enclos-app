@@ -302,6 +302,7 @@ fun InboxScreen(
     start: (Agent) -> Unit,
     openAgent: (Agent) -> Unit,
     pair: () -> Unit,
+    openApproval: (String) -> Unit,
 ) {
     // "5 min ago" stays true while the screen shows.
     val now by produceState(System.currentTimeMillis() / 1000) {
@@ -331,6 +332,7 @@ fun InboxScreen(
         }
     }
     val found = if (query.isBlank()) listed else searched ?: listed
+    val requests = model.approvals.values.filter { a -> a.attention && (query.isBlank() || "${a.title} ${a.sandbox} ${a.host}".contains(query, ignoreCase = true)) }.sortedByDescending { it.time }
     val narrowed = query.isNotBlank() || filter != InboxFilter.All
     // Groups have their own section; the agents' trees hold one-to-one conversations.
     val groupsFound = found.filter { it.conversation.group }
@@ -347,9 +349,21 @@ fun InboxScreen(
                     "Pair a host →",
                     pair,
                 )
-                sorted.isEmpty() -> Empty("No conversation yet.", "Start one with the compose button below.", "Pair another host →", pair)
+                sorted.isEmpty() && requests.isEmpty() -> Empty("No conversation yet.", "Start one with the compose button below.", "Pair another host →", pair)
                 else -> {
                     LazyColumn(Modifier.weight(1f)) {
+                        if (requests.isNotEmpty()) {
+                            val requestsShown = shown(InboxSection.Requests)
+                            item(key = "policy-requests") {
+                                FoldHeading("Sandbox requests", requestsShown, if (requestsShown) 0 else requests.size, query.isBlank()) { model.fold(InboxSection.Requests.name) }
+                            }
+                            if (requestsShown) {
+                                items(requests, key = { "policy:${it.key}" }) { a ->
+                                    Arriving { PolicyRequestRow(a) { openApproval(a.key) } }
+                                }
+                                item(key = "policy-gap") { Gap(8.dp) }
+                            }
+                        }
                         val groupsShown = shown(InboxSection.Groups)
                         val agentsShown = shown(InboxSection.Agents)
                         if (groupsFound.isNotEmpty()) {

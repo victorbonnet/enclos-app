@@ -63,6 +63,7 @@ private sealed interface Route {
     data object Pair : Route
     data object Settings : Route
     data object NewChat : Route
+    data class ApprovalPage(val key: String) : Route
     data class Chat(val id: String) : Route
     /** An agent's page (`host/sandbox/agent`), opened from its sandbox's page when [inSandbox]. */
     data class AgentPage(val address: String, val inSandbox: Boolean = false) : Route
@@ -88,6 +89,7 @@ private sealed interface Route {
         Pair -> "pair"
         Settings -> "settings"
         NewChat -> "new"
+        is ApprovalPage -> "approval:$key"
         is Chat -> "chat:$id"
         is AgentPage -> if (inSandbox) "sandbox-agent:$address" else "agent:$address"
         is SandboxPage -> "sandbox:$address"
@@ -98,6 +100,7 @@ private sealed interface Route {
             saved == "pair" -> Pair
             saved == "settings" -> Settings
             saved == "new" -> NewChat
+            saved.startsWith("approval:") -> ApprovalPage(saved.removePrefix("approval:"))
             saved.startsWith("chat:") -> Chat(saved.removePrefix("chat:"))
             saved.startsWith("agent:") -> AgentPage(saved.removePrefix("agent:"))
             saved.startsWith("sandbox-agent:") -> AgentPage(saved.removePrefix("sandbox-agent:"), inSandbox = true)
@@ -110,7 +113,8 @@ private sealed interface Route {
 class MainActivity : ComponentActivity() {
     private val model: AppModel by viewModels()
     /** The unlock prompt: made with the activity, as the screen-lock page it may open requires. */
-    private val unlocker = Unlocker(this)
+    /** The app lock's prompt; also what a policy decision asks before it is sent. */
+    internal val unlocker = Unlocker(this)
 
     override fun onStart() {
         super.onStart()
@@ -274,6 +278,7 @@ private fun Screens(model: AppModel, ask: Ask) {
                         view = View.Agents
                         go(Route.Tabs)
                     })
+                    is Route.ApprovalPage -> PolicyRequestScreen(model, route.key, back = { go(Route.Tabs) }, openChat = { go(Route.Chat(it)) })
                     is Route.Chat -> ConversationScreen(model, route.id, back = { go(Route.Tabs) })
                     Route.Settings -> Column(Modifier.fillMaxSize()) {
                         AppBar { IconButton(Glyphs.back, "Back", { go(Route.Tabs) }) }
@@ -295,6 +300,7 @@ private fun Screens(model: AppModel, ask: Ask) {
                         openChat = { go(Route.Chat(it)) },
                         openAgent = { go(Route.AgentPage(it.address)) },
                         openSandbox = { go(Route.SandboxPage(it)) },
+                        openApproval = { go(Route.ApprovalPage(it)) },
                         start = start,
                         settings = { go(Route.Settings) },
                         compose = { go(Route.NewChat) },
