@@ -42,8 +42,10 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
      */
     fun recent(open: Int = 10, history: Int = 40): Saved {
         val db = readableDatabase
-        val agents = db.rawQuery("SELECT host, name, runtime, capabilities FROM agents ORDER BY rowid", null).use { c ->
-            c.rows { Agent(it.getString(0), it.getString(1), it.getString(2), strings(it.getString(3))) }
+        val agents = db.rawQuery("SELECT host, name, runtime, capabilities, display_name, name_revision FROM agents ORDER BY rowid", null).use { c ->
+            c.rows {
+                Agent(it.getString(0), it.getString(1), it.getString(2), strings(it.getString(3)), displayName = it.getStringOrNull(4), nameRevision = it.getLong(5))
+            }
         }
         val conversations = db.rawQuery("SELECT host, agent, id, title, titled_by, home, members, archived, revision FROM conversations ORDER BY rowid", null).use { c ->
             c.rows {
@@ -137,8 +139,16 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         val db = writableDatabase
         db.beginTransaction()
         try {
+            // A queued older list must not roll back a newer name already written.
+            val names = db.rawQuery("SELECT name, display_name, name_revision FROM agents WHERE host = ?", arrayOf(host)).use { cursor ->
+                generateSequence { if (cursor.moveToNext()) cursor else null }.associate {
+                    val address = "$host/${it.getString(0)}"
+                    address to SharedAgentName(address, it.getStringOrNull(1), it.getLong(2))
+                }
+            }
             db.delete("agents", "host = ?", arrayOf(host))
             agents.forEach { a ->
+                val name = newestAgentName(names[a.address], SharedAgentName(a.address, a.displayName, a.nameRevision))
                 // insertOrThrow: insert would log the row on a failure.
                 db.insertOrThrow(
                     "agents",
@@ -148,6 +158,8 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
                         put("name", a.name)
                         put("runtime", a.runtime)
                         put("capabilities", JSONArray(a.capabilities).toString())
+                        put("display_name", name.displayName)
+                        put("name_revision", name.revision)
                     },
                 )
             }
@@ -155,6 +167,15 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         } finally {
             db.endTransaction()
         }
+    }
+
+    /** Canonical shared-name metadata; stale broadcasts and queued cache writes are ignored. */
+    fun agentName(name: SharedAgentName) {
+        if (name.revision < 0) return
+        writableDatabase.update("agents", ContentValues().apply {
+            put("display_name", name.displayName)
+            put("name_revision", name.revision)
+        }, "host = ? AND name = ? AND name_revision <= ?", arrayOf(name.address.substringBefore('/'), name.address.substringAfter('/'), name.revision.toString()))
     }
 
     /** Forgets all that every host sent: the cache was cleared; each syncs again. */
@@ -256,7 +277,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
 }
 
 /** The database's version: [upgrades] brings an older one to it. */
-internal const val STORE_VERSION = 4
+internal const val STORE_VERSION = 5
 
 /** A new database, at [STORE_VERSION]. */
 internal val CREATE = listOf(
@@ -266,7 +287,8 @@ internal val CREATE = listOf(
     "CREATE TABLE messages (host TEXT NOT NULL, seq INTEGER NOT NULL, conversation TEXT NOT NULL, sender TEXT NOT NULL, " +
         "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, speaker TEXT, PRIMARY KEY (host, seq))",
     "CREATE INDEX messages_of ON messages (conversation, seq)",
-    "CREATE TABLE agents (host TEXT NOT NULL, name TEXT NOT NULL, runtime TEXT NOT NULL, capabilities TEXT NOT NULL, PRIMARY KEY (host, name))",
+    "CREATE TABLE agents (host TEXT NOT NULL, name TEXT NOT NULL, runtime TEXT NOT NULL, capabilities TEXT NOT NULL, " +
+        "display_name TEXT, name_revision INTEGER NOT NULL DEFAULT 0 CHECK(name_revision>=0), PRIMARY KEY (host, name))",
 )
 
 /** What brings a database of version [old] to [STORE_VERSION]: step by step, never by dropping what was kept. */
@@ -282,5 +304,10 @@ internal fun upgrades(old: Int): List<String> = buildList {
     if (old < 4) {
         add("ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
         add("ALTER TABLE conversations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+    }
+    // 5: an agent's display name, and the revision it came with.
+    if (old < 5) {
+        add("ALTER TABLE agents ADD COLUMN display_name TEXT")
+        add("ALTER TABLE agents ADD COLUMN name_revision INTEGER NOT NULL DEFAULT 0 CHECK(name_revision>=0)")
     }
 }

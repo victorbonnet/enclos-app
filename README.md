@@ -10,6 +10,8 @@ Conversations can be [archived and restored](docs/spec.md#archived-conversations
 
 Supporting agents expose [Routines](docs/spec.md#routines): scheduled instructions, delivery choices and advanced runtime settings, with edit, pause/resume, run and delete controls. The runtime keeps and executes them while the phone is closed. Routines use an optional generic channel contract; Hermes is the first implementation.
 
+Agents can have [shared display names](docs/spec.md#agent-display-names), saved by the host and synchronized across phones. `comptoir-dev` can appear as **Gégé Commit** while keeping its address and `@handle`. Renaming needs a supporting host; updating only the phone does not enable it.
+
 ## Build
 
 Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK, the NDK version named in `android/gradle/libs.versions.toml` (`sdkmanager "ndk;<version>"`), JDK 17 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).

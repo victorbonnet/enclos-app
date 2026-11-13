@@ -27,10 +27,10 @@ fun EditableAgentPhoto(model: AppModel, agent: Agent, working: Boolean) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) images.setPhoto(agent.photoKey, uri)
     }
-    Box(Modifier.clickable(enabled = allowed, role = Role.Button, onClickLabel = "Change ${agent.agent}'s photo") {
+    Box(Modifier.clickable(enabled = allowed, role = Role.Button, onClickLabel = "Change ${agent.label}'s photo") {
         picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-    }.semantics { contentDescription = "${agent.agent}'s photo" }) {
-        AgentInitial(agent.agent, working, side = 64.dp, photo = agent.photoKey)
+    }.semantics { contentDescription = "${agent.label}'s photo" }) {
+        AgentInitial(agent.label, working, side = 64.dp, photo = agent.photoKey)
     }
 }
 
@@ -57,7 +57,7 @@ fun AgentPhotoControls(model: AppModel, agent: Agent) {
     }
     if (removing) AlertDialog(
         onDismissRequest = { removing = false },
-        title = { Text("Remove ${agent.agent}'s photo?") },
+        title = { Text("Remove ${agent.label}'s photo?") },
         text = { Text("Connected apps will show the coloured initial again.") },
         confirmButton = { TextButton(onClick = { removing = false; images.removePhoto(agent.photoKey) }, enabled = allowed) { Text("Remove photo") } },
         dismissButton = { TextButton(onClick = { removing = false }) { Text("Cancel") } },

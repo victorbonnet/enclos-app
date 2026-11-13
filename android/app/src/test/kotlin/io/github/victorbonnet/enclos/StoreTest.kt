@@ -19,8 +19,19 @@ class StoreTest {
             listOf(
                 "ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE conversations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0",
-            ),
+            ) + upgrades(4),
             upgrades(3),
+        )
+    }
+
+    @Test
+    fun version_4_gets_an_agents_display_name_and_its_revision() {
+        assertEquals(
+            listOf(
+                "ALTER TABLE agents ADD COLUMN display_name TEXT",
+                "ALTER TABLE agents ADD COLUMN name_revision INTEGER NOT NULL DEFAULT 0 CHECK(name_revision>=0)",
+            ),
+            upgrades(4),
         )
     }
 

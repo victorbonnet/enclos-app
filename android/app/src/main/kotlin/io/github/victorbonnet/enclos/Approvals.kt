@@ -55,9 +55,9 @@ fun scopeLeadsElsewhere(kind: String, target: String, scope: String): Boolean =
     kind == "write" && scope.isNotBlank() && scope.trimEnd('/') != target.trimEnd('/')
 
 @Composable
-fun PolicyRequestRow(request: PolicyRequest, open: () -> Unit) {
+fun PolicyRequestRow(request: PolicyRequest, agentLabel: (String) -> String = { it.substringAfterLast('/') }, open: () -> Unit) {
     val p = palette
-    val agent = request.agent.substringAfterLast('/').ifBlank { null }
+    val agent = request.agent.takeIf { it.isNotBlank() }?.let { agentLabel("${request.host}/$it") }
     val title = when (request.kind) {
         "write" -> "Write to ${request.shown.trimEnd('/').substringAfterLast('/').ifBlank { "/" }}"
         "read" -> "Read ${request.shown.trimEnd('/').substringAfterLast('/').ifBlank { "/" }}"
@@ -149,7 +149,7 @@ fun PolicyRequestScreen(model: AppModel, key: String, back: () -> Unit, openChat
                 Text(request.title, style = Type.heading, color = p.text)
                 Gap(12.dp)
                 Text("${request.host}/${request.sandbox}", style = Type.code, color = p.textFaint)
-                if (request.agent.isNotBlank()) Text("Requested by ${request.agent.substringAfter('/')}", style = Type.small, color = p.textMuted)
+                if (request.agent.isNotBlank()) Text("Requested by ${model.agentLabel("${request.host}/${request.agent}")}", style = Type.small, color = p.textMuted)
                 else Text("The proxy records this for the sandbox; it cannot identify which agent tried it.", style = Type.small, color = p.textMuted)
                 Gap(24.dp)
                 Text("Attempted action", style = Type.name, color = p.text)

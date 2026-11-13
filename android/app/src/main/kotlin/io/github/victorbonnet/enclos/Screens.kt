@@ -51,6 +51,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -315,18 +316,22 @@ fun InboxScreen(
     // replaced, never changed, when a message arrives.
     val said = sorted.associate { it.id to model.lines[it.id].orEmpty() }
     val unread = sorted.associate { it.id to model.unread(it.id) }
+    // The agents' names as shown (display names too), found by search.
+    val names = sorted.associate { c ->
+        c.id to if (c.group) c.members.joinToString(" ") { model.agentLabel("${c.host}/$it") } else model.agentLabel("${c.host}/${c.agent}")
+    }
     val listed = remember(sorted, said, unread, filter, archivedOnly) {
-        search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, "", filter, archived = archivedOnly)
+        search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, "", filter, archived = archivedOnly, agentNames = { names[it.id].orEmpty() })
     }
     // A query reads every message: searched off the main thread, each
     // message folded once (model.folds); the last result stays meanwhile.
     var searched by remember { mutableStateOf<List<Found>?>(null) }
-    LaunchedEffect(sorted, said, unread, query, filter, archivedOnly) {
+    LaunchedEffect(sorted, said, unread, names, query, filter, archivedOnly) {
         searched = if (query.isBlank()) {
             null
         } else {
             withContext(Dispatchers.Default) {
-                search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, query, filter, model.folds::of, archived = archivedOnly)
+                search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, query, filter, model.folds::of, archived = archivedOnly, agentNames = { names[it.id].orEmpty() })
             }
         }
     }
@@ -364,7 +369,7 @@ fun InboxScreen(
                             }
                             if (requestsShown) {
                                 items(requests, key = { "policy:${it.key}" }) { a ->
-                                    Arriving { PolicyRequestRow(a) { openApproval(a.key) } }
+                                    Arriving { PolicyRequestRow(a, agentLabel = model::agentLabel) { openApproval(a.key) } }
                                 }
                                 item(key = "policy-gap") { Gap(8.dp) }
                             }
@@ -469,10 +474,10 @@ private fun GroupRow(model: AppModel, c: Conversation, match: Line?, query: Stri
             Modifier.fillMaxWidth().then(action).padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            MemberStack(handles, side = 32.dp) { PhotoKey(c.host, "${c.agent}/$it") }
+            MemberStack(handles, side = 32.dp, label = { model.agentLabel("${c.host}/${c.agent}/$it") }) { PhotoKey(c.host, "${c.agent}/$it") }
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(c.title ?: handles.joinToString(", "), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(c.title ?: c.members.joinToString(", ") { model.agentLabel("${c.host}/$it") }, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     when {
                         working -> WorkingWave(square = 4.dp, lift = 3.dp)
                         last != null -> Text(Times.ago(last.time, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint)
@@ -483,7 +488,7 @@ private fun GroupRow(model: AppModel, c: Conversation, match: Line?, query: Stri
                     val text = when {
                         last == null -> "${handles.size} agents: ${handles.joinToString(" ") { "@$it" }}"
                         last.from != "agent" -> "You: ${last.text}"
-                        else -> (last.agent?.substringAfterLast('/')?.let { "$it: " } ?: "") + remember(last.text) { words(last) }
+                        else -> (last.agent?.let { "${model.agentLabel(it)}: " } ?: "") + remember(last.text) { words(last) }
                     }
                     Text(
                         if (match != null) highlighted(text, query, p.accent) else AnnotatedString(text),
@@ -524,7 +529,7 @@ private fun Modifier.branch(color: Color, last: Boolean) = drawBehind {
 @Composable
 private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Long, archived: Boolean, branches: Boolean, menu: AgentMenu, onOpen: (() -> Unit)?) {
     val p = palette
-    val name = entry.address.substringAfterLast('/')
+    val name = model.agentLabel(entry.address)
     val haptics = LocalHapticFeedback.current
     var menuOpen by remember { mutableStateOf(false) }
     val working = model.workingOn(entry.address).filter { it.archived == archived }
@@ -942,7 +947,7 @@ private fun Doing(text: String, modifier: Modifier = Modifier) {
 private fun AgentRow(model: AppModel, entry: AgentEntry, query: String, onOpen: () -> Unit) {
     val p = palette
     val host = entry.address.substringBefore('/')
-    val name = entry.address.substringAfterLast('/')
+    val name = model.agentLabel(entry.address)
     val home = entry.home
     val all = home?.let { model.lines[it.id] }.orEmpty()
     val last = all.lastOrNull { !it.status } ?: all.lastOrNull()
@@ -1059,7 +1064,7 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
         return
     }
     val words = fold(query).split(' ').filter { it.isNotEmpty() }
-    val shown = model.agents.filter { a -> words.all { it in fold("${a.address} ${a.runtime}") } }
+    val shown = model.agents.filter { a -> words.all { it in fold("${a.label} ${a.address} ${a.runtime}") } }
     LazyColumn(Modifier.fillMaxSize()) {
         model.paired.forEach { host ->
             val live = model.connected(host.name)
@@ -1115,14 +1120,14 @@ internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () 
     val p = palette
     val working = model.workingOn(agent)
     Row(
-        Modifier.fillMaxWidth().clickable(onClickLabel = "Open ${agent.agent}", onClick = onClick)
+        Modifier.fillMaxWidth().clickable(onClickLabel = "Open ${agent.label}", onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        AgentInitial(agent.agent, working.isNotEmpty(), side = 32.dp, photo = agent.photoKey)
+        AgentInitial(agent.label, working.isNotEmpty(), side = 32.dp, photo = agent.photoKey)
         Column(Modifier.weight(1f)) {
-            Text(agent.agent, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(agent.label, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (working.isNotEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     WorkingWave(square = 4.dp, lift = 3.dp)
@@ -1318,12 +1323,16 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         return
     }
     val lines = model.lines[id].orEmpty()
-    val agent = conversation.agent.substringAfter('/')
+    val scope = "${conversation.host}/${conversation.agent}"
+    val agent = if (conversation.group) conversation.members.joinToString(", ") { model.agentLabel("${conversation.host}/$it") } else model.agentLabel(scope)
     val live = model.connected(conversation.host)
     // A group's members by handle, and where its discussion is.
     val handles = conversation.members.map { it.substringAfterLast('/') }
     val status = model.groups[id]
-    val turnOf = status?.turns?.firstOrNull { it.second == "working" }?.first?.substringAfterLast('/')
+    val turnOf = status?.turns?.firstOrNull { it.second == "working" }?.first?.substringAfterLast('/')?.let { h ->
+        val name = model.agentLabel("$scope/$h")
+        if (name == h) "@$h" else "$name (@$h)"
+    }
     val working = if (conversation.group) status?.state == "working" else model.working(id)
     // What the person writes, kept when they leave and come back.
     val draft = model.unsent[id].orEmpty()
@@ -1358,7 +1367,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
-            if (conversation.group) MemberStack(handles, side = 30.dp) { PhotoKey(conversation.host, "${conversation.agent}/$it") } else AgentAvatar(agent, live, small = true, photo = PhotoKey(conversation.host, conversation.agent))
+            if (conversation.group) MemberStack(handles, side = 30.dp, label = { model.agentLabel("$scope/$it") }) { PhotoKey(conversation.host, "${conversation.agent}/$it") } else AgentAvatar(agent, live, small = true, photo = PhotoKey(conversation.host, conversation.agent))
             // Its name, and the agent under it; tap to rename.
             Column(Modifier.weight(1f).clickable(onClickLabel = "Rename the conversation") { renaming = true }) {
                 Text(
@@ -1425,7 +1434,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             time = Times.clock(line.time),
                             outgoing = line.from != "agent",
                             header = if (line.kind == "notify" && !conversation.group) ON_ITS_OWN else null,
-                            speaker = line.agent?.substringAfterLast('/'),
+                            speaker = line.agent?.let(model::agentLabel),
                             // `host/sandbox/agent`, its host known here: the rest is the member.
                             speakerPhoto = line.agent?.let { PhotoKey(conversation.host, it.removePrefix("${conversation.host}/")) },
                             files = line.attachments.takeIf { it.isNotEmpty() }?.let { attached ->
@@ -1450,8 +1459,9 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         }
         if (conversation.group) {
             // Members to address, as the person types `@`.
-            val members = remember(handles, draft) { mentionsFor(handles, draft) }
-            MentionSuggestions(members, { PhotoKey(conversation.host, "${conversation.agent}/$it") }) { model.unsent[id] = mentioned(draft, it) }
+            val labels = handles.associateWith { model.agentLabel("$scope/$it") }
+            val members = remember(handles, draft, labels) { mentionsFor(handles, draft) { labels[it] ?: it } }
+            MentionSuggestions(members, { PhotoKey(conversation.host, "${conversation.agent}/$it") }, label = { labels[it] ?: it }) { model.unsent[id] = mentioned(draft, it) }
             if (status != null) GroupStrip(status, turnOf) { model.stopGroup(conversation) }
         } else {
             // The agent's commands that match what is typed after `/`; picking one puts it in the field.
@@ -1484,7 +1494,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
 
 /** A group's members' avatars, overlapping, at most three. */
 @Composable
-internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.Dp = 32.dp, photoOf: ((String) -> PhotoKey)? = null) {
+internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.Dp = 32.dp, label: (String) -> String = { it }, photoOf: ((String) -> PhotoKey)? = null) {
     val shown = handles.take(3)
     val step = side * 0.55f
     Box(Modifier.size(width = side + step * (shown.size - 1).coerceAtLeast(0), height = side)) {
@@ -1492,7 +1502,7 @@ internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.D
             Box(
                 Modifier.padding(start = step * i).size(side).clip(androidx.compose.foundation.shape.CircleShape)
                     .background(palette.bg).padding(1.5.dp),
-            ) { AgentInitial(h, side = side - 3.dp, photo = photoOf?.invoke(h)) }
+            ) { AgentInitial(label(h), side = side - 3.dp, photo = photoOf?.invoke(h)) }
         }
     }
 }
@@ -1503,7 +1513,7 @@ internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.D
  * it in the field.
  */
 @Composable
-private fun MentionSuggestions(offered: List<String>, photoOf: (String) -> PhotoKey, onPick: (String) -> Unit) {
+private fun MentionSuggestions(offered: List<String>, photoOf: (String) -> PhotoKey, label: (String) -> String, onPick: (String) -> Unit) {
     val p = palette
     AnimatedVisibility(
         offered.isNotEmpty(),
@@ -1521,9 +1531,11 @@ private fun MentionSuggestions(offered: List<String>, photoOf: (String) -> Photo
                     if (h == "all") {
                         Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) { Glyph(Glyphs.inbox, p.textMuted, size = 20.dp) }
                     } else {
-                        AgentInitial(h, side = 26.dp, photo = photoOf(h))
+                        AgentInitial(label(h), side = 26.dp, photo = photoOf(h))
                     }
-                    Text("@$h", style = Type.code.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), color = p.text)
+                    val named = h != "all" && !namesReadAlike(label(h), h)
+                    if (named) Text(label(h), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text("@$h", style = Type.code.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = if (named) Modifier.widthIn(max = 160.dp) else Modifier)
                     if (h == "all") Text("everyone answers", style = Type.small, color = p.textMuted)
                 }
             }
@@ -1539,7 +1551,7 @@ private fun MentionSuggestions(offered: List<String>, photoOf: (String) -> Photo
 private fun GroupStrip(status: GroupStatus, turnOf: String?, onStop: () -> Unit) {
     val p = palette
     val text = when (status.state) {
-        "working" -> if (turnOf != null) "@$turnOf is answering · round ${status.round + 1} of ${status.maxRounds}" else "Working"
+        "working" -> if (turnOf != null) "$turnOf is answering · round ${status.round + 1} of ${status.maxRounds}" else "Working"
         "settled" -> "Settled"
         "bounded" -> if (status.reason == "max_replies") "Paused: reply limit reached" else "Paused after ${status.maxRounds} rounds"
         "stopped" -> "Stopped"
