@@ -58,6 +58,7 @@ import io.github.victorbonnet.enclos.Attachment
 import io.github.victorbonnet.enclos.LinkDestination
 import io.github.victorbonnet.enclos.WebLinks
 import io.github.victorbonnet.enclos.openWebLink
+import io.github.victorbonnet.enclos.shareAttachment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
@@ -92,9 +93,9 @@ fun ArtefactViewer(a: Attachment, file: File, close: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 IconButton(Glyphs.back, "Back", close)
-                Text(a.name, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(a.shownName, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 Box(
-                    Modifier.height(44.dp).clickable(onClickLabel = "Share the page", role = Role.Button) {
+                    Modifier.height(48.dp).clickable(onClickLabel = "Share the page", role = Role.Button) {
                         if (file.isFile) sharing = true else shareMissing = true
                     }
                         .padding(horizontal = 14.dp),
@@ -133,7 +134,7 @@ fun ArtefactViewer(a: Attachment, file: File, close: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     sharing = false
-                    if (file.isFile) share(context, a, file) else shareMissing = true
+                    if (file.isFile) shareAttachment(context, a, file) else shareMissing = true
                 }) { Text("Share") }
             },
             dismissButton = { TextButton(onClick = { sharing = false }) { Text("Cancel") } },

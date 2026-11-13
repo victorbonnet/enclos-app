@@ -10,6 +10,7 @@ okhttp = "5.5.1"
 zxing-android-embedded = "4.3.0"
 androidx-lifecycle = "2.11.0"
 androidx-browser = "1.10.0"
+androidx-pdf = "1.0.0-beta01"
 commonmark = "0.32.0"
 junit = "4.13.2"
 json = "20260814"
@@ -24,6 +25,9 @@ androidx-activity-compose = { module = "androidx.activity:activity-compose", ver
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "androidx-lifecycle" }
 # Browser-owned tabs for HTTP(S) links the person chooses to open
 androidx-browser = { module = "androidx.browser:browser", version.ref = "androidx-browser" }
+# Native PDF view and its isolated, permission-free document renderer
+androidx-pdf-viewer = { module = "androidx.pdf:pdf-viewer", version.ref = "androidx-pdf" }
+androidx-pdf-document-service = { module = "androidx.pdf:pdf-document-service", version.ref = "androidx-pdf" }
 # The WebSocket to each host's bridge
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 # Scanning the pairing QR code

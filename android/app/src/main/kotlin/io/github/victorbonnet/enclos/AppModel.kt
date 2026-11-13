@@ -67,9 +67,34 @@ data class Line(
 
 /** A file of a message, fetched from the bridge when it is shown. */
 data class Attachment(val id: String, val mime: String, val name: String, val size: Long) {
-    val image: Boolean get() = mime.startsWith("image/")
+    val mediaType: String get() = mime.substringBefore(';').trim().lowercase()
+    /** The name as shown: without hidden characters: a right-to-left override (U+202E) before `fdp.apk` would make it read as `kpa.pdf`. */
+    val shownName: String get() = Visible.stripped(name).ifBlank { "file" }
+    /**
+     * An image the platform decodes, drawn in the bubble. Any other image type (SVG, TIFF, AVIF on
+     * an older Android) is a file line, which opens the document viewer with its notice and Share.
+     */
+    val image: Boolean get() = mediaType in DecodedImages
     /** A static HTML page, opened separately from the message's markdown. */
-    val artefact: Boolean get() = mime.substringBefore(';').trim().equals("text/html", ignoreCase = true)
+    val artefact: Boolean get() = mediaType == "text/html"
+    val pdf: Boolean get() = mediaType == "application/pdf"
+    /** Other text is drawn literally, without fetching resources or executing content. */
+    val text: Boolean get() = !artefact && (mediaType.startsWith("text/") || mediaType in setOf("application/json", "application/xml"))
+}
+
+/** The image types `BitmapFactory` decodes on every Android the app runs on (9 and later). */
+private val DecodedImages = setOf("image/png", "image/jpeg", "image/gif", "image/webp", "image/heic", "image/heif", "image/bmp")
+
+/**
+ * The name [name] is cached under: letters, digits, `.`, `_`, space and `-` only, no leading dot,
+ * at most 80 characters. A longer name is shortened before its extension, which another app may
+ * read the type from, so a listed type keeps it ([viewIntentType]).
+ */
+fun cachedFileName(name: String): String {
+    val safe = name.replace(Regex("[^A-Za-z0-9._ -]"), "_").trimStart('.')
+    val dot = safe.lastIndexOf('.')
+    val extension = if (safe.length > 80 && dot > 0 && safe.length - dot <= 16) safe.substring(dot) else ""
+    return (safe.dropLast(extension.length).take(80 - extension.length) + extension).ifBlank { "file" }
 }
 
 /** Where a file stands on this phone. */

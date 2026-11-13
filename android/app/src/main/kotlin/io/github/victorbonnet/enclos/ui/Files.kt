@@ -1,8 +1,5 @@
 package io.github.victorbonnet.enclos.ui
 
-import android.content.ClipData
-import android.content.Context
-import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -64,31 +61,37 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
-import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import io.github.victorbonnet.enclos.Attachment
 import io.github.victorbonnet.enclos.Attachments
 import io.github.victorbonnet.enclos.FileState
 import io.github.victorbonnet.enclos.Images
+import io.github.victorbonnet.enclos.shareAttachment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/** A file opened from a message: in the image viewer, or else by its type. */
+private data class Opened(val attachment: Attachment, val file: File, val asImage: Boolean)
+
 /**
  * A message's files: an image drawn in the bubble, which opens full screen
- * to share; HTML as a line opening a page, other files as a line sharing them.
- * Each is fetched from the bridge when it is first shown, or when tapped
- * if [Attachments.fetchesItself] says it waits: a large file on a metered
- * network.
+ * with Share; HTML opens a page, other files open a document viewer, as
+ * does an image the phone cannot decode. Each is fetched from the bridge
+ * when it is first shown, or when tapped if [Attachments.fetchesItself]
+ * says it waits: a large file on a metered network.
  */
 @Composable
 fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: (Attachment) -> Unit) {
-    var opened by remember { mutableStateOf<Pair<Attachment, File>?>(null) }
+    var opened by remember { mutableStateOf<Opened?>(null) }
     val metered = rememberMetered()
-    opened?.let { (a, file) ->
-        if (a.artefact) ArtefactViewer(a, file) { opened = null }
-        else Viewer(a, file) { opened = null }
+    opened?.let { (a, file, asImage) ->
+        when {
+            a.artefact -> ArtefactViewer(a, file) { opened = null }
+            asImage -> Viewer(a, file) { opened = null }
+            else -> FileViewer(a, file) { opened = null }
+        }
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         attachments.forEach { a ->
@@ -104,31 +107,41 @@ fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: 
                 if (itself && (state == null || gone)) fetch(a)
             }
             if (a.image) {
-                ImageFile(a, state, itself, { fetch(a) }) { opened = a to it }
+                ImageFile(a, state, itself, { fetch(a) }, openFile = { opened = Opened(a, it, asImage = false) }) { opened = Opened(a, it, asImage = true) }
             } else {
-                OtherFile(a, state, itself, { fetch(a) }) { opened = a to it }
+                OtherFile(a, state, itself, { fetch(a) }) { opened = Opened(a, it, asImage = false) }
             }
         }
     }
 }
 
+/** An image file as the bubble found it: drawn, gone from the cache, or not something this phone decodes. */
+private sealed interface Decoded {
+    data class Drawn(val bitmap: Bitmap) : Decoded
+    data object Missing : Decoded
+    data object Undecodable : Decoded
+}
+
 @Composable
-private fun ImageFile(a: Attachment, state: FileState?, itself: Boolean, retry: () -> Unit, open: (File) -> Unit) {
-    val p = palette
+private fun ImageFile(a: Attachment, state: FileState?, itself: Boolean, retry: () -> Unit, openFile: (File) -> Unit, open: (File) -> Unit) {
     val shape = Shapes.control
     when (state) {
         is FileState.Ready -> {
-            val decoded by produceState<Decoded>(Decoded.Pending, state.file) {
-                value = decode(state.file, 1080)?.let { Decoded.Drawn(it) } ?: Decoded.Unreadable
+            val decoded by produceState<Decoded?>(null, state.file) {
+                value = withContext(Dispatchers.IO) {
+                    if (!state.file.isFile) Decoded.Missing
+                    else runCatching { decode(state.file, 1080) }.getOrNull()?.let { Decoded.Drawn(it) } ?: Decoded.Undecodable
+                }
             }
             when (val d = decoded) {
-                Decoded.Pending -> Placeholder("Opening the image")
-                // Not an image Android can draw (an SVG chart, a damaged file),
-                // or cleared since: a file like any other, to share or fetch again.
-                Decoded.Unreadable -> OtherFile(a, state, itself, retry, open)
+                // Decoding, or the file was cleared: a tap fetches it again.
+                null, Decoded.Missing -> Placeholder("Opening the image", retry)
+                // A corrupt file, a format this Android does not decode, or one too
+                // large to draw: its line opens the document viewer, with its notice and Share.
+                Decoded.Undecodable -> OtherFile(a, state, itself, retry, openFile)
                 is Decoded.Drawn -> Image(
                     d.bitmap.asImageBitmap(),
-                    contentDescription = a.name,
+                    contentDescription = a.shownName,
                     contentScale = ContentScale.Fit,
                     // Its own shape within 1:3 and 3:1: a thin, tall image is
                     // drawn inside that box, never taller than three widths.
@@ -143,13 +156,6 @@ private fun ImageFile(a: Attachment, state: FileState?, itself: Boolean, retry: 
     }
 }
 
-/** An image's bitmap for the screen: being decoded, drawn, or not one Android can draw. */
-private sealed interface Decoded {
-    data object Pending : Decoded
-    data object Unreadable : Decoded
-    data class Drawn(val bitmap: Bitmap) : Decoded
-}
-
 @Composable
 private fun Placeholder(text: String, onClick: (() -> Unit)? = null) {
     val p = palette
@@ -162,19 +168,16 @@ private fun Placeholder(text: String, onClick: (() -> Unit)? = null) {
     ) { Text(text, style = Type.meta, color = p.textFaint) }
 }
 
-/** A file's name and size: HTML opens as a page; another file opens Share. */
+/** A file's name and size. Opening it never starts the share sheet. */
 @Composable
 private fun OtherFile(a: Attachment, state: FileState?, itself: Boolean, retry: () -> Unit, open: (File) -> Unit) {
     val p = palette
-    val context = LocalContext.current
     Row(
         Modifier.fillMaxWidth().clip(Shapes.control).border(1.dp, p.line, Shapes.control)
             .clickable(role = Role.Button) {
                 when (state) {
-                    // Cleared by the system since: fetched again, not shared missing.
-                    is FileState.Ready -> if (state.file.isFile) {
-                        if (a.artefact) open(state.file) else share(context, a, state.file)
-                    } else retry()
+                    // Cleared by the system since: fetched again rather than opened missing.
+                    is FileState.Ready -> if (state.file.isFile) open(state.file) else retry()
                     is FileState.Failed -> retry()
                     // A large file, not fetched until asked.
                     null -> retry()
@@ -187,12 +190,12 @@ private fun OtherFile(a: Attachment, state: FileState?, itself: Boolean, retry: 
     ) {
         Glyph(Glyphs.compose, p.accent, size = 18.dp)
         Column(Modifier.weight(1f)) {
-            Text(a.name, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(a.shownName, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 when (state) {
                     is FileState.Loading -> "${size(a.size)} · ${percent(state.done, state.size)}"
                     is FileState.Failed -> "Did not come: ${state.why}. Tap to try again."
-                    is FileState.Ready -> "${size(a.size)} · ${if (a.artefact) "open page" else "tap to share"}"
+                    is FileState.Ready -> "${size(a.size)} · ${if (a.artefact) "open page" else "tap to open"}"
                     null -> if (!itself) "${size(a.size)} · tap to load it" else size(a.size)
                 },
                 style = Type.meta,
@@ -262,7 +265,7 @@ private fun Viewer(a: Attachment, file: File, close: () -> Unit) {
             }
         }
         Box(Modifier.fillMaxSize().background(ViewerGround)) {
-            bitmap?.let { Zoomable(it, a.name) { chrome = !chrome } }
+            bitmap?.let { Zoomable(it, a.shownName) { chrome = !chrome } }
             AnimatedVisibility(
                 chrome,
                 enter = fadeIn(Motion.enter(Motion.SHORT)),
@@ -278,9 +281,9 @@ private fun Viewer(a: Attachment, file: File, close: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(Glyphs.back, "Back", close, tint = ViewerText)
-                    Text(a.name, style = Type.small, color = ViewerText.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(a.shownName, style = Type.small, color = ViewerText.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     Box(
-                        Modifier.height(44.dp).clip(Shapes.control).clickable(onClickLabel = "Share the image", role = Role.Button) { share(context, a, file) }
+                        Modifier.height(48.dp).clip(Shapes.control).clickable(onClickLabel = "Share the image", role = Role.Button) { shareAttachment(context, a, file) }
                             .padding(horizontal = 14.dp),
                         contentAlignment = Alignment.Center,
                     ) { Text("Share", style = Type.label, color = ViewerText) }
@@ -363,17 +366,6 @@ private fun Zoomable(bitmap: Bitmap, description: String, onTap: () -> Unit) {
             },
         )
     }
-}
-
-/** Hands the file to another app through the system's share sheet, readable by that app alone. */
-fun share(context: Context, a: Attachment, file: File) {
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-    val send = Intent(Intent.ACTION_SEND)
-        .setType(a.mime)
-        .putExtra(Intent.EXTRA_STREAM, uri)
-        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    send.clipData = ClipData.newRawUri(a.name, uri)
-    context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
 }
 
 /**

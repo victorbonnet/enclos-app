@@ -125,7 +125,7 @@ fun byAgent(
 fun words(line: Line): String {
     val text = if (line.from == "agent") Markdown.plain(line.text) else line.text
     if (text.isNotBlank() || line.attachments.isEmpty()) return text
-    return line.attachments.joinToString(", ") { if (it.image) "Image" else it.name }
+    return line.attachments.joinToString(", ") { if (it.image) "Image" else it.shownName }
 }
 
 /** [text] in lower case, without accents, its spaces single: what search compares. */
