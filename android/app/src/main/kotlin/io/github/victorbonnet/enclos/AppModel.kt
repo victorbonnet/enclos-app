@@ -537,7 +537,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * message after the newest kept. [foreground] opens it, and [ended] again.
      */
     fun connect(host: Host) {
-        connections.remove(host.name)?.close()
+        // A connection replaced says nothing more ([ended] is not called): what went over it may be lost.
+        connections.remove(host.name)?.let {
+            it.close()
+            outgoing.ended(host.name, "the connection was opened again")
+        }
         // While retrying, why the last attempt ended stays on screen.
         if (status[host.name]?.startsWith("connected") != false) status[host.name] = "connecting"
         lateinit var connection: BridgeConnection
@@ -584,6 +588,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
         status[host.name] = why
+        // What the bridge did not show back may not have reached it: back in its field.
+        outgoing.ended(host.name, "the connection ended")
         // Nothing will come over a closed connection: stop showing the agent at work.
         val ids = conversations.filter { it.host == host.name }.map { it.id }.toSet()
         typing.keys.filter { it in ids }.forEach { typing.remove(it) }
@@ -644,6 +650,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             // known too), when one starts, and when its name changes.
             "conversation" -> {
                 val id = m.getString("conversation")
+                // Started on the bridge: no longer a draft.
+                drafts -= id
                 val known = Conversation(
                     host.name,
                     m.getString("agent"),
@@ -691,6 +699,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     conversations.add(started)
                     save { conversation(started) }
                 }
+                // The person's own, as the bridge stored it: sent.
+                if (line.from != "agent") outgoing.shown(id, line.text)
                 if (line.from == "agent") {
                     val agent = m.getString("agent")
                     // Only a reply answers the person; any other kind (notify,
@@ -758,10 +768,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     fetching.remove(file)
                     files[file] = FileState.Failed(m.optString("message"))
                 } else {
-                    said[host.name] = m.optString("message")
+                    // A message it refused goes back in its field, saying why; any other is the bridge's word.
+                    val of = m.optString("of")
+                    if (outgoing.refused(of, m.optString("message").ifBlank { "the bridge refused it" }) == null) {
+                        said[host.name] = m.optString("message")
+                    }
                     // The bridge refused a message of the person's (the agent is
                     // not reachable, say): nothing will answer it now.
-                    unanswered.refused(m.optString("of"))?.let { stillAwaiting(it) }
+                    unanswered.refused(of)?.let { stillAwaiting(it) }
                 }
             }
         }
@@ -927,30 +941,44 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 ) == true
         }
 
+    /** What the person writes and sends, by conversation, until the bridge has it ([Outgoing]). */
+    val outgoing = Outgoing()
+
+    /** By conversation: what the person wrote and has not sent yet, kept while the app runs. */
+    val unsent get() = outgoing.unsent
+
     /** Each message's folded words, for search, kept while the app runs. */
     val folds = Folds()
 
-    /** Sends [text] to [conversation]'s agent; why it was not sent, or `null` once it was. */
+    /**
+     * Sends [text] in [conversation]; why it did not leave the field, or
+     * `null` once it did. It goes only while the host is connected: the
+     * screen does not offer it otherwise. Should the connection end, or the
+     * bridge refuse it, before the bridge shows it back, it comes back to the
+     * field ([Outgoing]).
+     */
     fun send(conversation: Conversation, text: String): String? {
         said.remove(conversation.host)
-        val connection = connections[conversation.host]
-        // A draft becomes a conversation on the bridge with its first message ([firstSent]).
+        // A draft becomes a conversation on the bridge with its first message
+        // ([firstSent]); it stays a draft until the bridge sends it back, so a
+        // `conversation.new` lost with the connection goes again.
         val draft = conversation.id in drafts
         val named = conversations.firstOrNull { it.id == conversation.id } ?: conversation
-        val outgoing = firstSent(named, draft, text).map { message(it.type, *it.fields.toTypedArray()) }
-        val out = outgoing.last()
+        val frames = firstSent(named, draft, text).map { message(it.type, *it.fields.toTypedArray()) }
+        val out = frames.last()
         if (!fits(out)) {
             return "Too long to send: ${text.toByteArray(Charsets.UTF_8).size / 1000} KB, and at most about 63 KB go at once."
         }
-        val notSent = "Not sent: not connected to ${conversation.host}. Your message is still here."
-        var sent = false
-        for ((i, m) in outgoing.withIndex()) {
-            sent = connection?.send(m) == true
-            // Not started on the bridge: still a draft, and nothing else goes.
-            if (!sent && draft && i == 0) return notSent
-            if (draft && i == 0) drafts -= conversation.id
+        val sent = outgoing.send(conversation.id, conversation.host, text) transmit@{
+            if (!connected(conversation.host)) return@transmit null
+            val connection = connections[conversation.host] ?: return@transmit null
+            for ((i, frame) in frames.withIndex()) {
+                // Not started on the bridge, or the message not handed over: it stays in the field.
+                if (!connection.send(frame) && (i == 0 || frame === out)) return@transmit null
+            }
+            out.getString("id")
         }
-        if (!sent) return notSent
+        if (!sent) return "Not sent: not connected to ${conversation.host}. Your message is still here."
         unanswered.sent(out.getString("id"), conversation.id, SystemClock.elapsedRealtime())
         awaiting[conversation.id] = true
         // A new turn: steps left by one that ended with no answer are not its own.
@@ -999,6 +1027,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val ids = conversations.filter { it.host == name }.map { it.id }.toSet()
         val attached = ids.flatMap { lines[it].orEmpty() }.flatMap { it.attachments }
         unreadable.remove(name)
+        outgoing.forget(ids)
+        drafts -= ids
         ids.forEach {
             typing.remove(it)
             answered(it)
@@ -1033,6 +1063,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     fun clearCache() {
         conversations.clear()
+        // What was written goes too: its conversations are gone, and drafts do not come back.
+        outgoing.clear()
+        drafts.clear()
         lines.clear()
         agents.clear()
         kept.clear()
@@ -1181,7 +1214,7 @@ internal fun settledRead(here: Long, unsettled: Long, newest: Long): Long? =
 internal fun attachmentFolderName(id: String) = id.isNotEmpty() && id != "." && id != ".." && '/' !in id && '\\' !in id
 
 /** A message the app sends to a bridge: its type and fields. */
-internal data class Outgoing(val type: String, val fields: List<Pair<String, Any?>>)
+internal data class OutgoingFrame(val type: String, val fields: List<Pair<String, Any?>>)
 
 /**
  * What sending [text] in [conversation] sends, in order, on one connection.
@@ -1189,12 +1222,12 @@ internal data class Outgoing(val type: String, val fields: List<Pair<String, Any
  * (`conversation.new` first), and with the name the person gave it
  * meanwhile, right after, so the bridge's unnamed confirmation does not stay.
  */
-internal fun firstSent(conversation: Conversation, draft: Boolean, text: String): List<Outgoing> = buildList {
+internal fun firstSent(conversation: Conversation, draft: Boolean, text: String): List<OutgoingFrame> = buildList {
     if (draft) {
-        add(Outgoing("conversation.new", listOf("conversation" to conversation.id, "agent" to conversation.agent)))
+        add(OutgoingFrame("conversation.new", listOf("conversation" to conversation.id, "agent" to conversation.agent)))
         if (conversation.titledBy == "person" && conversation.title != null) {
-            add(Outgoing("conversation.rename", listOf("conversation" to conversation.id, "title" to conversation.title)))
+            add(OutgoingFrame("conversation.rename", listOf("conversation" to conversation.id, "title" to conversation.title)))
         }
     }
-    add(Outgoing("message.send", listOf("conversation" to conversation.id, "text" to text)))
+    add(OutgoingFrame("message.send", listOf("conversation" to conversation.id, "text" to text)))
 }

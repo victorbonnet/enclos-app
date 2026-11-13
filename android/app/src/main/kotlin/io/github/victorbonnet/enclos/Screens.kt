@@ -805,7 +805,9 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val agent = conversation.agent.substringAfter('/')
     val live = model.connected(conversation.host)
     val working = model.working(id)
-    var draft by remember { mutableStateOf("") }
+    // What the person writes, kept when they leave and come back.
+    val draft = model.unsent[id].orEmpty()
+    // Why the last message could not go (too long, say): the draft stays.
     var unsent by remember { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
     // Whether the person is at the newest: the first item (the list is
@@ -908,15 +910,25 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 if (i == 0 || Times.day(lines[i - 1].time) != day) item(key = "day-${line.seq}") { Arriving { DaySeparator(day) } }
             }
         }
-        // Why the last message did not go: the draft stays until it does.
-        unsent?.let { SystemLine(it, Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) }
-        Composer(draft, { draft = it }, "Message $agent") {
+        // Not connected: write, but nothing goes until the host is back. A
+        // message the bridge did not get is back in the field, saying so; one
+        // that could not go (too long) stays, saying why.
+        val notSent = model.outgoing.notSent[id]?.let { "Not sent: $it." }
+        val away = if (live) null else "Not connected to ${conversation.host}: send once it's back."
+        Composer(
+            draft,
+            {
+                unsent = null
+                model.outgoing.write(id, it)
+            },
+            "Message $agent",
+            canSend = live,
+            notice = listOfNotNull(unsent, notSent, away).joinToString(" ").ifEmpty { null },
+        ) {
+            // Cleared once handed to the connection; else it stays, to send again.
             unsent = model.send(conversation, draft.trim())
-            if (unsent == null) {
-                draft = ""
-                // What the person just sent shows, wherever they had scrolled.
-                atNewest = true
-            }
+            // What the person just sent shows, wherever they had scrolled.
+            if (unsent == null) atNewest = true
         }
     }
 }

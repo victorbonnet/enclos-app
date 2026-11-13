@@ -10,8 +10,8 @@ class DraftTest {
     fun a_drafts_first_message_starts_it_on_the_bridge_first() {
         assertEquals(
             listOf(
-                Outgoing("conversation.new", listOf("conversation" to "c-1", "agent" to "lab/main")),
-                Outgoing("message.send", listOf("conversation" to "c-1", "text" to "hi")),
+                OutgoingFrame("conversation.new", listOf("conversation" to "c-1", "agent" to "lab/main")),
+                OutgoingFrame("message.send", listOf("conversation" to "c-1", "text" to "hi")),
             ),
             firstSent(draft, draft = true, text = "hi"),
         )
