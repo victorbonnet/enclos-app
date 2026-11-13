@@ -2,6 +2,7 @@ package io.github.victorbonnet.enclos
 
 import io.github.victorbonnet.enclos.ui.Markdown
 import java.text.Normalizer
+import java.util.concurrent.ConcurrentHashMap
 
 /** Which conversations the inbox shows, besides what is searched. */
 sealed interface InboxFilter {
@@ -19,9 +20,11 @@ fun inboxConversations(conversations: List<Conversation>, archived: Boolean = fa
 /**
  * The inbox's search: a conversation matches when every word of [query]
  * is in its name, its agent's address, or one of its messages (the
- * agent's without their markdown), whatever the case and accents. A
- * blank query matches every conversation [filter] lets through. Order is
- * kept.
+ * agent's without their markdown), whatever the case and accents. The
+ * words may be in different messages: the conversation is what is found,
+ * and the row shows the message that holds the most of them. A blank
+ * query matches every conversation [filter] lets through. Order is kept.
+ * [folded] gives a message's folded words (see [Folds]).
  */
 fun search(
     conversations: List<Conversation>,
@@ -29,6 +32,7 @@ fun search(
     unread: (String) -> Int,
     query: String,
     filter: InboxFilter,
+    folded: (String, Line) -> String = { _, line -> fold(words(line)) },
     archived: Boolean = false,
 ): List<Found> {
     val words = fold(query).split(' ').filter { it.isNotEmpty() }
@@ -39,7 +43,7 @@ fun search(
         }
         if (words.isEmpty()) return@mapNotNull Found(c, null)
         val about = fold("${c.title.orEmpty()} ${c.host}/${c.agent}")
-        val said = lines(c.id).asReversed().map { it to fold(words(it)) }
+        val said = lines(c.id).asReversed().map { it to folded(c.id, it) }
         val all = (listOf(about) + said.map { it.second }).joinToString(" ")
         if (!words.all { it in all }) return@mapNotNull null
         // Found by its name or agent: the row as usual; else the newest
@@ -48,6 +52,18 @@ fun search(
         val best = said.maxByOrNull { (_, text) -> words.count { it in text } }
         Found(c, best?.first)
     }
+}
+
+/**
+ * Each message's folded words, worked out once: an agent's message is
+ * parsed as markdown, which costs, and search reads every message at each
+ * keystroke. By conversation and `seq`, which a message keeps; safe from
+ * any thread.
+ */
+class Folds(private val folding: (Line) -> String = { fold(words(it)) }) {
+    private val done = ConcurrentHashMap<Pair<String, Long>, String>()
+
+    fun of(conversation: String, line: Line): String = done.getOrPut(conversation to line.seq) { folding(line) }
 }
 
 /**
@@ -62,6 +78,8 @@ data class AgentEntry(
     val homeMatch: Line?,
     val under: List<Found>,
     val others: Int,
+    /** Its photo's key, from its conversations' host and agent. */
+    val photo: PhotoKey? = null,
 )
 
 private val Conversation.address get() = "$host/$agent"
@@ -97,7 +115,8 @@ fun byAgent(
             others.filterIndexed { i, c -> address in expanded || i < RECENT || unread(c.id) > 0 }.map { Found(it, null) }
         }
         val homeMatch = found.firstOrNull { it.conversation.id == home?.id }?.match
-        AgentEntry(address, home, homeMatch, under, others.size)
+        val first = its.firstOrNull() ?: found.first { it.conversation.address == address }.conversation
+        AgentEntry(address, home, homeMatch, under, others.size, PhotoKey(first.host, first.agent))
     }
 }
 

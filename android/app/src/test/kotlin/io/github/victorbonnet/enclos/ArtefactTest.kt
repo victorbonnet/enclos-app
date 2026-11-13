@@ -22,6 +22,19 @@ class ArtefactTest {
     }
 
     @Test
+    fun utf8_is_checked_through_a_small_buffer_across_its_whole_length() {
+        // Many buffers' worth of multi-byte text, sequences straddling each boundary.
+        val good = "東京 é ".repeat(5_000).toByteArray(Charsets.UTF_8)
+        ArtefactDocument.checkUtf8(good, chunk = 7)
+        ArtefactDocument.checkUtf8(byteArrayOf(0xef.toByte(), 0xbb.toByte(), 0xbf.toByte()) + good, chunk = 7)
+        // A broken byte far past the first buffer, and a sequence cut at the end.
+        val late = good.copyOf().also { it[it.size - 100] = 0xff.toByte() }
+        assertThrows(CharacterCodingException::class.java) { ArtefactDocument.checkUtf8(late, chunk = 7) }
+        val cut = good + byteArrayOf(0xe6.toByte(), 0x9d.toByte())
+        assertThrows(CharacterCodingException::class.java) { ArtefactDocument.checkUtf8(cut, chunk = 7) }
+    }
+
+    @Test
     fun the_original_utf8_bytes_are_kept_and_bad_encoding_is_refused() {
         val file = File.createTempFile("artefact", ".html")
         try {
