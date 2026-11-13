@@ -92,7 +92,9 @@ fun HomeShell(
     pair: () -> Unit,
 ) {
     val p = palette
-    val view = View.entries[views.currentPage]
+    // The view settled on: the top bar's actions and the search's label
+    // change once a swipe ends, not half way through it.
+    val view = View.entries[views.settledPage]
     var query by rememberSaveable { mutableStateOf("") }
     var unreadOnly by rememberSaveable { mutableStateOf(false) }
     var archivedOnly by rememberSaveable { mutableStateOf(false) }
@@ -102,7 +104,8 @@ fun HomeShell(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ViewSwitch(view, onView)
+            // The switch follows the finger: the view a swipe would settle on.
+            ViewSwitch(View.entries[views.targetPage], onView)
             Spacer(Modifier.weight(1f))
             if (view == View.Conversations && model.paired.isNotEmpty()) {
                 Box {
@@ -274,6 +277,14 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
             }
             AgentPhotoControls(model, agent)
             Section("Conversations") {
+                if (model.leftOut(agent)) {
+                    SettingRow {
+                        Text(
+                            "This agent's Home is not shown here: another paired host has an agent named ${agent.name} too, and this phone keeps the first one's.",
+                            style = Type.small, color = p.textMuted,
+                        )
+                    }
+                }
                 if (home != null) {
                     SettingRow(Modifier.clickable(onClickLabel = "Open Home") { openChat(home.id) }) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -395,14 +406,17 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        MemberStack(handles, side = 32.dp, scope = "$host/$sandbox")
+                        MemberStack(handles, side = 32.dp) { PhotoKey(host, "$sandbox/$it") }
                         Text(g.title ?: handles.joinToString(", "), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
                     }
                 }
             }
-            ListHeading("Policy")
-            SandboxPolicySummary(model, address, openPolicy)
+            // Only the host's person manages a sandbox policy: a person it was shared with sees no row.
+            if (address !in model.notPolicyOwner) {
+                ListHeading("Policy")
+                SandboxPolicySummary(model, address, openPolicy)
+            }
             ListHeading("Runs on")
             Info("Runtime", runtime)
             Info("Host", "$host · ${if (live) "connected" else model.status[host] ?: "not connected"}")
@@ -469,7 +483,7 @@ private fun GroupPicker(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                AgentInitial(a.agent, side = 32.dp, address = a.address)
+                AgentInitial(a.agent, side = 32.dp, photo = a.photoKey)
                 Column(Modifier.weight(1f)) {
                     Text(a.agent, style = Type.name, color = if (allowed || ticked) p.text else p.textFaint)
                     Text("${a.sandbox} · ${a.host}", style = Type.code, color = p.textFaint)
@@ -499,6 +513,25 @@ private fun Info(label: String, value: String) {
 
 // ---------- A new conversation ----------
 
+/** In place of a group the bridge would not start: back, and why. */
+@Composable
+fun GroupRefused(why: String, back: () -> Unit) {
+    val p = palette
+    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+        AppBar { IconButton(Glyphs.back, "Back", back) }
+        Hairline()
+        Text("The group was not started: $why", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
+    }
+}
+
+/**
+ * What a new conversation's screen made with an earlier tap whose message
+ * did not go: the group (by its members and name) or the draft (by its
+ * agent), reused by the next tap, so a failed send makes no second group on
+ * the host, nor another draft on the phone.
+ */
+private data class Made(val key: String, val id: String)
+
 /**
  * A new conversation: the agent it is with, picked from a chip at the top
  * (the one most recently active first), its card in the middle, and the
@@ -517,6 +550,11 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
     var grouping by remember { mutableStateOf(false) }
     val members = remember { androidx.compose.runtime.mutableStateListOf<Agent>() }
     var name by remember { mutableStateOf("") }
+    var madeGroup by remember { mutableStateOf<Made?>(null) }
+    var madeDraft by remember { mutableStateOf<Made?>(null) }
+    // Left without a message sent: the draft goes (a group stays, as the bridge made it).
+    val draftNow by androidx.compose.runtime.rememberUpdatedState(madeDraft)
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { draftNow?.let { model.dropDraft(it.id) } } }
     val canGroup = agents.groupBy { it.host to it.sandbox }.values.any { it.size >= 2 }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
@@ -531,9 +569,9 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     if (grouping) {
-                        MemberStack(members.map { it.agent }.ifEmpty { listOf("?") }, side = 28.dp, scope = members.firstOrNull()?.let { "${it.host}/${it.sandbox}" })
+                        MemberStack(members.map { it.agent }.ifEmpty { listOf("?") }, side = 28.dp, photoOf = members.firstOrNull()?.let { m -> { h: String -> PhotoKey(m.host, "${m.sandbox}/$h") } })
                     } else if (agent != null) {
-                        AgentInitial(agent.agent, side = 28.dp, address = agent.address)
+                        AgentInitial(agent.agent, side = 28.dp, photo = agent.photoKey)
                     }
                     Text(if (grouping) "New group" else agent?.agent ?: "No agent", style = Type.name, color = p.text)
                     // Pointing down: a list opens.
@@ -564,7 +602,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    AgentInitial(a.agent, side = 24.dp, address = a.address)
+                                    AgentInitial(a.agent, side = 24.dp, photo = a.photoKey)
                                     Column(Modifier.weight(1f, fill = false)) {
                                         Text(a.agent, style = Type.name, color = p.text)
                                         Text("${a.sandbox} · ${a.host}", style = Type.code, color = p.textFaint)
@@ -590,7 +628,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                 Text("No agent yet: pair a host, or wait for it to list its agents.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(24.dp))
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    AgentInitial(agent.agent, model.workingOn(agent).isNotEmpty(), side = 64.dp, address = agent.address)
+                    AgentInitial(agent.agent, model.workingOn(agent).isNotEmpty(), side = 64.dp, photo = agent.photoKey)
                     Gap(14.dp)
                     Text(agent.agent, style = Type.heading, color = p.text)
                     Gap(4.dp)
@@ -611,19 +649,29 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
             notice = when {
                 agent != null && !live -> "Not connected to ${agent.host}: send once it's back."
                 !enough -> "Tick two to six agents of one sandbox."
+                grouping && madeGroup != null -> model.refusedGroups[madeGroup?.id]?.let { "The group was not started: $it" }
                 else -> null
             },
         ) {
-            if (agent == null) return@Composer
+            if (agent == null || !model.connected(agent.host)) return@Composer
             if (grouping) {
-                val id = model.newGroup(members.toList(), name) ?: return@Composer
+                val key = members.joinToString(",") { it.address } + "|" + name.trim()
+                // The group an earlier tap made, while it stands for the same members and name.
+                val id = madeGroup?.takeIf { m -> m.key == key && model.conversations.any { it.id == m.id } }?.id
+                    ?: model.newGroup(members.toList(), name)?.also { madeGroup = Made(key, it) }
+                    ?: return@Composer
                 val group = model.conversations.firstOrNull { it.id == id } ?: return@Composer
-                if (model.send(group, text.trim())) opened(id)
+                if (model.send(group, text.trim()) == null) opened(id)
                 return@Composer
             }
-            val id = model.newConversation(agent)
+            // The draft an earlier tap made, while the agent is the same; another agent's goes.
+            val id = madeDraft?.takeIf { m -> m.key == agent.address && model.conversations.any { it.id == m.id } }?.id
+                ?: model.newConversation(agent).also { made ->
+                    madeDraft?.let { model.dropDraft(it.id) }
+                    madeDraft = Made(agent.address, made)
+                }
             val started = model.conversations.firstOrNull { it.id == id } ?: return@Composer
-            if (model.send(started, text.trim())) opened(id)
+            if (model.send(started, text.trim()) == null) opened(id)
         }
     }
 }

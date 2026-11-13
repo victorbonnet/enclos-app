@@ -11,12 +11,13 @@ data class AgentCommand(val name: String, val description: String, val args: Str
  * and part of a name (no space yet), those whose name starts with that
  * part, then those that have it elsewhere, whatever the case, each in its
  * list order. Nothing once a space follows the name, or for anything else.
+ * Each name once (the first), as the list shown is keyed by name.
  */
 fun suggest(commands: List<AgentCommand>, draft: String): List<AgentCommand> {
     if (!draft.startsWith("/") || draft.any { it.isWhitespace() }) return emptyList()
     val typed = draft.drop(1).lowercase()
-    val starting = commands.filter { it.name.lowercase().startsWith(typed) }
-    val within = commands.filter { typed.isNotEmpty() && typed in it.name.lowercase() && it !in starting }
+    val starting = commands.distinctBy { it.name }.filter { it.name.lowercase().startsWith(typed) }
+    val within = commands.distinctBy { it.name }.filter { typed.isNotEmpty() && typed in it.name.lowercase() && starting.none { s -> s.name == it.name } }
     return starting + within
 }
 

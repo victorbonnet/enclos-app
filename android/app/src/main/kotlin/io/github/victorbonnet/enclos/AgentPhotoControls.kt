@@ -23,30 +23,30 @@ import io.github.victorbonnet.enclos.ui.palette
 @Composable
 fun EditableAgentPhoto(model: AppModel, agent: Agent, working: Boolean) {
     val images = model.agentImages
-    val allowed = agent.canEditAvatar && model.connected(agent.host) && images.busy[agent.address] == null
+    val allowed = agent.canEditAvatar && model.connected(agent.host) && images.busy[agent.photoKey] == null
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) images.setPhoto(agent.address, uri)
+        if (uri != null) images.setPhoto(agent.photoKey, uri)
     }
     Box(Modifier.clickable(enabled = allowed, role = Role.Button, onClickLabel = "Change ${agent.agent}'s photo") {
         picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
     }.semantics { contentDescription = "${agent.agent}'s photo" }) {
-        AgentInitial(agent.agent, working, side = 64.dp, address = agent.address)
+        AgentInitial(agent.agent, working, side = 64.dp, photo = agent.photoKey)
     }
 }
 
 @Composable
 fun AgentPhotoControls(model: AppModel, agent: Agent) {
     val images = model.agentImages
-    val busy = images.busy[agent.address]
+    val busy = images.busy[agent.photoKey]
     val allowed = agent.canEditAvatar && model.connected(agent.host) && busy == null
     var removing by remember(agent.address) { mutableStateOf(false) }
     LaunchedEffect(agent.address, model.connected(agent.host)) {
-        if (model.connected(agent.host)) images.refresh(agent.address)
+        if (model.connected(agent.host)) images.refresh(agent.photoKey)
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        if (images.hasPhoto(agent.address)) TextButton(enabled = allowed, onClick = { removing = true }) { Text("Remove photo") }
+        if (images.hasPhoto(agent.photoKey)) TextButton(enabled = allowed, onClick = { removing = true }) { Text("Remove photo") }
         Text(busy ?: "Shared across all apps connected to this host.", style = Type.small, color = palette.textMuted)
-        images.errors[agent.address]?.let { Text(it, style = Type.small, color = palette.textMuted) }
+        images.errors[agent.photoKey]?.let { Text(it, style = Type.small, color = palette.textMuted) }
         val hint = when {
             !model.connected(agent.host) -> "Connect to the host to update this photo."
             !agent.supportsAvatars -> "Update the host to enable shared agent photos."
@@ -59,7 +59,7 @@ fun AgentPhotoControls(model: AppModel, agent: Agent) {
         onDismissRequest = { removing = false },
         title = { Text("Remove ${agent.agent}'s photo?") },
         text = { Text("Connected apps will show the coloured initial again.") },
-        confirmButton = { TextButton(onClick = { removing = false; images.removePhoto(agent.address) }, enabled = allowed) { Text("Remove photo") } },
+        confirmButton = { TextButton(onClick = { removing = false; images.removePhoto(agent.photoKey) }, enabled = allowed) { Text("Remove photo") } },
         dismissButton = { TextButton(onClick = { removing = false }) { Text("Cancel") } },
     )
 }
