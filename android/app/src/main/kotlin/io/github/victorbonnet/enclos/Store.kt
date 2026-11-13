@@ -107,9 +107,15 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         question = c.getStringOrNull(9),
     )
 
-    private fun wasDeleted(host: String, id: String): Boolean = readableDatabase.rawQuery(
-        "SELECT 1 FROM conversation_deletions WHERE host=? AND id=?", arrayOf(host, id),
-    ).use { it.moveToFirst() }
+    // All reads and writes use AppModel's saving executor. Load once, and update
+    // only after the matching SQLite transaction commits.
+    private val deletedKeys: MutableSet<ConversationKey> by lazy {
+        readableDatabase.rawQuery("SELECT host,id FROM conversation_deletions", null).use { c ->
+            c.rows { ConversationKey(it.getString(0), it.getString(1)) }.toMutableSet()
+        }
+    }
+
+    private fun wasDeleted(host: String, id: String): Boolean = ConversationKey(host, id) in deletedKeys
 
     /** The deletion record and cached content removal commit together. */
     fun deleteConversation(key: ConversationKey) {
@@ -126,6 +132,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
             db.delete("conversations", "host=? AND id=?", arrayOf(key.host, key.id))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        deletedKeys.add(key)
     }
 
     /** A conversation the bridge sent, new or renamed. */
@@ -254,6 +261,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         } finally {
             db.endTransaction()
         }
+        deletedKeys.removeAll { it.host == host }
     }
 
     private companion object {

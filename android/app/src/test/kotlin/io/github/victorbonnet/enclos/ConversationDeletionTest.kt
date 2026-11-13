@@ -94,4 +94,28 @@ class ConversationDeletionTest {
         assertFalse(ConversationKey("pi", "c-1") in f.client.deleted)
         assertFalse(f.client.delete(group))
     }
+    @Test fun malformed_deletion_ids_fail_as_protocol_errors_without_changing_state() {
+        val f = Fixture()
+        f.client.delete(f.chat)
+        for (id in listOf("", "home.lab.main", "x".repeat(129), "bad\u0000id")) {
+            assertThrows(org.json.JSONException::class.java) { f.deleted(id = id) }
+        }
+        assertTrue(f.removed.isEmpty())
+        assertTrue(f.client.deleted.isEmpty())
+        assertTrue(f.key in f.client.pending)
+    }
+
+    @Test fun drafts_are_disabled_before_any_command_can_reach_the_host() {
+        val sent = mutableListOf<JSONObject>()
+        var draft = true
+        val client = ConversationDeletion({ true }, { _, m -> sent += m; true }, {}, { _, _ -> }, { draft })
+        val chat = Conversation("mac", "lab/main", "draft")
+        assertTrue(client.unavailable(chat)!!.contains("first message"))
+        assertFalse(client.delete(chat))
+        assertTrue(sent.isEmpty())
+        draft = false
+        assertTrue(client.delete(chat))
+        assertEquals(1, sent.size)
+    }
+
 }

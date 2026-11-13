@@ -312,6 +312,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         send = { host, command -> connections[host]?.send(command) == true },
         removed = ::removeConversation,
         later = { wait, action -> main.postDelayed({ action() }, wait) },
+        isDraft = { it.id in drafts },
     )
     private data class ArchiveKey(val host: String, val conversation: String)
     private val archiveRequests = mutableMapOf<String, ArchiveKey>()

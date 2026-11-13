@@ -2,6 +2,7 @@ package io.github.victorbonnet.enclos
 
 import androidx.compose.runtime.mutableStateMapOf
 import org.json.JSONObject
+import org.json.JSONException
 
 /** Conversation ids are scoped to a host, including permanent deletion records. */
 data class ConversationKey(val host: String, val id: String)
@@ -12,12 +13,14 @@ class ConversationDeletion(
     private val send: (String, JSONObject) -> Boolean,
     private val removed: (ConversationKey) -> Unit,
     private val later: (Long, () -> Unit) -> Unit,
+    private val isDraft: (Conversation) -> Boolean = { false },
 ) {
     val deleted = mutableStateMapOf<ConversationKey, Boolean>()
     val pending = mutableStateMapOf<ConversationKey, String>()
     val errors = mutableStateMapOf<ConversationKey, String>()
 
     fun unavailable(c: Conversation): String? = when {
+        isDraft(c) -> "Send the first message before deleting."
         c.home -> "Home stays available for the agent's notices."
         deleted[ConversationKey(c.host, c.id)] == true -> "This conversation was deleted."
         ConversationKey(c.host, c.id) in pending -> "Deleting conversation…"
@@ -51,7 +54,9 @@ class ConversationDeletion(
         when (message.optString("type")) {
             "conversation.deleted" -> {
                 val id = message.getString("conversation")
-                require(id.isNotEmpty() && !id.startsWith("home.")) { "Invalid deleted conversation" }
+                if (id.isEmpty() || id.startsWith("home.") || id.toByteArray(Charsets.UTF_8).size > 128 || id.any { it.isISOControl() }) {
+                    throw JSONException("Invalid deleted conversation")
+                }
                 val key = ConversationKey(host, id)
                 pending.remove(key)
                 errors.remove(key)
