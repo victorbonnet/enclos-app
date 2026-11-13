@@ -1051,7 +1051,7 @@ private fun MoreRow(name: String, hidden: Int, shown: Int, unfolded: Boolean, on
  * whose address or runtime has every word of it.
  */
 @Composable
-fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, openSandbox: (String) -> Unit, pair: () -> Unit) {
+fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, openSandbox: (String) -> Unit, pair: () -> Unit, createSandbox: (String) -> Unit) {
     // "5 min ago" stays true while the screen shows.
     val now by produceState(System.currentTimeMillis() / 1000) {
         while (true) {
@@ -1071,8 +1071,11 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
         model.paired.forEach { host ->
             val live = model.connected(host.name)
             val its = shown.filter { it.host == host.name }
+            val sandboxes = model.sandboxesOf(host.name).filter { sandbox ->
+                words.all { it in fold("${sandbox.address} ${sandbox.runtime.orEmpty()}") } || its.any { it.sandbox == sandbox.name }
+            }
             // A search shows only the hosts with something found, unfolded.
-            if (query.isNotBlank() && its.isEmpty()) return@forEach
+            if (query.isNotBlank() && sandboxes.isEmpty()) return@forEach
             val key = model.hostFold(host.name)
             val open = query.isNotBlank() || key !in model.folded
             item(key = key) {
@@ -1088,16 +1091,23 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
                     )
                 }
             }
-            if (its.isEmpty()) {
-                item(key = "$key-none") {
-                    Text("No agent yet: the host lists them once connected.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
+            if (query.isBlank() && model.canManageSandboxes(host.name)) {
+                item(key = "$key-create") {
+                    Text("Create sandbox →", style = Type.label, color = palette.accent,
+                        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { createSandbox(host.name) }.padding(horizontal = 16.dp, vertical = 14.dp))
                 }
             }
-            its.groupBy { it.sandbox }.forEach { (sandbox, agents) ->
-                item(key = "sandbox-${host.name}-$sandbox") {
+            if (sandboxes.isEmpty()) {
+                item(key = "$key-none") {
+                    Text(if (model.canManageSandboxes(host.name)) "No sandbox yet. Create one to install a runtime." else "No agent yet: the host lists them once connected.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
+                }
+            }
+            sandboxes.forEach { sandbox ->
+                val agents = its.filter { it.sandbox == sandbox.name }
+                item(key = "sandbox-${sandbox.address}") {
                     Arriving {
-                        val runtime = agents.first().runtime.replaceFirstChar { it.uppercase() }
-                        ListHeading(sandbox, runtime, open = { openSandbox("${host.name}/$sandbox") }, top = 12.dp) { SandboxMark(live, side = 16.dp) }
+                        val runtime = sandbox.runtime?.replaceFirstChar { it.uppercase() } ?: "No runtime installed"
+                        ListHeading(sandbox.name, runtime, open = { openSandbox(sandbox.address) }, top = 12.dp) { SandboxMark(live, side = 16.dp) }
                     }
                 }
                 items(agents, key = { "agent-${it.address}" }) { agent ->
@@ -1106,9 +1116,9 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
             }
             item(key = "$key-gap") { Gap(8.dp) }
         }
-        if (shown.isEmpty() && query.isNotBlank()) {
+        if (query.isNotBlank() && model.paired.none { host -> model.sandboxesOf(host.name).any { sandbox -> words.all { it in fold("${sandbox.address} ${sandbox.runtime.orEmpty()}") } } } && shown.isEmpty()) {
             item {
-                Text("No agent matches.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
+                Text("No sandbox or agent matches.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
             }
         }
         // Room for the search and compose bar over the list's end.

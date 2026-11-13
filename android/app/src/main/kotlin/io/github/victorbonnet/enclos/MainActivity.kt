@@ -76,6 +76,8 @@ private sealed interface Route {
     data class SandboxPage(val address: String) : Route
     data class PolicyPage(val address: String) : Route
 
+    data class CreateSandbox(val host: String) : Route
+
     /** Where back leads: an agent opened from its sandbox's page goes back to it; the rest, to the tabs. */
     val up: Route get() = when {
         this is PolicyPage -> SandboxPage(address)
@@ -102,6 +104,7 @@ private sealed interface Route {
         is RoutinesPage -> (if (inSandbox) "sandbox-agent-routines:" else if (fromAgent) "agent-routines:" else "routines:") + address
         is SandboxPage -> "sandbox:$address"
         is PolicyPage -> "policy:$address"
+        is CreateSandbox -> "create-sandbox:$host"
     }
 
     companion object {
@@ -118,6 +121,7 @@ private sealed interface Route {
             saved.startsWith("routines:") -> RoutinesPage(saved.removePrefix("routines:"))
             saved.startsWith("policy:") -> PolicyPage(saved.removePrefix("policy:"))
             saved.startsWith("sandbox:") -> SandboxPage(saved.removePrefix("sandbox:"))
+            saved.startsWith("create-sandbox:") -> CreateSandbox(saved.removePrefix("create-sandbox:"))
             else -> Tabs
         }
     }
@@ -319,6 +323,18 @@ private fun Screens(model: AppModel, ask: Ask) {
                         openPolicy = { go(Route.PolicyPage(route.address)) },
                         openChat = { go(Route.Chat(it)) },
                     )
+                    is Route.CreateSandbox -> CreateSandboxScreen(
+                        model,
+                        route.host,
+                        back = { go(Route.Tabs) },
+                        created = {
+                            // The departing screen may receive its result during the Back animation.
+                            if (saved == route.save()) {
+                                onView(View.Agents)
+                                go(Route.SandboxPage(it))
+                            }
+                        },
+                    )
                     Route.Tabs -> HomeShell(
                         model,
                         views,
@@ -332,6 +348,7 @@ private fun Screens(model: AppModel, ask: Ask) {
                         settings = { go(Route.Settings) },
                         compose = { go(Route.NewChat) },
                         pair = { go(Route.Pair) },
+                        createSandbox = { go(Route.CreateSandbox(it)) },
                     )
                 }
             }

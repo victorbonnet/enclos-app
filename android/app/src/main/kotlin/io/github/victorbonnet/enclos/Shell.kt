@@ -91,6 +91,7 @@ fun HomeShell(
     settings: () -> Unit,
     compose: () -> Unit,
     pair: () -> Unit,
+    createSandbox: (String) -> Unit,
 ) {
     val p = palette
     // The view settled on: the top bar's actions and the search's label
@@ -122,7 +123,7 @@ fun HomeShell(
                 Box(Modifier.fillMaxSize().background(p.bg)) {
                     when (View.entries[page]) {
                         View.Conversations -> InboxScreen(model, query, unreadOnly, archivedOnly, openChat, start, openAgent, openRoutines, pair, openApproval)
-                        View.Agents -> AgentsScreen(model, query, openAgent, openSandbox, pair)
+                        View.Agents -> AgentsScreen(model, query, openAgent, openSandbox, pair, createSandbox)
                     }
                 }
             }
@@ -132,7 +133,7 @@ fun HomeShell(
                     { query = it },
                     if (view == View.Conversations) {
                         if (archivedOnly) "Search archived conversations" else "Search conversations"
-                    } else "Search agents",
+                    } else "Search sandboxes and agents",
                     compose,
                     Modifier.align(Alignment.BottomCenter),
                 )
@@ -346,8 +347,8 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
  * A sandbox's page (`host/sandbox`): its mark (in `accent` while its host
  * is connected), name, runtime and host; its agents, as the agents view
  * shows them, each opening its page; its groups, each opening; what runs
- * it; its active policy and accepted access, with an editor for the host
- * person; and where its remaining state and sessions show on the host.
+ * it; runtime installation, its active policy and accepted access, with an editor
+ * for the host person; and where its sessions show on the host.
  */
 @Composable
 fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent: (Agent) -> Unit, openChat: (String) -> Unit, openPolicy: () -> Unit) {
@@ -355,6 +356,8 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
     val host = address.substringBefore('/')
     val sandbox = address.substringAfter('/')
     val agents = model.agents.filter { it.host == host && it.sandbox == sandbox }
+    val listed = model.sandboxesOf(host).firstOrNull { it.name == sandbox }
+    val operation = model.provisioning[address]
     val now = remember { System.currentTimeMillis() / 1000 }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
         AppBar {
@@ -362,12 +365,12 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
             Text(sandbox, style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp), color = p.text, maxLines = 1)
         }
         Hairline()
-        if (agents.isEmpty()) {
+        if (listed == null && operation == null) {
             Text("This sandbox is no longer listed by its host.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
             return@Column
         }
         val live = model.connected(host)
-        val runtime = agents.first().runtime.replaceFirstChar { it.uppercase() }
+        val runtime = (listed?.runtime ?: agents.firstOrNull()?.runtime)?.replaceFirstChar { it.uppercase() }
         val groups = model.conversations
             .filter { it.group && !it.archived && it.host == host && it.members.first().substringBefore('/') == sandbox }
             .sortedByDescending { model.lines[it.id]?.lastOrNull()?.time ?: 0L }
@@ -376,9 +379,23 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                 SandboxMark(live, side = 56.dp)
                 Gap(14.dp)
                 Text(sandbox, style = Type.heading, color = p.text)
-                Text("$runtime · $host", style = Type.code, color = p.textFaint)
+                Text("${runtime ?: "No runtime installed"} · $host", style = Type.code, color = p.textFaint)
+            }
+            if (runtime == null) {
+                Gap(24.dp)
+                RuntimeInstallation(model, host, sandbox)
+            } else if (operation != null) {
+                Column(Modifier.padding(horizontal = 16.dp)) { ProvisioningStatus(operation) }
             }
             ListHeading("Agents · ${agents.size}")
+            if (agents.isEmpty()) {
+                Text(
+                    if (runtime == null) "Install a runtime to begin setting up an agent." else "No agent listed yet. Complete the runtime's login and app channel setup on the host.",
+                    style = Type.small,
+                    color = p.textMuted,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
             agents.forEach { a -> AgentListRow(model, a, now) { openAgent(a) } }
             if (groups.isNotEmpty()) {
                 ListHeading("Groups · ${groups.size}")
@@ -402,10 +419,11 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                 SandboxPolicySummary(model, address, openPolicy)
             }
             ListHeading("Runs on")
-            Info("Runtime", runtime)
+            Info("Runtime", runtime ?: "Not installed")
             Info("Host", "$host · ${if (live) "connected" else model.status[host] ?: "not connected"}")
+            listed?.state?.let { Info("State", it) }
             Text(
-                "Its state and sessions show on the host: enclos sandbox show $sandbox.",
+                "Its sessions show on the host: enclos sandbox show $sandbox.",
                 style = Type.small,
                 color = p.textFaint,
                 textAlign = TextAlign.Center,

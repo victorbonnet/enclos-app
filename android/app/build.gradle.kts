@@ -22,6 +22,7 @@ android {
         targetSdk = 37
         versionCode = 2
         versionName = "0.1.1"
+        testInstrumentationRunner = "io.github.victorbonnet.enclos.HostsRegression"
     }
 
     // Debug builds, on a laptop and in CI, are signed with the project's one
