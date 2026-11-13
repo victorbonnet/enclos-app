@@ -10,6 +10,8 @@ import android.os.CancellationSignal
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
 
 /**
  * The app lock: the app asks for the person's fingerprint or face, or the
@@ -30,9 +32,103 @@ object AppLock {
         context.getSystemService(KeyguardManager::class.java)?.isDeviceSecure == true
 }
 
+/** Shows the unlock prompt titled with the first argument; the second gets whether it was them, and why not. */
+typealias Ask = (String, (Boolean, String?) -> Unit) -> Unit
+
+/**
+ * The app lock's state while the app runs: whether it is on, whether the
+ * app is locked now, and when the prompt shows on its own. The clock
+ * (elapsed time), whether the phone has a screen lock and where the choice
+ * is kept are passed in, so each move can be tested.
+ */
+class LockState(
+    on: Boolean,
+    private val screenLock: () -> Boolean,
+    private val clock: () -> Long,
+    private val keep: (Boolean) -> Unit,
+) {
+    private val isOn = mutableStateOf(on)
+    private val isLocked = mutableStateOf(on)
+    private val why = mutableStateOf<String?>(null)
+    private val wasDropped = mutableStateOf(false)
+
+    /** Whether the app lock is on: the person's choice, kept on this device. */
+    val on: State<Boolean> get() = isOn
+
+    /**
+     * Whether the app is locked now: from the start of a new process while
+     * the lock is on, and again after [AppLock.AWAY_MS] away. Nothing of the
+     * app but the lock screen is composed meanwhile.
+     */
+    val locked: State<Boolean> get() = isLocked
+
+    /** Why the last unlock did not happen, as the system said: shown on the lock screen. */
+    val said: State<String?> get() = why
+
+    /** Whether the lock turned itself off because the phone no longer has a screen lock: said in Settings. */
+    val dropped: State<Boolean> get() = wasDropped
+
+    /** When the app went to the background (elapsed time); none while it shows. */
+    private var leftAt: Long? = null
+
+    /** Whether the prompt is to show on its own the next time the app is in front: as it starts locked, and each time it comes back locked. */
+    private var promptDue = on
+
+    /** Turns the lock on or off; the caller asked the person to unlock first ([Unlocker]). */
+    fun set(on: Boolean) {
+        isOn.value = on
+        if (on) wasDropped.value = false
+        keep(on)
+    }
+
+    /**
+     * The app's screen stopped. While a prompt is up ([asking]) that is the
+     * screen-lock page the prompt opened, not the person leaving: the time
+     * away is not counted, so a slow PIN does not lock the app again.
+     */
+    fun stopped(asking: Boolean) {
+        if (!asking) leftAt = clock()
+    }
+
+    /**
+     * The app is back in sight: locked again when the lock is on and it was
+     * away long enough. A phone whose screen lock was removed has nothing
+     * left to unlock the app with: the lock turns off, rather than lock the
+     * person out, and Settings says so. Back to a locked app, however short
+     * the absence, the prompt shows on its own again.
+     */
+    fun returned() {
+        if (isOn.value && !screenLock()) {
+            set(false)
+            isLocked.value = false
+            wasDropped.value = true
+        }
+        if (AppLock.locksOnReturn(isOn.value, leftAt, clock())) {
+            isLocked.value = true
+            why.value = null
+        }
+        if (isLocked.value) promptDue = true
+        leftAt = null
+    }
+
+    /** The app is in front: whether the prompt shows now, on its own. Once per start or return, and not while one is up ([asking]). */
+    fun promptNow(asking: Boolean): Boolean {
+        if (!isLocked.value || !promptDue || asking) return false
+        promptDue = false
+        return true
+    }
+
+    /** The prompt's answer: [ok] unlocks; else [reason] shows on the lock screen, and Unlock asks again. */
+    fun unlocked(ok: Boolean, reason: String?) {
+        if (ok) isLocked.value = false
+        why.value = if (ok) null else reason
+        promptDue = false
+    }
+}
+
 /**
  * Asks the person to prove it is them, the phone's own way: from Android
- * 11, a biometric (fingerprint, face) or the screen lock; on Android 10,
+ * 11, a strong biometric (fingerprint, face) or the screen lock; on Android 10,
  * the same through its older call; on Android 9, the screen lock. Made
  * with the activity, before it starts, as Android requires for the
  * screen-lock page it may open.
@@ -56,7 +152,8 @@ class Unlocker(private val activity: ComponentActivity) {
         waiting = done
         when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> biometric(title) {
-                setAllowedAuthenticators(Authenticators.BIOMETRIC_WEAK or Authenticators.DEVICE_CREDENTIAL)
+                // Strong (class 3) only: a weak face unlock, which a photo may fool, does not open the app.
+                setAllowedAuthenticators(Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL)
             }
             Build.VERSION.SDK_INT == Build.VERSION_CODES.Q -> biometric(title) {
                 @Suppress("DEPRECATION")
