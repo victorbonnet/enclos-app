@@ -127,7 +127,7 @@ private fun PolicyDecisionButtons(model: AppModel, request: PolicyRequest) {
         }
         if (!live) Text("Connect to ${request.host} and sync to decide.", style = Type.small, color = p.textFaint, modifier = Modifier.padding(top = 8.dp))
     } else {
-        Text(when (request.state) { "approved" -> "Approved · policy updated"; "denied" -> "Denied · policy unchanged"; "failed" -> "Decision needs review on the host"; else -> request.state }, style = Type.name, color = p.accent)
+        Text(when (request.state) { "approved" -> "Approved · policy updated"; "denied" -> "Denied · policy unchanged"; "diagnostic" -> "Diagnostic probe · no approval needed"; "failed" -> "Decision needs review on the host"; else -> request.state }, style = Type.name, color = p.accent)
     }
     model.approvalErrors[request.key]?.let { Text(it, style = Type.small, color = p.textMuted, modifier = Modifier.padding(top = 8.dp)) }
 }

@@ -631,7 +631,7 @@ private fun MenuRow(glyph: ImageVector, text: String, onClick: () -> Unit) {
  * false) it only names the section.
  */
 @Composable
-private fun FoldHeading(
+internal fun FoldHeading(
     text: String,
     open: Boolean,
     unread: Int,

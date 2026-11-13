@@ -71,9 +71,11 @@ private sealed interface Route {
 
     /** A sandbox's page: `host/sandbox`. */
     data class SandboxPage(val address: String) : Route
+    data class PolicyPage(val address: String) : Route
 
     /** Where back leads: an agent opened from its sandbox's page goes back to it; the rest, to the tabs. */
     val up: Route get() = when {
+        this is PolicyPage -> SandboxPage(address)
         this is AgentPage && inSandbox -> SandboxPage(address.substringBeforeLast('/'))
         else -> Tabs
     }
@@ -94,6 +96,7 @@ private sealed interface Route {
         is Chat -> "chat:$id"
         is AgentPage -> if (inSandbox) "sandbox-agent:$address" else "agent:$address"
         is SandboxPage -> "sandbox:$address"
+        is PolicyPage -> "policy:$address"
     }
 
     companion object {
@@ -105,6 +108,7 @@ private sealed interface Route {
             saved.startsWith("chat:") -> Chat(saved.removePrefix("chat:"))
             saved.startsWith("agent:") -> AgentPage(saved.removePrefix("agent:"))
             saved.startsWith("sandbox-agent:") -> AgentPage(saved.removePrefix("sandbox-agent:"), inSandbox = true)
+            saved.startsWith("policy:") -> PolicyPage(saved.removePrefix("policy:"))
             saved.startsWith("sandbox:") -> SandboxPage(saved.removePrefix("sandbox:"))
             else -> Tabs
         }
@@ -295,11 +299,13 @@ private fun Screens(model: AppModel, ask: Ask) {
                     }
                     Route.NewChat -> NewChatScreen(model, back = { go(Route.Tabs) }, opened = { go(Route.Chat(it)) })
                     is Route.AgentPage -> AgentScreen(model, route.address, back = { go(route.up) }, openChat = { go(Route.Chat(it)) }, start = start)
+                    is Route.PolicyPage -> SandboxPolicyScreen(model, route.address, back = { go(route.up) })
                     is Route.SandboxPage -> SandboxScreen(
                         model,
                         route.address,
                         back = { go(Route.Tabs) },
                         openAgent = { go(Route.AgentPage(it.address, inSandbox = true)) },
+                        openPolicy = { go(Route.PolicyPage(route.address)) },
                         openChat = { go(Route.Chat(it)) },
                     )
                     Route.Tabs -> HomeShell(
