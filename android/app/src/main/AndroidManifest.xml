@@ -7,8 +7,12 @@
     <!-- The app lock's prompt: a fingerprint or a face, else the screen lock -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
+    <!-- Whether the network is metered (mobile data): a large file then
+         waits for a tap instead of coming by itself -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- No backup and no transfer to a new phone: the app holds device keys
-         and will hold conversations. allowBackup="false" and
+         and the conversations kept. allowBackup="false" and
          fullBackupContent cover Android 11 and older; dataExtractionRules
          covers 12 and later, where allowBackup no longer stops
          device-to-device transfer. -->
@@ -18,23 +22,27 @@
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:label="enclos"
+        android:label="Enclos"
         android:enableOnBackInvokedCallback="true"
         android:theme="@style/Theme.Enclos"
         tools:targetApi="33">
-        <!-- adjustResize: the screen follows the keyboard as it slides,
+        <!-- Portrait only, for now: landscape comes later. Android 16 and
+             later ignore the lock on large screens (tablets, foldables
+             open), where the app then turns with the screen.
+             adjustResize: the screen follows the keyboard as it slides,
              frame by frame, instead of jumping once it is up.
              configChanges uiMode: switching light and dark, by the system
              or in the app, crossfades the screen instead of recreating it.
              singleTask: a pairing link opened from another app reaches the
              app already running (onNewIntent), not a second copy of it. -->
-
         <activity
             android:name=".MainActivity"
             android:configChanges="uiMode"
             android:exported="true"
             android:launchMode="singleTask"
-            android:windowSoftInputMode="adjustResize">
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
+            tools:ignore="DiscouragedApi,LockedOrientationActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -49,11 +57,12 @@
                 <data android:scheme="enclos" android:host="pair" />
             </intent-filter>
         </activity>
-        <!-- The QR code scanner, which the library locks to landscape: it
-             follows how the phone is held instead -->
+        <!-- The QR code scanner, which the library locks to landscape:
+             portrait, as the rest of the app -->
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"
-            android:screenOrientation="fullSensor"
+            android:screenOrientation="portrait"
+            tools:ignore="DiscouragedApi,LockedOrientationActivity"
             tools:replace="screenOrientation" />
         <!-- Shares a message's file with another app, which may read that
              one file only (res/xml/shared_files.xml) -->
