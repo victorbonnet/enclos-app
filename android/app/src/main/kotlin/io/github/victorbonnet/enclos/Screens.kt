@@ -1076,14 +1076,18 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
             val key = model.hostFold(host.name)
             val open = query.isNotBlank() || key !in model.folded
             item(key = key) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.weight(1f)) {
-                        FoldHeading(host.name, open, 0, query.isBlank(), lead = { ConnectionDot(live) }) { model.fold(key) }
-                    }
-                    IconButton(Glyphs.chevron, "Open ${host.name}", { openHost(host.name) })
-                }
+                FoldHeading(host.name, open, 0, query.isBlank(), lead = { ConnectionDot(live) }) { model.fold(key) }
             }
             if (!open) return@forEach
+            item(key = "$key-details") {
+                Text(
+                    "Host details →",
+                    style = Type.label,
+                    color = palette.accent,
+                    modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Open ${host.name}") { openHost(host.name) }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                )
+            }
             val leftOut = model.leftOut(host.name)
             if (leftOut > 0) {
                 item(key = "$key-clash") {

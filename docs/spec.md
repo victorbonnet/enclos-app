@@ -175,7 +175,7 @@ Cached policy is kept in the app's private preferences, under its no-backup rule
 
 ### A host's page
 
-The chevron beside each host heading in Agents, and the host's name or chevron in Settings, open its page. Back returns to the place it was opened. The page shows the host's connection, address, Reconnect while offline, and the sandboxes in its agent list, each opening its page.
+The **Host details →** row inside each unfolded host in Agents, and the host's name or chevron in Settings, open its page. The host heading's chevron only folds and unfolds its contents. Back returns to the place it was opened. The page shows the host's connection, address, Reconnect while offline, and the sandboxes in its agent list, each opening its page.
 
 **Audit (Android built; iOS not started).** The host's person can read state-changing commands on this page when the bridge advertises `audit`. Opening the page or reconnecting while it is visible loads the newest entries first; Refresh replaces them with a fresh page, and Load older entries appends the next page. Each entry shows the command and target, date and time in the phone's locale, actor and host, result (Succeeded, Failed, or No outcome recorded), outcome message and completion time when recorded. No outcome recorded may mean a command is still running or never finished. Host display summaries may end in an ellipsis; the full audit stays on the host. Reading entries does not run the host's integrity verification.
 
@@ -382,5 +382,4 @@ The Android filter control was checked in an isolated preview on a Pixel 11 Pro:
 - **iOS** equivalents in the table above: none is built.
 - **The app lock on Android 9 and 10**: its older calls are written as the platform documents them, but run on Android 11 and later only. Before Android 13, `FLAG_SECURE` alone keeps the app out of the recent apps' picture: not run there yet.
 - **The app lock on a phone**: that nothing of the app is reachable while locked follows from the lock screen being all that is composed, and its moves are tested on the JVM (`AppLockTest`); no instrumented test runs it on a phone yet.
-
-- **Host audit acceptance:** Android assembly, all 293 JVM tests and lint pass on the audit branch. Bridge tests cover ownership, current pairing and keys, pagination, bounded display and read failures. Live paired-phone verification of scrolling, refresh, older pages, connection loss and both themes remains outstanding. iOS is not implemented.
+- **Host audit:** verify live paired-phone scrolling, refresh, older pages and connection loss in both themes. iOS is not implemented.

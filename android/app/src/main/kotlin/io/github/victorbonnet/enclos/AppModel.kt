@@ -267,7 +267,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** By host: connected, the reason it is not, or connecting. */
     val status = mutableStateMapOf<String, String>()
     val audit = mutableStateMapOf<String, HostAudit>()
-    private val auditSupported = mutableStateMapOf<String, Boolean>()
+    private val hostCapabilities = mutableStateMapOf<String, Set<String>>()
     /** By host: the last error its bridge sent, such as an agent it could not reach. */
     val said = mutableStateMapOf<String, String>()
     private val policyCache = application.getSharedPreferences("sandbox-policies", Context.MODE_PRIVATE)
@@ -275,7 +275,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val approvals = mutableStateMapOf<String, PolicyRequest>()
     val approvalsFresh = mutableStateMapOf<String, Boolean>()
     val pendingApprovalActions = mutableStateMapOf<String, PendingPolicyRequestAction>()
-    val approvalCloseSupported = mutableStateMapOf<String, Boolean>()
     val approvalErrors = mutableStateMapOf<String, String>()
     val agents = mutableStateListOf<Agent>()
     val agentNames = AgentNames(
@@ -495,7 +494,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     val replacing = mutableStateOf<Replacing?>(null)
 
-    fun canReadAudit(host: String) = connected(host) && auditSupported[host] == true
+    fun hostSupports(host: String, capability: String) = capability in hostCapabilities[host].orEmpty()
+
+    fun canReadAudit(host: String) = connected(host) && hostSupports(host, "audit")
 
     /** Refresh newest entries, or append the next page. No unknown requests to older bridges. */
     fun loadAudit(host: String, older: Boolean = false) {
@@ -517,7 +518,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun auditEnded(host: String) {
-        auditSupported.remove(host)
+        hostCapabilities.remove(host)
         audit[host]?.let { state ->
             state.request?.let { audit[host] = state.failed(it, "The connection ended. Reconnect to refresh the audit.") }
         }
@@ -826,7 +827,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         agentNames.ended(host.name)
         agentImages.ended(host.name)
         approvalsFresh[host.name] = false
-        approvalCloseSupported.remove(host.name)
         policyConnectionEnded(host.name)
         pendingApprovalActions.keys.filter { it.startsWith("${host.name}/") }.forEach { pendingApprovalActions.remove(it) }
         status[host.name] = why
@@ -915,10 +915,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 approvalsFresh[host.name] = false
                 // A connection that replaced another without ending it: what the old one said is not fresh.
                 policyConnectionEnded(host.name)
-                val capabilities = m.optJSONArray("capabilities")
-                auditSupported[host.name] = (0 until (capabilities?.length() ?: 0)).any { capabilities?.optString(it) == "audit" }
-                if (auditSupported[host.name] != true) audit.remove(host.name)
-                approvalCloseSupported[host.name] = (0 until (capabilities?.length() ?: 0)).any { capabilities?.optString(it) == "approval.close" }
+                hostCapabilities[host.name] = hostCapabilitiesIn(m)
+                if (!hostSupports(host.name, "audit")) audit.remove(host.name)
                 pendingApprovalActions.keys.filter { it.startsWith("${host.name}/") }.forEach { pendingApprovalActions.remove(it) }
                 approvals.keys.filter { approvals[it]?.host == host.name }.forEach { approvals.remove(it) }
                 saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("${host.name}/") }.forEach { remove(it) } } }
@@ -1295,7 +1293,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun sendApprovalAction(request: PolicyRequest, action: PolicyRequestAction): Boolean {
         // Decisions retain the revision the person reviewed; the host rejects a stale one.
         val fields = action.send(request, approvals[request.key], connected(request.host), approvalsFresh[request.host] == true,
-            approvalCloseSupported[request.host] == true, request.key in pendingApprovalActions) ?: return false
+            hostSupports(request.host, "approval.close"), request.key in pendingApprovalActions) ?: return false
         val command = message(action.type, *fields.toTypedArray())
         if (connections[request.host]?.send(command) == true) {
             pendingApprovalActions[request.key] = PendingPolicyRequestAction(command.getString("id"), action)
@@ -1649,7 +1647,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         approvals.clear()
         approvalsFresh.clear()
         pendingApprovalActions.clear()
-        approvalCloseSupported.clear()
+        hostCapabilities.clear()
         approvalErrors.clear()
         saving.execute { approvalCache.edit { clear() } }
         conversations.clear()
@@ -1686,7 +1684,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
         audit.remove(host)
-        auditSupported.remove(host)
+        hostCapabilities.remove(host)
         clashes.remove(host)
         clashAgents.remove(host)
         questions.forget(host)
@@ -1705,7 +1703,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         pendingApprovalActions.keys.filter { it.startsWith("$host/") }.forEach { pendingApprovalActions.remove(it) }
         approvalErrors.keys.filter { it.startsWith("$host/") }.forEach { approvalErrors.remove(it) }
         approvalsFresh.remove(host)
-        approvalCloseSupported.remove(host)
         saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("$host/") }.forEach { remove(it) } } }
         kept.remove(host)
         saving.execute { gaps.clear(host) }
