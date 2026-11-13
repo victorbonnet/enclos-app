@@ -146,8 +146,13 @@ private fun Screens(model: AppModel) {
     val transition = rememberTransition(routes, label = "route")
     val scope = rememberCoroutineScope()
     val go = { to: Route ->
+        val leaving = (routes.targetState as? Route.Chat)?.takeIf { it != to }
         saved = to.save()
-        scope.launch { routes.animateTo(to) }
+        scope.launch {
+            routes.animateTo(to)
+            // A conversation's screen left, once it slid away: a draft with nothing sent goes.
+            leaving?.let { model.left(it.id) }
+        }
         Unit
     }
 
@@ -160,11 +165,20 @@ private fun Screens(model: AppModel) {
         try {
             progress.collect { event -> routes.seekTo(event.progress, Route.Tabs) }
             saved = Route.Tabs.save()
+            val leaving = routes.currentState
             routes.animateTo(Route.Tabs)
+            if (leaving is Route.Chat) model.left(leaving.id)
         } catch (_: CancellationException) {
             routes.animateTo(routes.currentState)
         }
     }
+    // A conversation the phone does not hold, once what it kept is read: a
+    // draft lost when the system stopped the app, or one forgotten or
+    // cleared while open. Back to the tabs rather than a blank screen.
+    val showing = routes.targetState
+    val missing = showing is Route.Chat && model.ready && model.conversations.none { it.id == showing.id }
+    LaunchedEffect(missing) { if (missing) go(Route.Tabs) }
+
     // A pairing link opened the app: to the pairing screen, which asks.
     val opened = model.openedLink.value
     LaunchedEffect(opened) { if (opened != null) go(Route.Pair) }
@@ -195,23 +209,22 @@ private fun Screens(model: AppModel) {
 }
 
 /**
- * A full screen arriving (forward) or leaving (back). Forward, Material's
- * shared X axis made short: what is covered fades out first while drifting
- * left, then the new screen fades in on top from a tenth of the width, so
- * the two barely overlap. Back, the screen stays opaque and slides off to
- * the right, uncovering the tabs drifting back into place: a move a finger
- * can drag, as the predictive back gesture does, with nothing showing
- * through.
+ * A full screen arriving (forward) or leaving (back), one move played both
+ * ways: the screen, opaque, slides in from the right edge over the tabs,
+ * which drift a tenth of the width to the left under it; going back it
+ * slides off to the right, uncovering them drifting back. Same distance,
+ * same 250 ms, same pace, so opening and closing feel alike; linear, so a
+ * finger can drag it, as the predictive back gesture does, with nothing
+ * showing through.
  */
-private fun routeMove(forward: Boolean): ContentTransform =
-    if (forward) {
-        (slideInHorizontally(Motion.enter()) { it / 10 } + fadeIn(Motion.enter(Motion.MEDIUM - 50, delay = 50))) togetherWith
-            (slideOutHorizontally(Motion.enter()) { -it / 20 } + fadeOut(Motion.exit(100)))
+private fun routeMove(forward: Boolean): ContentTransform {
+    val move = tween<IntOffset>(Motion.MEDIUM, easing = LinearEasing)
+    return if (forward) {
+        slideInHorizontally(move) { it } togetherWith slideOutHorizontally(move) { -it / 10 }
     } else {
-        // Linear: dragged by a finger, the screen stays under it.
-        val drag = tween<IntOffset>(Motion.MEDIUM, easing = LinearEasing)
-        slideInHorizontally(drag) { -it / 10 } togetherWith slideOutHorizontally(drag) { it }
+        slideInHorizontally(move) { -it / 10 } togetherWith slideOutHorizontally(move) { it }
     }.apply { targetContentZIndex = if (forward) 1f else -1f }
+}
 
 @Composable
 private fun Tabs(model: AppModel, tab: Tab, onTab: (Tab) -> Unit, go: (Route) -> Unit) {

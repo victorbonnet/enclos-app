@@ -33,6 +33,15 @@ class CommandsTest {
     }
 
     @Test
+    fun a_name_listed_twice_is_offered_once_the_first() {
+        val again = AgentCommand("model", "Another model command", null)
+        val twice = all + again
+        assertEquals(all, suggest(twice, "/"))
+        assertEquals(listOf(model, reloadMcp), suggest(twice, "/m"))
+        assertEquals(listOf(model), suggest(twice, "/odel"))
+    }
+
+    @Test
     fun picking_one_puts_its_name_and_a_space_in_the_field() {
         assertEquals("/new ", picked(new))
     }
