@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -400,6 +401,8 @@ fun statusText(source: String, text: String): String {
  * `surface` with a hairline at the left; 16dp corners but the speaker's
  * bottom one, which stays square, the logo's corner. A message the agent
  * sent on its own (a cron job's, say) carries [header] above its text.
+ * Long messages use at most 90% of the chat width, capped at 640dp;
+ * short messages keep their natural width.
  */
 @Composable
 fun Bubble(
@@ -424,9 +427,14 @@ fun Bubble(
                 Text(speaker, style = Type.meta.copy(fontWeight = FontWeight.SemiBold), color = p.textMuted)
             }
         }
-    Box(Modifier.fillMaxWidth(), contentAlignment = if (outgoing) Alignment.CenterEnd else Alignment.CenterStart) {
+        // At most 90% of the width, capped at 640dp, without a measuring
+        // pass of its own (BoxWithConstraints subcomposes each message):
+        // a 90% slot whose content wraps, at its side, up to the cap.
         val shape = if (outgoing) Shapes.bubbleOut else Shapes.bubbleIn
-        val base = Modifier.widthIn(max = 300.dp).clip(shape)
+        val base = Modifier.fillMaxWidth(0.9f)
+            .wrapContentWidth(if (outgoing) Alignment.End else Alignment.Start)
+            .widthIn(max = 640.dp)
+            .clip(shape)
         val look = if (outgoing) base.background(p.buttonBg) else base.background(p.surface).border(BorderStroke(1.dp, p.line), shape)
         Column(look.padding(horizontal = 12.dp, vertical = 9.dp)) {
             if (header != null) {
@@ -453,7 +461,6 @@ fun Bubble(
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
-    }
     }
 }
 
