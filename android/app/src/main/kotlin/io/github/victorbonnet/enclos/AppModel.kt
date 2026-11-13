@@ -63,6 +63,8 @@ data class Line(
     val steps: List<Step> = emptyList(),
     /** In a group, the member who said it (`host/sandbox/agent`); none otherwise. */
     val agent: String? = null,
+    /** Typed native question metadata is delivered separately, before this message. */
+    val question: String? = null,
 )
 
 /** A file of a message, fetched from the bridge when it is shown. */
@@ -293,6 +295,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     )
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
+    val questions = QuestionClient(
+        send = { request -> connections[request.question.host]?.send(request.command()) == true },
+        connected = ::connected,
+        accepts = { question -> paired.any { it.name == question.host } && conversations.any(question::belongsTo) },
+        changed = { question -> save { question(question) } },
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+        resync = { host -> connections[host]?.send(message("sync", "since" to since(host))) == true },
+        dropped = { why -> android.util.Log.d("enclos", "question not shown: $why") },
+    )
     private data class ArchiveKey(val host: String, val conversation: String)
     private val archiveRequests = mutableMapOf<String, ArchiveKey>()
     private val archivePending = mutableStateMapOf<ArchiveKey, Boolean>()
@@ -338,6 +349,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 if (recent != null) {
                     agents.addAll(recent.agents.map(agentNames::listed))
                     conversations.addAll(recent.conversations)
+                    recent.questions.forEach { questions.merge(it, cached = true) }
                     lines.putAll(recent.lines)
                     kept.putAll(recent.kept)
                 }
@@ -721,6 +733,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun connect(host: Host) {
         agentNames.ended(host.name)
         routines.ended(host.name)
+        questions.ended(host.name)
         // A connection replaced says nothing more ([ended] is not called): what went over it may be lost.
         connections.remove(host.name)?.let {
             it.close()
@@ -773,6 +786,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections.remove(host.name)
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         routines.ended(host.name)
+        questions.ended(host.name)
         agentNames.ended(host.name)
         agentImages.ended(host.name)
         approvalsFresh[host.name] = false
@@ -823,6 +837,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (about != null && leftOutForClash(conversations, host.name, m.optString("type"), about)) {
             return refusedClash(host.name, about, m.optString("agent").ifBlank { null })
         }
+        if (m.optString("type") in setOf("question", "question.result", "error") && questions.received(host.name, m)) return
         if (m.optString("type") in setOf("agent.name", "error") && agentNames.received(host.name, m)) return
         if (m.optString("type") in setOf("routine.response", "error") && routines.received(host.name, m)) return
         when (m.optString("type")) {
@@ -855,8 +870,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val json = JSONObject(m.toString()).put("host", host.name).toString()
                 saving.execute { approvalCache.edit { putString(request.key, json) } }
             }
-            "synced" -> { approvalsFresh[host.name] = true }
+            "synced" -> { approvalsFresh[host.name] = true; questions.synced(host.name) }
             "authenticated" -> {
+                questions.authenticated(host.name)
                 approvalsFresh[host.name] = false
                 // A connection that replaced another without ending it: what the old one said is not fresh.
                 policyConnectionEnded(host.name)
@@ -1547,6 +1563,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
+        paired.forEach { questions.forget(it.name) }
         paired.forEach { agentNames.forget(it.name) }
         paired.forEach { routines.forget(it.name) }
         archiveRequests.clear(); archivePending.clear(); archiveProblems.clear(); clashes.clear(); clashAgents.clear()
@@ -1593,6 +1610,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun forget(host: String) {
         clashes.remove(host)
         clashAgents.remove(host)
+        questions.forget(host)
         clearArchiveRequests(host)
         archiveProblems.keys.filter { it.host == host }.forEach { archiveProblems.remove(it) }
         agentImages.forget(host)
@@ -1694,7 +1712,11 @@ fun lineIn(m: JSONObject): Line {
         val name = Visible.stripped(a.optString("name")).trim().ifEmpty { "file" }
         Attachment(a.getString("id"), a.optString("mime"), name, a.optLong("size"))
     }.filter { Attachments.validId(it.id) }
-    return Line(m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached)
+    return Line(
+        m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached,
+        // Typed native question metadata is delivered separately, before this message.
+        question = (m.opt("question") as? String)?.takeIf { it.isNotBlank() },
+    )
 }
 
 /** What the bridge's read position of a conversation means for this device's. */

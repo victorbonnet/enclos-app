@@ -43,6 +43,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
@@ -832,18 +833,18 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
 
 /** A choice among a few, outlined in `accent` when chosen (filters, the theme). */
 @Composable
-internal fun Choice(label: String, on: Boolean, enabled: Boolean = true, multiple: Boolean = false, onClick: () -> Unit) {
+internal fun Choice(label: String, on: Boolean, enabled: Boolean = true, multiple: Boolean = false, wrap: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val p = palette
     val edge by animateColorAsState(if (!enabled) p.line else if (on) p.accent else p.lineStrong, Motion.change(), label = "edge")
     val text by animateColorAsState(if (!enabled) p.textFaint else if (on) p.accent else p.textMuted, Motion.change(), label = "text")
     val select = if (multiple) Modifier.toggleable(value = on, enabled = enabled, role = Role.Checkbox, onValueChange = { onClick() })
         else Modifier.selectable(selected = on, enabled = enabled, role = Role.RadioButton, onClick = onClick)
     Box(
-        Modifier.height(44.dp).clip(Shapes.control).border(1.dp, edge, Shapes.control)
+        modifier.then(if (wrap) Modifier.defaultMinSize(minHeight = 44.dp) else Modifier.height(44.dp)).clip(Shapes.control).border(1.dp, edge, Shapes.control)
             .then(select)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 14.dp, vertical = if (wrap) 10.dp else 0.dp),
         contentAlignment = Alignment.Center,
-    ) { Text(label, style = Type.label, color = text, maxLines = 1) }
+    ) { Text(label, style = Type.label, color = text, maxLines = if (wrap) Int.MAX_VALUE else 1) }
 }
 
 /** [text] with the words of [query] in `accent`, where search found them: its own rules (case, accents, spaces). */
@@ -1430,6 +1431,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                         return@item
                     }
                     Arriving {
+                        val question = if (line.kind == "question" && line.from == "agent") model.questions.current(conversation, line.question) else null
                         Bubble(
                             text = line.text,
                             time = Times.clock(line.time),
@@ -1441,6 +1443,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             files = line.attachments.takeIf { it.isNotEmpty() }?.let { attached ->
                                 { Files(attached, model.files) { model.fetch(conversation.host, it) } }
                             },
+                            content = question?.let { known -> { QuestionCard(model.questions, known) } },
                         )
                     }
                 }

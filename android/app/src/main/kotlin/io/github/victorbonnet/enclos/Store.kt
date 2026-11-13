@@ -18,6 +18,7 @@ class Saved(
     val lines: Map<String, List<Line>>,
     /** By host: the newest `seq` kept, which `sync` starts after. */
     val kept: Map<String, Long>,
+    val questions: List<QuestionInfo> = emptyList(),
 )
 
 /**
@@ -71,7 +72,15 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         val kept = db.rawQuery("SELECT host, MAX(seq) FROM messages GROUP BY host", null).use { c ->
             generateSequence { if (c.moveToNext()) c else null }.associate { it.getString(0) to it.getLong(1) }
         }
-        return Saved(agents, conversations, lines, kept)
+        val rows = db.rawQuery("SELECT host, id, info FROM questions", null).use { c ->
+            generateSequence { if (c.moveToNext()) c else null }.map { Triple(it.getString(0), it.getString(1), it.getString(2)) }.toList()
+        }
+        val (questions, stale) = keptQuestions(rows, conversations)
+        if (stale.isNotEmpty()) {
+            val write = writableDatabase
+            stale.forEach { write.delete("questions", "host = ? AND id = ?", arrayOf(it.host, it.id)) }
+        }
+        return Saved(agents, conversations, lines, kept, questions)
     }
 
     /** Every message kept, by conversation, in `seq` order. */
@@ -93,6 +102,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         attachments = attachments(c.getStringOrNull(6)),
         steps = steps(c.getStringOrNull(7)),
         agent = c.getStringOrNull(8),
+        question = c.getStringOrNull(9),
     )
 
     /** A conversation the bridge sent, new or renamed. */
@@ -130,8 +140,27 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
             if (line.attachments.isNotEmpty()) put("attachments", attachments(line.attachments))
             if (line.steps.isNotEmpty()) put("steps", steps(line.steps))
             put("speaker", line.agent)
+            put("question", line.question)
         }
         writableDatabase.insertWithOnConflict("messages", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+    }
+
+    /** A queued old broadcast or cache write cannot reopen a settled question. */
+    fun question(question: QuestionInfo) {
+        question.validate()
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val current = db.rawQuery("SELECT info FROM questions WHERE host = ? AND id = ?", arrayOf(question.host, question.id)).use { c ->
+                if (c.moveToFirst()) runCatching { QuestionInfo.from(question.host, JSONObject(c.getString(0))) }.getOrNull() else null
+            }
+            if (newestQuestion(current, question) != question) return
+            val values = ContentValues().apply { put("revision", question.revision); put("info", question.json().toString()) }
+            if (db.update("questions", values, "host = ? AND id = ?", arrayOf(question.host, question.id)) == 0) {
+                db.insertOrThrow("questions", null, values.apply { put("host", question.host); put("id", question.id) })
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
 
     /** [host]'s agents, as its bridge listed them last. */
@@ -183,7 +212,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         val db = writableDatabase
         db.beginTransaction()
         try {
-            listOf("messages", "conversations", "agents").forEach { db.delete(it, null, null) }
+            listOf("messages", "questions", "conversations", "agents").forEach { db.delete(it, null, null) }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -195,7 +224,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         val db = writableDatabase
         db.beginTransaction()
         try {
-            listOf("messages", "conversations", "agents").forEach { db.delete(it, "host = ?", arrayOf(host)) }
+            listOf("messages", "questions", "conversations", "agents").forEach { db.delete(it, "host = ?", arrayOf(host)) }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -204,7 +233,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
 
     private companion object {
         /** A message's columns, its conversation first, as [line] reads them. */
-        const val LINE = "conversation, seq, sender, text, kind, time, attachments, steps, speaker"
+        const val LINE = "conversation, seq, sender, text, kind, time, attachments, steps, speaker, question"
     }
 
     private fun android.database.Cursor.getStringOrNull(i: Int) = if (isNull(i)) null else getString(i)
@@ -277,7 +306,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
 }
 
 /** The database's version: [upgrades] brings an older one to it. */
-internal const val STORE_VERSION = 5
+internal const val STORE_VERSION = 6
 
 /** A new database, at [STORE_VERSION]. */
 internal val CREATE = listOf(
@@ -285,11 +314,17 @@ internal val CREATE = listOf(
         "home INTEGER NOT NULL DEFAULT 0, members TEXT, archived INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0)",
     // `seq` is the bridge's, increasing per host.
     "CREATE TABLE messages (host TEXT NOT NULL, seq INTEGER NOT NULL, conversation TEXT NOT NULL, sender TEXT NOT NULL, " +
-        "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, speaker TEXT, PRIMARY KEY (host, seq))",
+        "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, speaker TEXT, question TEXT, PRIMARY KEY (host, seq))",
     "CREATE INDEX messages_of ON messages (conversation, seq)",
     "CREATE TABLE agents (host TEXT NOT NULL, name TEXT NOT NULL, runtime TEXT NOT NULL, capabilities TEXT NOT NULL, " +
         "display_name TEXT, name_revision INTEGER NOT NULL DEFAULT 0 CHECK(name_revision>=0), PRIMARY KEY (host, name))",
+    QUESTIONS,
 )
+
+/** The questions agents ask, each with its revision, by host. */
+private const val QUESTIONS =
+    "CREATE TABLE questions (host TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>=0), info TEXT NOT NULL, PRIMARY KEY (host, id))"
+
 
 /** What brings a database of version [old] to [STORE_VERSION]: step by step, never by dropping what was kept. */
 internal fun upgrades(old: Int): List<String> = buildList {
@@ -309,5 +344,10 @@ internal fun upgrades(old: Int): List<String> = buildList {
     if (old < 5) {
         add("ALTER TABLE agents ADD COLUMN display_name TEXT")
         add("ALTER TABLE agents ADD COLUMN name_revision INTEGER NOT NULL DEFAULT 0 CHECK(name_revision>=0)")
+    }
+    // 6: an agent's questions, and the message each is linked to.
+    if (old < 6) {
+        add("ALTER TABLE messages ADD COLUMN question TEXT")
+        add(QUESTIONS)
     }
 }

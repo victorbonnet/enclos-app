@@ -413,6 +413,7 @@ fun Bubble(
     files: (@Composable () -> Unit)? = null,
     speaker: String? = null,
     speakerPhoto: PhotoKey? = null,
+    content: (@Composable () -> Unit)? = null,
 ) {
     val p = palette
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (outgoing) Alignment.End else Alignment.Start) {
@@ -449,7 +450,9 @@ fun Bubble(
                 if (text.isNotBlank()) Gap(8.dp)
             }
             // The agent writes markdown, drawn; what the person typed shows as typed.
-            if (outgoing) {
+            if (content != null) {
+                content()
+            } else if (outgoing) {
                 Text(text, style = Type.message, color = p.buttonText)
             } else if (text.isNotBlank()) {
                 SelectionContainer { MarkdownText(text, p.text) }

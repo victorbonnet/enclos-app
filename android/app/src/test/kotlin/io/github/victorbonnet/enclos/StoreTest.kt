@@ -30,9 +30,17 @@ class StoreTest {
             listOf(
                 "ALTER TABLE agents ADD COLUMN display_name TEXT",
                 "ALTER TABLE agents ADD COLUMN name_revision INTEGER NOT NULL DEFAULT 0 CHECK(name_revision>=0)",
-            ),
+            ) + upgrades(5),
             upgrades(4),
         )
+    }
+
+    @Test
+    fun version_5_gets_questions_and_each_messages_link_to_one() {
+        val steps = upgrades(5)
+        assertEquals("ALTER TABLE messages ADD COLUMN question TEXT", steps.first())
+        assertTrue(steps[1].startsWith("CREATE TABLE questions ("))
+        assertEquals(2, steps.size)
     }
 
     @Test
@@ -45,6 +53,11 @@ class StoreTest {
     fun an_upgrade_only_adds_columns_a_new_database_has_too() {
         val adding = Regex("""ALTER TABLE (\w+) ADD COLUMN (.+)""")
         for (statement in upgrades(1)) {
+            // A table added whole: a new database creates the same.
+            if (statement.startsWith("CREATE TABLE ")) {
+                assertTrue("a new database lacks: $statement", statement in CREATE)
+                continue
+            }
             val (table, column) = adding.matchEntire(statement)?.destructured ?: error("not an addition: $statement")
             val created = CREATE.first { it.startsWith("CREATE TABLE $table (") }
             assertTrue("$table lacks $column", created.contains(column))
