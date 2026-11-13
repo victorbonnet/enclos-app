@@ -156,11 +156,11 @@ fun AgentAvatar(name: String, live: Boolean, small: Boolean = false, working: Bo
 
 /**
  * A sandbox: the Enclos mark, its corners around a filled square, in
- * `accent` while its host is connected, `line-strong` otherwise.
+ * `accent` while its host is connected, `line-strong` otherwise, unless tinted.
  */
 @Composable
-fun SandboxMark(live: Boolean, side: Dp = 32.dp) {
-    val color = if (live) palette.accent else palette.lineStrong
+fun SandboxMark(live: Boolean, side: Dp = 32.dp, tint: Color? = null) {
+    val color = tint ?: if (live) palette.accent else palette.lineStrong
     Box(Modifier.size(side), contentAlignment = Alignment.Center) {
         Corners(color, Modifier.size(side), stroke = 2.dp)
         Box(Modifier.size(side * 0.22f).background(color))
