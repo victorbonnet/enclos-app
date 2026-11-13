@@ -33,6 +33,8 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.runtime.CompositionLocalProvider
+import io.github.victorbonnet.enclos.ui.LocalAgentPictures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -199,13 +201,15 @@ class MainActivity : ComponentActivity() {
             // Kept while the screens are not composed: the route, the tab, scroll positions.
             val kept = rememberSaveableStateHolder()
             EnclosTheme(dark) {
-                // Locked, the lock screen is all that is composed: no screen, dialog, sheet or menu
-                // of the app is there to see or reach, by touch, keyboard or accessibility services,
-                // and none marks a message read. Unlocked, the screens come back where they were.
-                if (model.lock.locked.value) {
-                    LockScreen(model.lock, unlock = ::unlock, leave = { moveTaskToBack(true) })
-                } else {
-                    kept.SaveableStateProvider("screens") { Screens(model, unlocker::ask) }
+                CompositionLocalProvider(LocalAgentPictures provides model.agentImages.pictures) {
+                    // Locked, the lock screen is all that is composed: no screen, dialog, sheet or menu
+                    // of the app is there to see or reach, by touch, keyboard or accessibility services,
+                    // and none marks a message read. Unlocked, the screens come back where they were.
+                    if (model.lock.locked.value) {
+                        LockScreen(model.lock, unlock = ::unlock, leave = { moveTaskToBack(true) })
+                    } else {
+                        kept.SaveableStateProvider("screens") { Screens(model, unlocker::ask) }
+                    }
                 }
             }
         }

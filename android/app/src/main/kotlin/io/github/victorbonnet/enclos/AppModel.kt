@@ -25,11 +25,13 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 /** An agent of a host, as its bridge lists it: `name` is `<sandbox>/<agent>`. */
-data class Agent(val host: String, val name: String, val runtime: String, val capabilities: List<String>) {
+data class Agent(val host: String, val name: String, val runtime: String, val capabilities: List<String>, val avatarRevision: Long = 0, val avatarVersion: String? = null, val canEditAvatar: Boolean = false, val supportsAvatars: Boolean = false) {
     val sandbox: String get() = name.substringBefore('/')
     val agent: String get() = name.substringAfter('/')
     /** `host/sandbox/agent`, as the app writes an agent's address. */
     val address: String get() = "$host/$name"
+    /** Its photo's key: the host and the agent kept apart. */
+    val photoKey: PhotoKey get() = PhotoKey(host, name)
 }
 
 /**
@@ -197,6 +199,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val decidingApprovals = mutableStateMapOf<String, String>() // request key -> message id
     val approvalErrors = mutableStateMapOf<String, String>()
     val agents = mutableStateListOf<Agent>()
+    val agentImages = AgentImages(application,
+        send = { host, command -> connected(host) && connections[host]?.send(command) == true },
+        connected = ::connected,
+        agent = { key -> agents.firstOrNull { it.host == key.host && it.name == key.agent } },
+        hostExists = { host -> paired.any { it.name == host } },
+    )
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
 
@@ -659,6 +667,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
+        agentImages.ended(host.name)
         approvalsFresh[host.name] = false
         policyConnectionEnded(host.name)
         decidingApprovals.keys.filter { it.startsWith("${host.name}/") }.forEach { decidingApprovals.remove(it) }
@@ -751,11 +760,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 // What is on the phone is kept: only what is newer comes.
                 connections[host.name]?.send(message("sync", "since" to since(host.name)))
             }
+            "agent.avatar" -> agentImages.received(host.name, m)
             "agents.list" -> {
                 val list = agentsIn(host.name, m)
                 agents.removeAll { it.host == host.name }
                 agents.addAll(list)
                 val listed = agents.filter { it.host == host.name }
+                agentImages.listed(host.name, listed)
                 save { agents(host.name, listed) }
             }
             // A conversation and its name: at each sync (so an empty one is
@@ -886,6 +897,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             "error" -> {
+                if (agentImages.failure(m.optString("of"), m.optString("message"))) return
                 val policyAddress = policyRequests.remove(m.optString("of"))
                 if (policyAddress != null) {
                     policyBusy.remove(policyAddress)
@@ -1336,6 +1348,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
+        agentImages.clear(paired.map { it.name })
         sandboxPolicies.clear(); policyBusy.clear(); policyFresh.clear(); policyErrors.clear(); policyReviews.clear(); policyRequests.clear(); notPolicyOwner.clear()
         saving.execute { policyCache.edit { clear() } }
         approvals.clear()
@@ -1376,6 +1389,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
+        agentImages.forget(host)
         forgetPolicy(host)
         val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
         conversations.removeAll { it.host == host }
@@ -1391,6 +1405,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        agentImages.close()
         connections.values.forEach { it.close() }
         work.shutdown()
         disk.shutdown()
@@ -1446,6 +1461,10 @@ fun agentsIn(host: String, m: JSONObject): List<Agent> {
             a.getString("agent"),
             a.optString("runtime"),
             (0 until (capabilities?.length() ?: 0)).map { capabilities!!.getString(it) },
+            avatarRevision = a.optJSONObject("avatar")?.optLong("revision") ?: 0,
+            avatarVersion = a.optJSONObject("avatar")?.let { v -> v.optString("version").takeUnless { v.isNull("version") || it.isBlank() } },
+            canEditAvatar = a.optBoolean("can_edit_avatar"),
+            supportsAvatars = a.has("can_edit_avatar"),
         )
     }
 }

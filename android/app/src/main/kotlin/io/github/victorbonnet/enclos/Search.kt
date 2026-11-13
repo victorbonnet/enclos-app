@@ -73,6 +73,8 @@ data class AgentEntry(
     val homeMatch: Line?,
     val under: List<Found>,
     val others: Int,
+    /** Its photo's key, from its conversations' host and agent. */
+    val photo: PhotoKey? = null,
 )
 
 private val Conversation.address get() = "$host/$agent"
@@ -108,7 +110,8 @@ fun byAgent(
             others.filterIndexed { i, c -> address in expanded || i < RECENT || unread(c.id) > 0 }.map { Found(it, null) }
         }
         val homeMatch = found.firstOrNull { it.conversation.id == home?.id }?.match
-        AgentEntry(address, home, homeMatch, under, others.size)
+        val first = its.firstOrNull() ?: found.first { it.conversation.address == address }.conversation
+        AgentEntry(address, home, homeMatch, under, others.size, PhotoKey(first.host, first.agent))
     }
 }
 
