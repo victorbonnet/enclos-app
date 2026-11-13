@@ -3,6 +3,7 @@ package io.github.victorbonnet.enclos
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -37,11 +38,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.ui.EnclosTheme
@@ -109,32 +110,39 @@ private sealed interface Route {
 class MainActivity : ComponentActivity() {
     private val model: AppModel by viewModels()
     /** The unlock prompt: made with the activity, as the screen-lock page it may open requires. */
-    val unlocker = Unlocker(this)
+    private val unlocker = Unlocker(this)
 
     override fun onStart() {
         super.onStart()
-        model.returned(android.os.SystemClock.elapsedRealtime())
+        model.lock.returned()
         model.foreground()
     }
 
     override fun onResume() {
         super.onResume()
-        // Locked: the prompt shows on its own, once; the lock screen's button asks again.
-        if (model.locked.value && model.promptDue) {
-            model.promptDue = false
-            unlock()
-        }
+        // Locked: the prompt shows on its own as the app starts or comes back; the lock screen's button asks again.
+        if (model.lock.promptNow(unlocker.asking)) unlock()
     }
 
     override fun onStop() {
-        // The screen-lock page the prompt opened is not the person leaving.
-        if (!unlocker.asking) model.left(android.os.SystemClock.elapsedRealtime())
+        model.lock.stopped(unlocker.asking)
         model.background()
         super.onStop()
     }
 
     /** Asks the person to unlock the app. */
-    fun unlock() = unlocker.ask("Unlock Enclos") { ok, why -> model.unlocked(ok, why) }
+    private fun unlock() = unlocker.ask("Unlock Enclos") { ok, why -> model.lock.unlocked(ok, why) }
+
+    /**
+     * While the lock is on, the window is secure: no screenshot, recording
+     * or cast shows the app, nor does the recent apps' picture of it (all
+     * versions; the app's dialogs inherit it). From Android 13 the recent
+     * apps also keep no picture at all.
+     */
+    private fun secure(on: Boolean) {
+        if (on) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) setRecentsScreenshotEnabled(!on)
+    }
 
     /** An `enclos://pair` link the system opened the app with: shown on the pairing screen, which asks first. */
     private fun open(intent: Intent?) {
@@ -151,6 +159,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         applyTheme(this, model.theme.value)
+        // Before the first frame, so none is drawn unsecured.
+        secure(model.lock.on.value)
         // Not again when the activity is recreated: the link was handled.
         if (savedInstanceState == null) open(intent)
         // The launch screen stays until what the phone kept for the first
@@ -175,18 +185,18 @@ class MainActivity : ComponentActivity() {
                 val bars = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark }
                 enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
             }
-            // While the lock is on, the recent apps show no picture of the app (Android 13 and later).
-            val lockOn = model.lockOn.value
-            LaunchedEffect(lockOn) {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) setRecentsScreenshotEnabled(!lockOn)
-            }
+            val lockOn = model.lock.on.value
+            LaunchedEffect(lockOn) { secure(lockOn) }
+            // Kept while the screens are not composed: the route, the tab, scroll positions.
+            val kept = rememberSaveableStateHolder()
             EnclosTheme(dark) {
-                val locked = model.locked.value
-                Box(Modifier.fillMaxSize()) {
-                    // Kept under the lock, so the screen the person was on is there once unlocked;
-                    // hidden from accessibility services meanwhile.
-                    Box(if (locked) Modifier.fillMaxSize().clearAndSetSemantics {} else Modifier.fillMaxSize()) { Screens(model) }
-                    if (locked) LockScreen(model, unlock = ::unlock, leave = { moveTaskToBack(true) })
+                // Locked, the lock screen is all that is composed: no screen, dialog, sheet or menu
+                // of the app is there to see or reach, by touch, keyboard or accessibility services,
+                // and none marks a message read. Unlocked, the screens come back where they were.
+                if (model.lock.locked.value) {
+                    LockScreen(model.lock, unlock = ::unlock, leave = { moveTaskToBack(true) })
+                } else {
+                    kept.SaveableStateProvider("screens") { Screens(model, unlocker::ask) }
                 }
             }
         }
@@ -201,15 +211,20 @@ class MainActivity : ComponentActivity() {
  * ground, so two never show through each other mid-move.
  */
 @Composable
-private fun Screens(model: AppModel) {
+private fun Screens(model: AppModel, ask: Ask) {
     var saved by rememberSaveable { mutableStateOf("tabs") }
     var view by rememberSaveable { mutableStateOf(View.Conversations) }
     val routes = remember { SeekableTransitionState(Route.restore(saved)) }
     val transition = rememberTransition(routes, label = "route")
     val scope = rememberCoroutineScope()
     val go = { to: Route ->
+        val leaving = (routes.targetState as? Route.Chat)?.takeIf { it != to }
         saved = to.save()
-        scope.launch { routes.animateTo(to) }
+        scope.launch {
+            routes.animateTo(to)
+            // A conversation's screen left, once it slid away: a draft with nothing sent goes.
+            leaving?.let { model.left(it.id) }
+        }
         Unit
     }
 
@@ -223,11 +238,20 @@ private fun Screens(model: AppModel) {
         try {
             progress.collect { event -> routes.seekTo(event.progress, up) }
             saved = up.save()
+            val leaving = routes.currentState
             routes.animateTo(up)
+            if (leaving is Route.Chat) model.left(leaving.id)
         } catch (_: CancellationException) {
             routes.animateTo(routes.currentState)
         }
     }
+    // A conversation the phone does not hold, once what it kept is read: a
+    // draft lost when the system stopped the app, or one forgotten or
+    // cleared while open. Back to the tabs rather than a blank screen.
+    val showing = routes.targetState
+    val missing = showing is Route.Chat && model.ready && model.conversations.none { it.id == showing.id }
+    LaunchedEffect(missing) { if (missing) go(Route.Tabs) }
+
     // A pairing link opened the app: to the pairing screen, which asks.
     val opened = model.openedLink.value
     LaunchedEffect(opened) { if (opened != null) go(Route.Pair) }
@@ -253,7 +277,7 @@ private fun Screens(model: AppModel) {
                     is Route.Chat -> ConversationScreen(model, route.id, back = { go(Route.Tabs) })
                     Route.Settings -> Column(Modifier.fillMaxSize()) {
                         AppBar { IconButton(Glyphs.back, "Back", { go(Route.Tabs) }) }
-                        SettingsScreen(model, pair = { go(Route.Pair) })
+                        SettingsScreen(model, pair = { go(Route.Pair) }, ask = ask)
                     }
                     Route.NewChat -> NewChatScreen(model, back = { go(Route.Tabs) }, opened = { go(Route.Chat(it)) })
                     is Route.AgentPage -> AgentScreen(model, route.address, back = { go(route.up) }, openChat = { go(Route.Chat(it)) }, start = start)
@@ -283,20 +307,19 @@ private fun Screens(model: AppModel) {
 }
 
 /**
- * A full screen arriving (forward) or leaving (back). Forward, Material's
- * shared X axis made short: what is covered fades out first while drifting
- * left, then the new screen fades in on top from a tenth of the width, so
- * the two barely overlap. Back, the screen stays opaque and slides off to
- * the right, uncovering the tabs drifting back into place: a move a finger
- * can drag, as the predictive back gesture does, with nothing showing
- * through.
+ * A full screen arriving (forward) or leaving (back), one move played both
+ * ways: the screen, opaque, slides in from the right edge over the tabs,
+ * which drift a tenth of the width to the left under it; going back it
+ * slides off to the right, uncovering them drifting back. Same distance,
+ * same 250 ms, same pace, so opening and closing feel alike; linear, so a
+ * finger can drag it, as the predictive back gesture does, with nothing
+ * showing through.
  */
-private fun routeMove(forward: Boolean): ContentTransform =
-    if (forward) {
-        (slideInHorizontally(Motion.enter()) { it / 10 } + fadeIn(Motion.enter(Motion.MEDIUM - 50, delay = 50))) togetherWith
-            (slideOutHorizontally(Motion.enter()) { -it / 20 } + fadeOut(Motion.exit(100)))
+private fun routeMove(forward: Boolean): ContentTransform {
+    val move = tween<IntOffset>(Motion.MEDIUM, easing = LinearEasing)
+    return if (forward) {
+        slideInHorizontally(move) { it } togetherWith slideOutHorizontally(move) { -it / 10 }
     } else {
-        // Linear: dragged by a finger, the screen stays under it.
-        val drag = tween<IntOffset>(Motion.MEDIUM, easing = LinearEasing)
-        slideInHorizontally(drag) { -it / 10 } togetherWith slideOutHorizontally(drag) { it }
+        slideInHorizontally(move) { -it / 10 } togetherWith slideOutHorizontally(move) { it }
     }.apply { targetContentZIndex = if (forward) 1f else -1f }
+}

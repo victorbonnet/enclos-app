@@ -1,5 +1,7 @@
 [versions]
 androidGradlePlugin = "9.5.0"
+# The NDK that compiles the Rust core (scripts/build-core-android.sh, CI)
+ndk = "30.0.16248370"
 kotlin = "2.4.21"
 androidx-compose-bom = "2026.09.00"
 androidx-activity-compose = "1.13.0"
@@ -33,7 +35,7 @@ commonmark-ext-gfm-strikethrough = { module = "org.commonmark:commonmark-ext-gfm
 commonmark-ext-autolink = { module = "org.commonmark:commonmark-ext-autolink", version.ref = "commonmark" }
 # Unit tests on the JVM, for what needs no phone
 junit = { module = "junit:junit", version.ref = "junit" }
-# The real org.json in JVM tests, where the platform's is only stubs: reading what a bridge sends
+# org.json for those tests: android.jar's copy is a stub off the phone
 json = { module = "org.json:json", version.ref = "json" }
 
 [plugins]

@@ -611,7 +611,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                     ?: model.newGroup(members.toList(), name)?.also { madeGroup = Made(key, it) }
                     ?: return@Composer
                 val group = model.conversations.firstOrNull { it.id == id } ?: return@Composer
-                if (model.send(group, text.trim())) opened(id)
+                if (model.send(group, text.trim()) == null) opened(id)
                 return@Composer
             }
             // The draft an earlier tap made, while the agent is the same; another agent's goes.
@@ -621,7 +621,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                     madeDraft = Made(agent.address, made)
                 }
             val started = model.conversations.firstOrNull { it.id == id } ?: return@Composer
-            if (model.send(started, text.trim())) opened(id)
+            if (model.send(started, text.trim()) == null) opened(id)
         }
     }
 }

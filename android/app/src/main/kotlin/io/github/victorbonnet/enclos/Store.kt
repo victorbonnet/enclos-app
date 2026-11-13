@@ -43,27 +43,25 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
     fun recent(open: Int = 10, history: Int = 40): Saved {
         val db = readableDatabase
         val agents = db.rawQuery("SELECT host, name, runtime, capabilities FROM agents ORDER BY rowid", null).use { c ->
-            generateSequence { if (c.moveToNext()) c else null }.map {
-                Agent(it.getString(0), it.getString(1), it.getString(2), strings(it.getString(3)))
-            }.toList()
+            c.rows { Agent(it.getString(0), it.getString(1), it.getString(2), strings(it.getString(3))) }
         }
         val conversations = db.rawQuery("SELECT host, agent, id, title, titled_by, home, members FROM conversations ORDER BY rowid", null).use { c ->
-            generateSequence { if (c.moveToNext()) c else null }.map {
+            c.rows {
                 Conversation(
                     it.getString(0), it.getString(1), it.getString(2), it.getStringOrNull(3), it.getStringOrNull(4), it.getInt(5) != 0,
                     members = it.getStringOrNull(6)?.let(::strings).orEmpty(),
                 )
-            }.toList()
+            }
         }
         val lines = mutableMapOf<String, List<Line>>()
         // Each conversation's last message, through the (conversation, seq) index.
         db.rawQuery(
             "SELECT $LINE FROM messages m WHERE seq = (SELECT MAX(seq) FROM messages WHERE conversation = m.conversation)",
             null,
-        ).use { c -> while (c.moveToNext()) lines[c.getString(0)] = listOf(line(c)) }
+        ).use { c -> c.rows { it.getString(0) to line(it) }.forEach { (id, last) -> lines[id] = listOf(last) } }
         lines.entries.sortedByDescending { it.value.last().time }.take(open).map { it.key }.forEach { id ->
             db.rawQuery("SELECT $LINE FROM messages WHERE conversation = ? ORDER BY seq DESC LIMIT $history", arrayOf(id)).use { c ->
-                lines[id] = generateSequence { if (c.moveToNext()) c else null }.map { line(it) }.toList().reversed()
+                lines[id] = c.rows { line(it) }.reversed()
             }
         }
         val kept = db.rawQuery("SELECT host, MAX(seq) FROM messages GROUP BY host", null).use { c ->
@@ -76,7 +74,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
     fun lines(): Map<String, List<Line>> {
         val lines = mutableMapOf<String, MutableList<Line>>()
         readableDatabase.rawQuery("SELECT $LINE FROM messages ORDER BY conversation, seq", null).use { c ->
-            while (c.moveToNext()) lines.getOrPut(c.getString(0)) { mutableListOf() } += line(c)
+            c.rows { it.getString(0) to line(it) }.forEach { (id, l) -> lines.getOrPut(id) { mutableListOf() } += l }
         }
         return lines
     }
@@ -104,9 +102,12 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
             put("members", if (c.members.isEmpty()) null else JSONArray(c.members).toString())
         }
         // An update, else an insert: Android 9 and 10's SQLite has no upsert.
+        // insertOrThrow, not insert, which on a failure (a full disk) logs
+        // the row it tried, a conversation's name included, to logcat; the
+        // caller logs the failure without it.
         val db = writableDatabase
         if (db.update("conversations", values, "id = ?", arrayOf(c.id)) == 0) {
-            db.insert("conversations", null, values.apply { put("id", c.id) })
+            db.insertOrThrow("conversations", null, values.apply { put("id", c.id) })
         }
     }
 
@@ -134,7 +135,8 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         try {
             db.delete("agents", "host = ?", arrayOf(host))
             agents.forEach { a ->
-                db.insert(
+                // insertOrThrow: insert would log the row on a failure.
+                db.insertOrThrow(
                     "agents",
                     null,
                     ContentValues().apply {
@@ -182,11 +184,42 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
 
     private fun android.database.Cursor.getStringOrNull(i: Int) = if (isNull(i)) null else getString(i)
 
+    /**
+     * Every row [read] makes sense of. A row it cannot read (its files,
+     * steps or capabilities no longer valid JSON) is skipped and logged
+     * without its content: it would otherwise stop the app at every start.
+     */
+    private fun <T> android.database.Cursor.rows(read: (android.database.Cursor) -> T): List<T> {
+        val all = ArrayList<T>()
+        while (moveToNext()) {
+            try {
+                all += read(this)
+            } catch (e: org.json.JSONException) {
+                android.util.Log.w("enclos", "a row kept on the phone could not be read: skipped")
+            }
+        }
+        return all
+    }
+
     private fun strings(json: String) = JSONArray(json).let { a -> (0 until a.length()).map { a.getString(it) } }
 
     private fun attachments(list: List<Attachment>) = JSONArray(
         list.map { JSONObject().put("id", it.id).put("mime", it.mime).put("name", it.name).put("size", it.size) },
     ).toString()
+
+    /** The ids of the files of every message kept from [host], to delete them when it is forgotten. */
+    fun attachmentIds(host: String): List<String> =
+        readableDatabase.rawQuery("SELECT attachments FROM messages WHERE host = ? AND attachments IS NOT NULL", arrayOf(host)).use { c ->
+            val ids = mutableListOf<String>()
+            while (c.moveToNext()) {
+                try {
+                    attachments(c.getString(0)).mapTo(ids) { it.id }
+                } catch (e: org.json.JSONException) {
+                    // A row that cannot be read names no file to delete.
+                }
+            }
+            ids
+        }
 
     private fun attachments(json: String?): List<Attachment> {
         val a = JSONArray(json ?: return emptyList())

@@ -11,7 +11,7 @@ fun conversationOf(host: String, m: JSONObject): Conversation = Conversation(
     host,
     m.getString("agent"),
     m.getString("conversation"),
-    m.optString("title").ifBlank { null },
+    shownTitle(m.optString("title")),
     m.optString("titled_by").ifBlank { null },
     home = m.optBoolean("home"),
     members = strings(m.optJSONArray("members")),
@@ -24,21 +24,8 @@ fun conversationOf(host: String, m: JSONObject): Conversation = Conversation(
  * have none.
  */
 fun lineOf(host: String, m: JSONObject, group: Boolean): Line {
-    val files = m.optJSONArray("attachments")
-    val attached = (0 until (files?.length() ?: 0)).map {
-        val a = files!!.getJSONObject(it)
-        Attachment(a.getString("id"), a.optString("mime"), a.optString("name"), a.optLong("size"))
-    }
-    val from = m.getString("from")
-    return Line(
-        m.getLong("seq"),
-        from,
-        m.getString("text"),
-        m.getString("kind"),
-        m.optLong("time"),
-        attached,
-        agent = if (group && from == "agent") "$host/${m.getString("agent")}" else null,
-    )
+    val line = lineIn(m)
+    return if (group && line.from == "agent") line.copy(agent = "$host/${m.getString("agent")}") else line
 }
 
 /** A `group.state` from [host]'s bridge: where the group's discussion is, and each member's turn (`host/sandbox/agent`). */
