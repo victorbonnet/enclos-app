@@ -43,9 +43,16 @@ jobs:
           java-version: "17"
       # Also checks that gradle-wrapper.jar is one Gradle published
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
-      # The runner's own Android SDK and NDK
+      # The runner's Android SDK, with the NDK pinned in libs.versions.toml
+      # (not the image's, which moves without a commit here: the image sets
+      # ANDROID_NDK_HOME to its own default NDK, so it is set again)
+      - name: Install the pinned NDK
+        run: |
+          ndk=$(sed -n 's/^ndk = "\(.*\)"$/\1/p' android/gradle/libs.versions.toml)
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
       - name: Build the Rust core and its Kotlin bindings
-        run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" sh scripts/build-core-android.sh
+        run: sh scripts/build-core-android.sh
       # The project's one debug signing key (docs/adr/0004), so this APK
       # installs over any other build. Runs without the secret (Dependabot's,
       # a fork's) sign with a throwaway key, and say so.
