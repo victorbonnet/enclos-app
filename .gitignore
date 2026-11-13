@@ -13,3 +13,7 @@ captures/
 # Built by scripts/build-core-android.sh, never committed
 /android/app/src/main/jniLibs/
 /android/app/src/main/kotlin/generated/
+
+# Signing keys, never committed (ADR 0004); gitleaks reads text, not keystores
+*.keystore
+*.jks
