@@ -136,14 +136,14 @@ private fun PolicyDecisionButtons(model: AppModel, request: PolicyRequest, onClo
     if (request.pending || request.state == "failed" || closing) {
         Gap(12.dp)
         PolicyOutlineButton(if (closing) "Closing request…" else "Close request",
-            enabled = live && !busy && model.approvalCloseSupported[request.host] == true,
+            enabled = live && !busy && model.hostSupports(request.host, "approval.close"),
             modifier = Modifier.fillMaxWidth()) {
             if (model.closeApproval(request)) onCloseStarted()
         }
         Text("Closing only removes this request from the Inbox. It does not approve or deny access, undo earlier changes, or resume work.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(top = 8.dp))
         val unavailable = when {
             !live -> "Reconnect to ${request.host} and sync to respond."
-            model.approvalCloseSupported[request.host] != true -> "Update this host to close requests."
+            !model.hostSupports(request.host, "approval.close") -> "Update this host to close requests."
             else -> null
         }
         unavailable?.let { Text(it, style = Type.small, color = p.textFaint, modifier = Modifier.padding(top = 8.dp)) }
