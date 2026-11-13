@@ -13,10 +13,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
+import io.github.victorbonnet.enclos.core.authSignatureMessage
 import io.github.victorbonnet.enclos.core.decodeBytes
 import io.github.victorbonnet.enclos.core.encodeBytes
 import io.github.victorbonnet.enclos.core.generateNoiseKeypair
 import io.github.victorbonnet.enclos.core.pairingProof
+import io.github.victorbonnet.enclos.core.pairingSignatureMessage
 import io.github.victorbonnet.enclos.ui.ThemeChoice
 import io.github.victorbonnet.enclos.ui.applyTheme
 import org.json.JSONException
@@ -642,6 +644,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                         "name" to Build.MODEL,
                         "device_key" to encodeBytes(Keys.devicePublicKey(attempt.alias)),
                         "proof" to encodeBytes(pairingProof(parsed.code, session.handshakeHash())),
+                        "sig" to encodeBytes(Keys.sign(attempt.alias, pairingSignatureMessage(session.handshakeHash()))),
                     )
                 },
                 // A field missing here ends the connection (BridgeConnection),
@@ -751,7 +754,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 message(
                     "auth",
                     "device" to host.deviceId,
-                    "sig" to encodeBytes(Keys.sign(host.keyAlias, session.handshakeHash())),
+                    "sig" to encodeBytes(Keys.sign(host.keyAlias, authSignatureMessage(session.handshakeHash()))),
                 )
             },
             // A message the app cannot read ends this connection, not the app:
