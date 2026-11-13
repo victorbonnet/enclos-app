@@ -75,9 +75,11 @@ private sealed interface Route {
     /** A sandbox's page: `host/sandbox`. */
     data class SandboxPage(val address: String) : Route
     data class PolicyPage(val address: String) : Route
+    data class HostPage(val name: String, val fromSettings: Boolean = false) : Route
 
     /** Where back leads: an agent opened from its sandbox's page goes back to it; the rest, to the tabs. */
     val up: Route get() = when {
+        this is HostPage && fromSettings -> Settings
         this is PolicyPage -> SandboxPage(address)
         this is RoutinesPage && fromAgent -> AgentPage(address, inSandbox)
         this is AgentPage && inSandbox -> SandboxPage(address.substringBeforeLast('/'))
@@ -101,6 +103,7 @@ private sealed interface Route {
         is AgentPage -> if (inSandbox) "sandbox-agent:$address" else "agent:$address"
         is RoutinesPage -> (if (inSandbox) "sandbox-agent-routines:" else if (fromAgent) "agent-routines:" else "routines:") + address
         is SandboxPage -> "sandbox:$address"
+        is HostPage -> if (fromSettings) "settings-host:$name" else "host:$name"
         is PolicyPage -> "policy:$address"
     }
 
@@ -110,6 +113,8 @@ private sealed interface Route {
             saved == "settings" -> Settings
             saved == "new" -> NewChat
             saved.startsWith("approval:") -> ApprovalPage(saved.removePrefix("approval:"))
+            saved.startsWith("settings-host:") -> HostPage(saved.removePrefix("settings-host:"), fromSettings = true)
+            saved.startsWith("host:") -> HostPage(saved.removePrefix("host:"))
             saved.startsWith("chat:") -> Chat(saved.removePrefix("chat:"))
             saved.startsWith("agent:") -> AgentPage(saved.removePrefix("agent:"))
             saved.startsWith("sandbox-agent:") -> AgentPage(saved.removePrefix("sandbox-agent:"), inSandbox = true)
@@ -305,11 +310,12 @@ private fun Screens(model: AppModel, ask: Ask) {
                     is Route.Chat -> ConversationScreen(model, route.id, back = { go(Route.Tabs) })
                     Route.Settings -> Column(Modifier.fillMaxSize()) {
                         AppBar { IconButton(Glyphs.back, "Back", { go(Route.Tabs) }) }
-                        SettingsScreen(model, pair = { go(Route.Pair) }, ask = ask)
+                        SettingsScreen(model, pair = { go(Route.Pair) }, ask = ask, openHost = { go(Route.HostPage(it, fromSettings = true)) })
                     }
                     Route.NewChat -> NewChatScreen(model, back = { go(Route.Tabs) }, opened = { go(Route.Chat(it)) })
                     is Route.AgentPage -> AgentScreen(model, route.address, back = { go(route.up) }, openChat = { go(Route.Chat(it)) }, start = start, openRoutines = { go(Route.RoutinesPage(route.address, fromAgent = true, inSandbox = route.inSandbox)) })
                     is Route.RoutinesPage -> RoutinesScreen(model, route.address, back = { go(route.up) })
+                    is Route.HostPage -> HostScreen(model, route.name, back = { go(route.up) }, openSandbox = { go(Route.SandboxPage(it)) })
                     is Route.PolicyPage -> SandboxPolicyScreen(model, route.address, back = { go(route.up) })
                     is Route.SandboxPage -> SandboxScreen(
                         model,
@@ -332,6 +338,7 @@ private fun Screens(model: AppModel, ask: Ask) {
                         settings = { go(Route.Settings) },
                         compose = { go(Route.NewChat) },
                         pair = { go(Route.Pair) },
+                        openHost = { go(Route.HostPage(it)) },
                     )
                 }
             }

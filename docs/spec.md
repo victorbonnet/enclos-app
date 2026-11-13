@@ -181,6 +181,14 @@ The host's person can add, edit or remove an access entry and change default set
 
 Cached policy is kept in the app's private preferences, under its no-backup rules, in plain text like the cached requests: it holds host paths, destinations and secret reference names, never secret contents. It is visible offline and survives app starts, but editing waits for a fresh host response on the current connection: a connection that ends or is replaced makes it stale again. Refresh asks again; another device's save updates this page and dismisses an obsolete review. Connection loss or a missing confirmation requires refreshing before trying again. Clear cache and Forget this host remove cached policy. Only a still-paired device of the host owner may load or change it; when the host answers that this person is not its own (an agent shared with them), the sandbox page drops its Policy row ([enclos ADR 0047](https://github.com/victorbonnet/enclos/blob/main/docs/adr/0047-the-hosts-person-manages-sandbox-policy-from-the-phone.md), proposed). Android is built; iOS follows when implemented.
 
+### A host's page
+
+The **Host details →** row inside each unfolded host in Agents, and the host's name or chevron in Settings, open its page. The host heading's chevron only folds and unfolds its contents. Back returns to the place it was opened. The page shows the host's connection, address, Reconnect while offline, and the sandboxes in its agent list, each opening its page.
+
+**Audit (Android built; iOS not started).** The host's person can read state-changing commands on this page when the bridge advertises `audit`. Opening the page or reconnecting while it is visible loads the newest entries first; Refresh replaces them with a fresh page, and Load older entries appends the next page. Each entry shows the command and target, date and time in the phone's locale, actor and host, result (Succeeded, Failed, or No outcome recorded), outcome message and completion time when recorded. No outcome recorded may mean a command is still running or never finished. Host display summaries may end in an ellipsis; the full audit stays on the host. Reading entries does not run the host's integrity verification.
+
+Loading, an empty log, failures with retry through Refresh, and connection loss are stated in place. Replies and errors must match the outstanding request for that host; late replies after a timeout or disconnect are ignored. Entries are held only in memory, cleared with the cache or when forgetting a host, and removed on authentication without the audit capability. Offline entries are labelled as saved in memory. Older bridges and connections as another person explain that audit viewing is unavailable; they receive no audit requests. The bridge rechecks host ownership and device pairing on each request (enclos `docs/protocol.md`, Host audit).
+
 ### Settings
 
 In sections, each named small, faint and in capitals above a hairline, its rows separated by hairlines. Nothing here acts on a sandbox.
@@ -337,6 +345,7 @@ It is off until the person turns it on in Settings, Security, which needs a scre
 | Sandbox policy requests | collapsible section of compact two-line rows above Groups; full-screen details with Approve / Deny and neutral full-width Close request; removal after the host's closed receipt | a collapsible native two-line list section above Groups and a navigation detail page with the same decision, neutral Close request and host-receipt rules (not built) |
 | Inbox by agent | an agent's row opens Home; a line ending its group (`17 conversations ⌄`, `Show less ⌃`) unfolds the rest | a `List` of rows, an agent's row opening Home and a button row ending its group |
 | Inbox filters | one Filters button emphasized while a filter is active; Compose menu with Unread only and Archived conversations switches, kept open while toggling | native popover with the same two toggles and active-button emphasis (not built) |
+| Host audit | host page with selectable rows, Refresh and Load older entries | not built; same behavior with a native list |
 | Back | arrow; predictive back gesture follows the finger | chevron with the previous title; the interactive swipe from the edge |
 | Pairing | full screen | sheet with Cancel |
 | QR scanning | ZXing's scanner activity | the system camera (VisionKit's data scanner) |
@@ -381,3 +390,4 @@ The Android filter control was checked in an isolated preview on a Pixel 11 Pro:
 - **iOS** equivalents in the table above: none is built.
 - **The app lock on Android 9 and 10**: its older calls are written as the platform documents them, but run on Android 11 and later only. Before Android 13, `FLAG_SECURE` alone keeps the app out of the recent apps' picture: not run there yet.
 - **The app lock on a phone**: that nothing of the app is reachable while locked follows from the lock screen being all that is composed, and its moves are tested on the JVM (`AppLockTest`); no instrumented test runs it on a phone yet.
+- **Host audit:** verify live paired-phone scrolling, refresh, older pages and connection loss in both themes. iOS is not implemented.
