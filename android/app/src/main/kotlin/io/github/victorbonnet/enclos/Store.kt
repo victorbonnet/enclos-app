@@ -31,50 +31,10 @@ class Saved(
  * Read off the main thread, in two passes: [recent], what the first screens
  * show, then [lines], every message.
  */
-class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", null, 6) {
-    override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL(
-            "CREATE TABLE conversations (id TEXT PRIMARY KEY, host TEXT NOT NULL, agent TEXT NOT NULL, title TEXT, titled_by TEXT, " +
-                "home INTEGER NOT NULL DEFAULT 0, members TEXT, archived INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0)",
-        )
-        // `seq` is the bridge's, increasing per host.
-        db.execSQL(
-            "CREATE TABLE messages (host TEXT NOT NULL, seq INTEGER NOT NULL, conversation TEXT NOT NULL, sender TEXT NOT NULL, " +
-                "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, speaker TEXT, question TEXT, PRIMARY KEY (host, seq))",
-        )
-        db.execSQL("CREATE INDEX messages_of ON messages (conversation, seq)")
-        db.execSQL(
-            "CREATE TABLE agents (host TEXT NOT NULL, name TEXT NOT NULL, runtime TEXT NOT NULL, capabilities TEXT NOT NULL, display_name TEXT, name_revision INTEGER NOT NULL DEFAULT 0 CHECK(name_revision>=0), PRIMARY KEY (host, name))",
-        )
-        createQuestions(db)
-    }
+class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", null, STORE_VERSION) {
+    override fun onCreate(db: SQLiteDatabase) = CREATE.forEach(db::execSQL)
 
-    // Step by step from the version on the phone, never by dropping what was kept.
-    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
-        // 2: an agent's Home conversation is marked.
-        if (old < 2) db.execSQL("ALTER TABLE conversations ADD COLUMN home INTEGER NOT NULL DEFAULT 0")
-        // 3: a group's members, and who of them said each message.
-        if (old < 3) {
-            db.execSQL("ALTER TABLE conversations ADD COLUMN members TEXT")
-            db.execSQL("ALTER TABLE messages ADD COLUMN speaker TEXT")
-        }
-        if (old < 4) {
-            db.execSQL("ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
-            db.execSQL("ALTER TABLE conversations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
-        }
-        if (old < 5) {
-            db.execSQL("ALTER TABLE agents ADD COLUMN display_name TEXT")
-            db.execSQL("ALTER TABLE agents ADD COLUMN name_revision INTEGER NOT NULL DEFAULT 0 CHECK(name_revision>=0)")
-        }
-        if (old < 6) {
-            db.execSQL("ALTER TABLE messages ADD COLUMN question TEXT")
-            createQuestions(db)
-        }
-    }
-
-    private fun createQuestions(db: SQLiteDatabase) = db.execSQL(
-        "CREATE TABLE questions (host TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>=0), info TEXT NOT NULL, PRIMARY KEY (host, id))",
-    )
+    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) = upgrades(old).forEach(db::execSQL)
 
     /**
      * What the first screens show: the agents, every conversation with its
@@ -84,38 +44,41 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
     fun recent(open: Int = 10, history: Int = 40): Saved {
         val db = readableDatabase
         val agents = db.rawQuery("SELECT host, name, runtime, capabilities, display_name, name_revision FROM agents ORDER BY rowid", null).use { c ->
-            generateSequence { if (c.moveToNext()) c else null }.map {
+            c.rows {
                 Agent(it.getString(0), it.getString(1), it.getString(2), strings(it.getString(3)), displayName = it.getStringOrNull(4), nameRevision = it.getLong(5))
-            }.toList()
+            }
         }
         val conversations = db.rawQuery("SELECT host, agent, id, title, titled_by, home, members, archived, revision FROM conversations ORDER BY rowid", null).use { c ->
-            generateSequence { if (c.moveToNext()) c else null }.map {
+            c.rows {
                 Conversation(
                     it.getString(0), it.getString(1), it.getString(2), it.getStringOrNull(3), it.getStringOrNull(4), it.getInt(5) != 0,
                     members = it.getStringOrNull(6)?.let(::strings).orEmpty(),
                     archived = it.getInt(7) != 0,
                     revision = it.getLong(8),
                 )
-            }.toList()
+            }
         }
         val lines = mutableMapOf<String, List<Line>>()
         // Each conversation's last message, through the (conversation, seq) index.
         db.rawQuery(
             "SELECT $LINE FROM messages m WHERE seq = (SELECT MAX(seq) FROM messages WHERE conversation = m.conversation)",
             null,
-        ).use { c -> while (c.moveToNext()) lines[c.getString(0)] = listOf(line(c)) }
+        ).use { c -> c.rows { it.getString(0) to line(it) }.forEach { (id, last) -> lines[id] = listOf(last) } }
         lines.entries.sortedByDescending { it.value.last().time }.take(open).map { it.key }.forEach { id ->
             db.rawQuery("SELECT $LINE FROM messages WHERE conversation = ? ORDER BY seq DESC LIMIT $history", arrayOf(id)).use { c ->
-                lines[id] = generateSequence { if (c.moveToNext()) c else null }.map { line(it) }.toList().reversed()
+                lines[id] = c.rows { line(it) }.reversed()
             }
         }
         val kept = db.rawQuery("SELECT host, MAX(seq) FROM messages GROUP BY host", null).use { c ->
             generateSequence { if (c.moveToNext()) c else null }.associate { it.getString(0) to it.getLong(1) }
         }
-        val questions = db.rawQuery("SELECT host, info FROM questions", null).use { c ->
-            generateSequence { if (c.moveToNext()) c else null }.mapNotNull {
-                runCatching { QuestionInfo.from(it.getString(0), JSONObject(it.getString(1))) }.getOrNull()
-            }.toList()
+        val rows = db.rawQuery("SELECT host, id, info FROM questions", null).use { c ->
+            generateSequence { if (c.moveToNext()) c else null }.map { Triple(it.getString(0), it.getString(1), it.getString(2)) }.toList()
+        }
+        val (questions, stale) = keptQuestions(rows, conversations)
+        if (stale.isNotEmpty()) {
+            val write = writableDatabase
+            stale.forEach { write.delete("questions", "host = ? AND id = ?", arrayOf(it.host, it.id)) }
         }
         return Saved(agents, conversations, lines, kept, questions)
     }
@@ -124,7 +87,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
     fun lines(): Map<String, List<Line>> {
         val lines = mutableMapOf<String, MutableList<Line>>()
         readableDatabase.rawQuery("SELECT $LINE FROM messages ORDER BY conversation, seq", null).use { c ->
-            while (c.moveToNext()) lines.getOrPut(c.getString(0)) { mutableListOf() } += line(c)
+            c.rows { it.getString(0) to line(it) }.forEach { (id, l) -> lines.getOrPut(id) { mutableListOf() } += l }
         }
         return lines
     }
@@ -275,11 +238,42 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
 
     private fun android.database.Cursor.getStringOrNull(i: Int) = if (isNull(i)) null else getString(i)
 
+    /**
+     * Every row [read] makes sense of. A row it cannot read (its files,
+     * steps or capabilities no longer valid JSON) is skipped and logged
+     * without its content: it would otherwise stop the app at every start.
+     */
+    private fun <T> android.database.Cursor.rows(read: (android.database.Cursor) -> T): List<T> {
+        val all = ArrayList<T>()
+        while (moveToNext()) {
+            try {
+                all += read(this)
+            } catch (e: org.json.JSONException) {
+                android.util.Log.w("enclos", "a row kept on the phone could not be read: skipped")
+            }
+        }
+        return all
+    }
+
     private fun strings(json: String) = JSONArray(json).let { a -> (0 until a.length()).map { a.getString(it) } }
 
     private fun attachments(list: List<Attachment>) = JSONArray(
         list.map { JSONObject().put("id", it.id).put("mime", it.mime).put("name", it.name).put("size", it.size) },
     ).toString()
+
+    /** The ids of the files of every message kept from [host], to delete them when it is forgotten. */
+    fun attachmentIds(host: String): List<String> =
+        readableDatabase.rawQuery("SELECT attachments FROM messages WHERE host = ? AND attachments IS NOT NULL", arrayOf(host)).use { c ->
+            val ids = mutableListOf<String>()
+            while (c.moveToNext()) {
+                try {
+                    attachments(c.getString(0)).mapTo(ids) { it.id }
+                } catch (e: org.json.JSONException) {
+                    // A row that cannot be read names no file to delete.
+                }
+            }
+            ids
+        }
 
     private fun attachments(json: String?): List<Attachment> {
         val a = JSONArray(json ?: return emptyList())
@@ -308,5 +302,52 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
                 durationMs = if (it.has("duration_ms")) it.getLong("duration_ms") else null,
             )
         }
+    }
+}
+
+/** The database's version: [upgrades] brings an older one to it. */
+internal const val STORE_VERSION = 6
+
+/** A new database, at [STORE_VERSION]. */
+internal val CREATE = listOf(
+    "CREATE TABLE conversations (id TEXT PRIMARY KEY, host TEXT NOT NULL, agent TEXT NOT NULL, title TEXT, titled_by TEXT, " +
+        "home INTEGER NOT NULL DEFAULT 0, members TEXT, archived INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0)",
+    // `seq` is the bridge's, increasing per host.
+    "CREATE TABLE messages (host TEXT NOT NULL, seq INTEGER NOT NULL, conversation TEXT NOT NULL, sender TEXT NOT NULL, " +
+        "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, speaker TEXT, question TEXT, PRIMARY KEY (host, seq))",
+    "CREATE INDEX messages_of ON messages (conversation, seq)",
+    "CREATE TABLE agents (host TEXT NOT NULL, name TEXT NOT NULL, runtime TEXT NOT NULL, capabilities TEXT NOT NULL, " +
+        "display_name TEXT, name_revision INTEGER NOT NULL DEFAULT 0 CHECK(name_revision>=0), PRIMARY KEY (host, name))",
+    QUESTIONS,
+)
+
+/** The questions agents ask, each with its revision, by host. */
+private const val QUESTIONS =
+    "CREATE TABLE questions (host TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>=0), info TEXT NOT NULL, PRIMARY KEY (host, id))"
+
+
+/** What brings a database of version [old] to [STORE_VERSION]: step by step, never by dropping what was kept. */
+internal fun upgrades(old: Int): List<String> = buildList {
+    // 2: an agent's Home conversation is marked.
+    if (old < 2) add("ALTER TABLE conversations ADD COLUMN home INTEGER NOT NULL DEFAULT 0")
+    // 3: a group's members, and who of them said each message.
+    if (old < 3) {
+        add("ALTER TABLE conversations ADD COLUMN members TEXT")
+        add("ALTER TABLE messages ADD COLUMN speaker TEXT")
+    }
+    // 4: a conversation's archived state, and the revision it came with.
+    if (old < 4) {
+        add("ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+        add("ALTER TABLE conversations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+    }
+    // 5: an agent's display name, and the revision it came with.
+    if (old < 5) {
+        add("ALTER TABLE agents ADD COLUMN display_name TEXT")
+        add("ALTER TABLE agents ADD COLUMN name_revision INTEGER NOT NULL DEFAULT 0 CHECK(name_revision>=0)")
+    }
+    // 6: an agent's questions, and the message each is linked to.
+    if (old < 6) {
+        add("ALTER TABLE messages ADD COLUMN question TEXT")
+        add(QUESTIONS)
     }
 }

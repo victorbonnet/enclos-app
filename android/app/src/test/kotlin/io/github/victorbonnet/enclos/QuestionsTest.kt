@@ -38,7 +38,8 @@ class QuestionsTest {
             question.copy(choices = List(13) { "Choice" }), question.copy(choices = listOf(" ")),
             question.copy(choices = emptyList(), multiple = true), question.copy(text = "\u0000skipped"),
             question.copy(text = "🤖".repeat(6144)), question.copy(text = "\n".repeat(12 * 1024) + "x"),
-            question.copy(state = QuestionState.Answered), question.copy(answer = QuestionAnswer.Skip),
+            question.copy(confirmed = true), question.copy(state = QuestionState.Answered, answer = QuestionAnswer.Skip),
+            question.copy(answer = QuestionAnswer.Skip),
             question.copy(state = QuestionState.Skipped, answer = QuestionAnswer.Text("No")), question.copy(revision = -1),
         )) assertTrue(invalid.toString().take(80), runCatching { invalid.validate() }.isFailure)
         for (answer in listOf(
@@ -46,8 +47,81 @@ class QuestionsTest {
             QuestionAnswer.Choices(listOf(0, 0)), QuestionAnswer.Text(" \n\t"), QuestionAnswer.Text("\u0000skipped"),
             QuestionAnswer.Text("answer\u001b[2J"), QuestionAnswer.Text("x".repeat(8192)), QuestionAnswer.Text("\uD800"),
         )) assertTrue(runCatching { question.validateAnswer(answer) }.isFailure)
-        question.validateAnswer(QuestionAnswer.Text("Line one\r\nLine two\twith detail"))
+        question.validateAnswer(QuestionAnswer.Text("Line one\nLine two with detail"))
         question.validateAnswer(QuestionAnswer.Skip)
+    }
+
+    /** The cases of enclos-protocol's `hidden_characters_and_duplicate_labels_are_refused`, with its verdicts. */
+    @Test fun hidden_characters_and_duplicate_labels_are_refused_as_the_protocol_refuses_them() {
+        for (choices in listOf(
+            listOf("Deny\u202Ewolla", "Allow"), listOf("Allow\u200B", "Allow"), listOf("Allow", "Allow"),
+            listOf("Two\nlines"), listOf("Tab\there"),
+        )) assertTrue(choices.toString(), runCatching { question.copy(choices = choices).validate() }.isFailure)
+        for (text in listOf("Which\u2066?", "Which\r\n?", "Which\t?", "\uFEFFWhich?")) {
+            assertTrue(text, runCatching { question.copy(text = text).validate() }.isFailure)
+        }
+        question.copy(text = "Which one?\nPick carefully.").validate()
+        for (text in listOf("ok\u200D", "a\tb", "a\r\nb", "\u00AD")) {
+            assertTrue(text, runCatching { question.validateAnswer(QuestionAnswer.Text(text)) }.isFailure)
+        }
+    }
+
+    /** The cases of enclos-protocol's answered-without-answer and `confirmed` checks. */
+    @Test fun answered_may_carry_no_answer_and_only_a_settled_question_is_confirmed() {
+        val answeredBlind = question.copy(state = QuestionState.Answered, revision = 1)
+        answeredBlind.validate()
+        question.copy(state = QuestionState.Skipped, revision = 1, confirmed = true).validate()
+        assertTrue(runCatching { question.copy(confirmed = true).validate() }.isFailure)
+        assertEquals("Answered, as the agent reports", questionStatus(answeredBlind))
+        assertEquals("Answered", questionStatus(answeredBlind.copy(answer = QuestionAnswer.Choices(listOf(0)), confirmed = true)))
+        assertEquals("Answered, as the agent reports", questionStatus(answeredBlind.copy(answer = QuestionAnswer.Choices(listOf(0)))))
+        assertEquals("Skipped, as the agent reports", questionStatus(question.copy(state = QuestionState.Skipped, revision = 1)))
+        assertEquals("Skipped", questionStatus(question.copy(state = QuestionState.Skipped, revision = 1, confirmed = true)))
+        assertEquals("Cancelled", questionStatus(question.copy(state = QuestionState.Cancelled, revision = 1)))
+        // A later revision may not turn a settled result into another one, confirmed or not.
+        val reported = answeredBlind.copy(answer = QuestionAnswer.Choices(listOf(0)))
+        assertEquals(reported, newestQuestion(reported, reported.copy(revision = 2, confirmed = true)))
+        assertEquals(reported.copy(confirmed = true), newestQuestion(question, reported.copy(confirmed = true)))
+    }
+
+    @Test fun labels_that_differ_only_by_joiners_are_not_distinct() {
+        val heart = points(0x2764)
+        assertTrue(runCatching { question.copy(choices = listOf(heart, heart + points(0xFE0F))).validate() }.isFailure)
+        question.copy(choices = listOf(heart + points(0xFE0F), "Deny")).validate()
+    }
+
+    /** Written as code points, so the source holds no invisible character. */
+    private fun points(vararg c: Int) = buildString { c.forEach { appendCodePoint(it) } }
+
+    @Test fun persian_spelling_and_joined_emoji_are_text_a_joiner_beside_ascii_is_not() {
+        // "mi-khaham" with its zero-width non-joiner, and the shrug, man, emoji-style sequence.
+        val persian = points(0x0645, 0x06CC, 0x200C, 0x062E, 0x0648, 0x0627, 0x0647, 0x0645)
+        val shrug = points(0x1F937, 0x200D, 0x2642, 0xFE0F)
+        for (text in listOf(persian, shrug, "Fine $shrug\nthanks")) {
+            question.copy(text = "$text?").validate()
+            question.validateAnswer(QuestionAnswer.Text(text))
+        }
+        question.copy(choices = listOf(persian, shrug)).validate()
+        for (text in listOf("ok" + points(0x200D) + "ok", points(0x200C) + persian, persian + points(0x200C), "A" + points(0xFE0F))) {
+            assertTrue(text, runCatching { question.validateAnswer(QuestionAnswer.Text(text)) }.isFailure)
+            assertTrue(text, runCatching { question.copy(choices = listOf(text)).validate() }.isFailure)
+        }
+    }
+
+    @Test fun the_cache_drops_questions_of_conversations_it_no_longer_keeps_and_unreadable_rows() {
+        val kept = Conversation("mac", "lab/main", "c-1")
+        // org.json is Android's: the rows' text stands for the parsed question here.
+        val parsed = mapOf("one" to question, "gone" to question.copy(id = "q-2", conversation = "c-gone"), "pi" to question.copy(host = "pi"))
+        val rows = listOf(Triple("mac", "q-1", "one"), Triple("mac", "q-2", "gone"), Triple("pi", "q-1", "pi"), Triple("mac", "q-3", "{not json"))
+        val (questions, stale) = keptQuestions(rows, listOf(kept)) { _, info -> parsed[info] }
+        assertEquals(listOf(question), questions)
+        assertEquals(listOf(QuestionKey("mac", "q-2"), QuestionKey("pi", "q-1"), QuestionKey("mac", "q-3")), stale)
+    }
+
+    @Test fun a_pasted_line_break_is_sent_as_a_newline_and_a_tab_is_not_sent() {
+        val textOnly = question.copy(choices = emptyList())
+        assertEquals(QuestionAnswer.Text("one\ntwo\nthree"), QuestionSelection(text = "one\r\ntwo\rthree").answer(textOnly))
+        assertNull(QuestionSelection(text = "one\ttwo").answer(textOnly))
     }
 
     @Test fun newer_terminal_metadata_wins_over_old_cache_and_can_never_reopen_or_change_definition() {
