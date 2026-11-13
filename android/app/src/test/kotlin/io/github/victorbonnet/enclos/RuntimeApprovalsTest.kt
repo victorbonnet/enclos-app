@@ -173,7 +173,7 @@ class RuntimeApprovalsTest {
         val client = QuestionClient(send = { sends++; true }, connected = { true }, accepts = { true }, changed = {}, later = { _, _ -> })
         client.authenticated("mac"); client.merge(question); client.synced("mac")
         val request = client.submit(question, QuestionAnswer.Approval(RuntimeApprovalAction.Deny))!!
-        client.failure("mac", request, "The runtime did not confirm.", "agent_unavailable")
+        client.failure("mac", request, "The runtime did not confirm.", "unconfirmed")
         assertNull(client.submit(question, QuestionAnswer.Approval(RuntimeApprovalAction.Deny)))
         assertEquals(1, sends)
         assertTrue(client.uncertain[question.key] == true)

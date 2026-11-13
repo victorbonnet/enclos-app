@@ -33,6 +33,15 @@ class CommandsTest {
     }
 
     @Test
+    fun a_name_listed_twice_is_offered_once_the_first() {
+        val again = AgentCommand("model", "Another model command", null)
+        val twice = all + again
+        assertEquals(all, suggest(twice, "/"))
+        assertEquals(listOf(model, reloadMcp), suggest(twice, "/m"))
+        assertEquals(listOf(model), suggest(twice, "/odel"))
+    }
+
+    @Test
     fun an_at_word_offers_the_members_it_starts_then_all() {
         val members = listOf("main", "coder", "alice")
         assertEquals(listOf("main", "coder", "alice", "all"), mentionsFor(members, "hello @"))
