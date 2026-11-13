@@ -55,6 +55,8 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -62,6 +64,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
@@ -77,7 +80,6 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.google.zxing.client.android.Intents
 import io.github.victorbonnet.enclos.core.coreVersion
-import io.github.victorbonnet.enclos.core.parsePairLink
 import io.github.victorbonnet.enclos.ui.AgentAvatar
 import io.github.victorbonnet.enclos.ui.AppBar
 import io.github.victorbonnet.enclos.ui.Bubble
@@ -97,6 +99,7 @@ import io.github.victorbonnet.enclos.ui.Markdown
 import io.github.victorbonnet.enclos.ui.PrimaryButton
 import io.github.victorbonnet.enclos.ui.Shapes
 import io.github.victorbonnet.enclos.ui.StatusLine
+import io.github.victorbonnet.enclos.ui.statusText
 import io.github.victorbonnet.enclos.ui.SystemLine
 import io.github.victorbonnet.enclos.ui.TextLink
 import io.github.victorbonnet.enclos.ui.Type
@@ -164,7 +167,24 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
         .sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: 0L }
     var query by rememberSaveable { mutableStateOf("") }
     var filter by remember { mutableStateOf<InboxFilter>(InboxFilter.All) }
-    val found = search(sorted, { model.lines[it].orEmpty() }, model::unread, query, filter)
+    // What search reads, taken here on the main thread: lists that are
+    // replaced, never changed, when a message arrives.
+    val said = sorted.associate { it.id to model.lines[it.id].orEmpty() }
+    val unread = sorted.associate { it.id to model.unread(it.id) }
+    val listed = remember(sorted, said, unread, filter) { search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, "", filter) }
+    // A query reads every message: searched off the main thread, each
+    // message folded once (model.folds); the last result stays meanwhile.
+    var searched by remember { mutableStateOf<List<Found>?>(null) }
+    LaunchedEffect(sorted, said, unread, query, filter) {
+        searched = if (query.isBlank()) {
+            null
+        } else {
+            withContext(Dispatchers.Default) {
+                search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, query, filter, model.folds::of)
+            }
+        }
+    }
+    val found = if (query.isBlank()) listed else searched ?: listed
     val narrowed = query.isNotBlank() || filter != InboxFilter.All
     val agents = byAgent(sorted, found, model.unfolded.toSet(), model::unread, narrowed)
     Box(Modifier.fillMaxSize()) {
@@ -298,16 +318,11 @@ private fun Choice(label: String, on: Boolean, onClick: () -> Unit) {
     ) { Text(label, style = Type.label, color = text, maxLines = 1) }
 }
 
-/** [text] with the words of [query] in `accent`, whatever their case. */
+/** [text] with the words of [query] in `accent`, where search found them: its own rules (case, accents, spaces). */
 private fun highlighted(text: String, query: String, accent: Color): AnnotatedString = buildAnnotatedString {
     append(text)
-    val lower = text.lowercase()
-    query.lowercase().split(' ').filter { it.isNotBlank() }.forEach { word ->
-        var at = lower.indexOf(word)
-        while (at >= 0) {
-            addStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold), at, at + word.length)
-            at = lower.indexOf(word, at + word.length)
-        }
+    matches(text, query).forEach { range ->
+        addStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold), range.first, range.last + 1)
     }
 }
 
@@ -351,7 +366,7 @@ private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, quer
                         Doing(model.doing(c.id) ?: "working", Modifier.weight(1f))
                     } else {
                         // The message the search found, else the last; the words, without markdown.
-                        Preview(match ?: last, match != null, query, unread > 0, "No message yet", Modifier.weight(1f))
+                        Preview(match ?: last, match != null, query, unread > 0, "No message yet", model.statusSource(c), Modifier.weight(1f))
                     }
                     AnimatedVisibility(
                         visible = unread > 0,
@@ -367,10 +382,11 @@ private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, quer
 
 /** A message in a list: its words without markdown on two lines at most, the person's prefixed "You:"; [found] words in `accent`. */
 @Composable
-private fun Preview(shown: Line?, found: Boolean, query: String, unread: Boolean, none: String, modifier: Modifier) {
+private fun Preview(shown: Line?, found: Boolean, query: String, unread: Boolean, none: String, statusFrom: String, modifier: Modifier) {
     val p = palette
     val words = when {
         shown == null -> none
+        shown.status -> statusText(statusFrom, shown.text)
         shown.from == "agent" -> remember(shown.text) { words(shown) }
         else -> "You: ${shown.text}"
     }
@@ -443,6 +459,7 @@ private fun AgentRow(model: AppModel, entry: AgentEntry, query: String, onOpen: 
                             query,
                             unread > 0,
                             if (home != null) "Cron jobs and the agent's notices come here." else "${entry.others} conversations",
+                            home?.let(model::statusSource).orEmpty(),
                             Modifier.weight(1f),
                         )
                     }
@@ -679,6 +696,8 @@ private fun WorkingRow(model: AppModel, agent: Agent, on: List<Conversation>, on
 fun StatusScreen(model: AppModel, pair: () -> Unit) {
     val p = palette
     var forgetting by remember { mutableStateOf<String?>(null) }
+    // A host forgotten without being told: the dialog said it would be.
+    var notTold by remember { mutableStateOf<String?>(null) }
     var clearing by remember { mutableStateOf(false) }
     forgetting?.let { name ->
         val live = model.connected(name)
@@ -692,9 +711,27 @@ fun StatusScreen(model: AppModel, pair: () -> Unit) {
             confirm = "Forget",
             onDismiss = { forgetting = null },
         ) {
-            model.forgetHost(name)
+            // The dialog's words were chosen when it opened: the connection
+            // may have ended since. What happened is what counts.
+            if (!model.forgetHost(name) && live) notTold = name
             forgetting = null
         }
+    }
+    notTold?.let { name ->
+        AlertDialog(
+            onDismissRequest = { notTold = null },
+            containerColor = p.surface,
+            shape = Shapes.bubble,
+            title = { Text("$name was not told", style = Type.heading, color = p.text) },
+            text = {
+                Text(
+                    "The connection ended before Forget. This phone is forgotten here, but $name keeps it listed until you run enclos app unpair there.",
+                    style = Type.small,
+                    color = p.textMuted,
+                )
+            },
+            confirmButton = { DialogButton("OK", onClick = { notTold = null }) },
+        )
     }
     if (clearing) {
         ConfirmDialog(
@@ -739,6 +776,13 @@ fun StatusScreen(model: AppModel, pair: () -> Unit) {
                     style = Type.small,
                     color = p.textMuted,
                 )
+                if (model.keptUnreadable.value) {
+                    Text(
+                        "The conversations kept here could not be read (a newer version of the app may have written them): they show from the hosts only, and nothing more is kept until the app that wrote them is installed again.",
+                        style = Type.small,
+                        color = p.textMuted,
+                    )
+                }
                 TextLink("Clear cache") { clearing = true }
             }
             Hairline()
@@ -762,20 +806,30 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val live = model.connected(conversation.host)
     val working = model.working(id)
     var draft by remember { mutableStateOf("") }
+    var unsent by remember { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
+    // Whether the person is at the newest: the first item (the list is
+    // reversed) at its very end. Read when a scroll ends, theirs or the
+    // list's own, not when a message arrives, which shifts the first
+    // visible item; within a long message, the offset says they scrolled up.
+    var atNewest by remember { mutableStateOf(true) }
+    LaunchedEffect(list) {
+        snapshotFlow { list.isScrollInProgress }.collect { scrolling ->
+            if (!scrolling) atNewest = list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset <= 4
+        }
+    }
     LaunchedEffect(lines.size, working) {
         model.markRead(id)
         // The list is anchored at the newest: follow what arrives, unless
         // the person scrolled up to read.
-        if (list.firstVisibleItemIndex <= 1) list.animateScrollToItem(0)
+        if (atNewest) list.animateScrollToItem(0)
     }
     var renaming by remember { mutableStateOf(false) }
     // Which answers' steps are open.
     val opened = remember { mutableStateMapOf<Long, Boolean>() }
     if (renaming) {
-        RenameDialog(conversation.title, onDismiss = { renaming = false }) {
-            model.rename(conversation, it)
-            renaming = false
+        RenameDialog(conversation.title, live, conversation.host, onDismiss = { renaming = false }) {
+            model.rename(conversation, it).also { sent -> if (sent) renaming = false }
         }
     }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
@@ -814,15 +868,18 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             model.said[conversation.host]?.let { item(key = "said") { Arriving { SystemLine("The bridge said: $it") } } }
             if (!live) item(key = "status") { Arriving { SystemLine(model.status[conversation.host] ?: "not connected") } }
             if (working) item(key = "working") { Arriving { WorkingBubble(agent) } }
-            // The tools it runs now, above the working bubble.
+            // The tools it runs now, above the working bubble; a turn that
+            // ended with no answer shows none.
             val running = model.steps[id].orEmpty()
-            if (running.isNotEmpty()) item(key = "steps-live") { Arriving { ToolSteps(running, live = true, expanded = true) {} } }
+            if (working && running.isNotEmpty()) item(key = "steps-live") { Arriving { ToolSteps(running, live = true, expanded = true) {} } }
+            val runtime = model.statusSource(conversation)
             for (i in lines.indices.reversed()) {
                 val line = lines[i]
                 item(key = line.seq) {
                     // The runtime about itself: a quiet line, not a bubble.
-                    if (line.status) {
-                        Arriving { StatusLine(line.text, Times.clock(line.time)) }
+                    // One with files is drawn as a message, so they show.
+                    if (line.status && line.attachments.isEmpty()) {
+                        Arriving { StatusLine(runtime, line.text, Times.clock(line.time)) }
                         return@item
                     }
                     Arriving {
@@ -851,21 +908,31 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 if (i == 0 || Times.day(lines[i - 1].time) != day) item(key = "day-${line.seq}") { Arriving { DaySeparator(day) } }
             }
         }
+        // Why the last message did not go: the draft stays until it does.
+        unsent?.let { SystemLine(it, Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) }
         Composer(draft, { draft = it }, "Message $agent") {
-            model.send(conversation, draft.trim())
-            draft = ""
+            unsent = model.send(conversation, draft.trim())
+            if (unsent == null) {
+                draft = ""
+                // What the person just sent shows, wherever they had scrolled.
+                atNewest = true
+            }
         }
     }
 }
 
 /**
  * Names the conversation: the person's name replaces the agent's, which
- * then names it no more; clearing it lets the agent name it again.
+ * then names it no more; clearing it lets the agent name it again. The
+ * bridge keeps the name, so it is saved only while [host] is connected
+ * ([live]); [onSave] says whether it was.
  */
 @Composable
-private fun RenameDialog(current: String?, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+private fun RenameDialog(current: String?, live: Boolean, host: String, onDismiss: () -> Unit, onSave: (String) -> Boolean) {
     val p = palette
     var name by remember { mutableStateOf(current.orEmpty()) }
+    var refused by remember { mutableStateOf(false) }
+    val save = { title: String -> refused = !onSave(title) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     AlertDialog(
@@ -894,13 +961,17 @@ private fun RenameDialog(current: String?, onDismiss: () -> Unit, onSave: (Strin
                     },
                 )
                 Gap(8.dp)
-                Text("The agent names a conversation until you do.", style = Type.small, color = p.textMuted)
+                Text(
+                    if (!live || refused) "Not connected to $host: the name can be saved once it is." else "The agent names a conversation until you do.",
+                    style = Type.small,
+                    color = p.textMuted,
+                )
             }
         },
-        confirmButton = { DialogButton("Save", enabled = name.isNotBlank()) { onSave(name) } },
+        confirmButton = { DialogButton("Save", enabled = live && name.isNotBlank()) { save(name) } },
         dismissButton = {
             Row {
-                if (current != null) DialogButton("Clear name") { onSave("") }
+                if (current != null) DialogButton("Clear name", enabled = live) { save("") }
                 DialogButton("Cancel", onClick = onDismiss)
             }
         },
@@ -964,7 +1035,8 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                 .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                 .setPrompt("The code of enclos app pair")
                 .setBeepEnabled(false)
-                .setOrientationLocked(false)
+                // Portrait, as the app (the manifest)
+                .setOrientationLocked(true)
                 // A terminal with a dark theme draws the code light on
                 // dark: read it either way round.
                 .addExtra(Intents.Scan.SCAN_TYPE, Intents.Scan.MIXED_SCAN),
@@ -1020,7 +1092,17 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                         "${it.host} · ${it.address} · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired"
                     } ?: "Scan the code enclos app pair shows",
                 )
-                Step(2, if (pairing?.keyMade == true) StepState.Done else StepState.Next, "Device key made", "Kept in this phone's Android Keystore")
+                Step(
+                    2,
+                    when {
+                        pairing?.keyMade == true -> StepState.Done
+                        // Made off the main thread: StrongBox can take seconds.
+                        pairing != null && pairing.stopped == null -> StepState.Now
+                        else -> StepState.Next
+                    },
+                    "Device key made",
+                    "Kept in this phone's Android Keystore",
+                )
                 Step(
                     3,
                     when {
@@ -1052,6 +1134,7 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                         done()
                     }
                 }
+                model.replacing.value?.let { Replace(it, model::replace, model::keep) }
                 if (pairing == null) {
                     if (!typed) {
                         TextLink("Type the code instead →") { typed = true }
@@ -1085,6 +1168,28 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
 }
 
 /**
+ * A link names a host already paired with another bridge: the person sees
+ * both addresses and chooses. Nothing connects, and no key is made, before
+ * Replace.
+ */
+@Composable
+private fun Replace(r: Replacing, replace: () -> Unit, keep: () -> Unit) {
+    val p = palette
+    val name = r.old.name
+    Column(
+        Modifier.padding(top = 12.dp).fillMaxWidth().border(1.dp, p.lineStrong, Shapes.control).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Replace $name?", style = Type.name, color = p.text)
+        Text("This phone is already paired with $name, at ${shownAddress(r.old.url)}.", style = Type.small, color = p.textMuted)
+        Text("This link pairs with another bridge under the same name, at ${shownAddress(r.link.url)}.", style = Type.small, color = p.textMuted)
+        Text("Replacing ends the pairing with ${shownAddress(r.old.url)} on this phone, and what it shows of it.", style = Type.small, color = p.textMuted)
+        PrimaryButton("Replace", onClick = replace)
+        TextLink("Keep $name", keep)
+    }
+}
+
+/**
  * A pairing link the app was opened with: the host and address it names and
  * when it expires, then Pair or Not now. Any page or message can hold such
  * a link, so nothing connects before Pair.
@@ -1092,22 +1197,23 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
 @Composable
 private fun OpenedLink(link: String, now: Long, pair: () -> Unit, dismiss: () -> Unit) {
     val p = palette
-    val read = remember(link) { runCatching { parsePairLink(link) } }
+    // Read as the pairing reads it: the same checks, the same address.
+    val read = remember(link) { readPairLink(link) }
     Column(Modifier.fillMaxWidth().border(1.dp, p.lineStrong, Shapes.control).padding(14.dp)) {
-        val parsed = read.getOrNull()
-        if (parsed == null) {
+        val ok = read.getOrNull()
+        if (ok == null) {
             Text("Not an enclos pairing link", style = Type.name, color = p.text)
-            // The core's reason, without what the title already says.
-            val why = read.exceptionOrNull()?.message.orEmpty().removePrefix("reason=").removePrefix("not an enclos pairing link: ")
-            Text(why, style = Type.small, color = p.textMuted)
+            // The app's own reason: never the link's text.
+            Text(read.exceptionOrNull()?.message.orEmpty(), style = Type.small, color = p.textMuted)
             TextLink("Dismiss", dismiss)
             return@Column
         }
+        val parsed = ok.link
         val left = (parsed.expires.toLong() - now).coerceAtLeast(0)
         Text("Pair with ${parsed.host}?", style = Type.name, color = p.text)
         Gap(2.dp)
         Text(
-            parsed.url.removePrefix("https://") + " · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired",
+            ok.address + " · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired",
             style = Type.code,
             color = p.textFaint,
         )
