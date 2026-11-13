@@ -223,7 +223,7 @@ fun Fab(text: String, icon: ImageVector, onClick: () -> Unit, modifier: Modifier
 }
 
 /** The three destinations of the navigation bar. */
-enum class Tab(val label: String) { Inbox("Inbox"), Agents("Agents"), Status("Status") }
+enum class Tab(val label: String) { Inbox("Inbox"), Agents("Agents"), Settings("Settings") }
 
 /**
  * The navigation bar: the active destination is enclosed, its icon inside
@@ -262,7 +262,7 @@ fun NavBar(selected: Tab, onSelect: (Tab) -> Unit) {
                         val icon = when (tab) {
                             Tab.Inbox -> Glyphs.inbox
                             Tab.Agents -> Glyphs.agents
-                            Tab.Status -> Glyphs.status
+                            Tab.Settings -> Glyphs.settings
                         }
                         Glyph(icon, tint)
                     }

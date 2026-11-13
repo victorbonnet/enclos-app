@@ -286,7 +286,7 @@ private fun Tabs(model: AppModel, tab: Tab, onTab: (Tab) -> Unit, go: (Route) ->
                 when (shown) {
                     Tab.Inbox -> InboxScreen(model, open = { go(Route.Chat(it)) }, newConversation = { onTab(Tab.Agents) }, pair = pair)
                     Tab.Agents -> AgentsScreen(model, start = { go(Route.Chat(model.newConversation(it))) }, open = { go(Route.Chat(it)) }, pair = pair)
-                    Tab.Status -> StatusScreen(model, pair = pair, ask = ask)
+                    Tab.Settings -> SettingsScreen(model, pair = pair, ask = ask)
                 }
             }
         }

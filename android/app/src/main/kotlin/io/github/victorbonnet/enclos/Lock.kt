@@ -65,7 +65,7 @@ class LockState(
     /** Why the last unlock did not happen, as the system said: shown on the lock screen. */
     val said: State<String?> get() = why
 
-    /** Whether the lock turned itself off because the phone no longer has a screen lock: said in Status. */
+    /** Whether the lock turned itself off because the phone no longer has a screen lock: said in Settings. */
     val dropped: State<Boolean> get() = wasDropped
 
     /** When the app went to the background (elapsed time); none while it shows. */
@@ -94,7 +94,7 @@ class LockState(
      * The app is back in sight: locked again when the lock is on and it was
      * away long enough. A phone whose screen lock was removed has nothing
      * left to unlock the app with: the lock turns off, rather than lock the
-     * person out, and Status says so. Back to a locked app, however short
+     * person out, and Settings says so. Back to a locked app, however short
      * the absence, the prompt shows on its own again.
      */
     fun returned() {

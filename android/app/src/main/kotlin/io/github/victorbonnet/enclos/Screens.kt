@@ -16,6 +16,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import io.github.victorbonnet.enclos.ui.ThemeChoice
@@ -77,6 +78,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -124,10 +126,37 @@ private fun channel(agent: Agent): Pair<String, Boolean>? = when {
     else -> "request/reply" to false
 }
 
-// ---------- Theme ----------
+// ---------- Settings: sections and rows ----------
 
 /**
- * The theme, in Status: the system's light or dark (the default), or the
+ * One section of Settings: its name, small and faint above a hairline,
+ * then its rows, each ending with a hairline of its own.
+ */
+@Composable
+private fun Section(title: String, content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            title.uppercase(),
+            style = Type.meta.copy(letterSpacing = 0.08.em),
+            color = palette.textFaint,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 8.dp).semantics { heading() },
+        )
+        Hairline()
+        content()
+    }
+}
+
+/** A row of a section: its content padded as every row is, then a hairline. */
+@Composable
+private fun SettingRow(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth().then(modifier)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), content = content)
+        Hairline()
+    }
+}
+
+/**
+ * The theme, in Settings: the system's light or dark (the default), or the
  * one the person chose, which the app then keeps; and the way back to the
  * system's.
  */
@@ -135,9 +164,9 @@ private fun channel(agent: Agent): Pair<String, Boolean>? = when {
 private fun ThemeSetting(model: AppModel) {
     val p = palette
     val choice = model.theme.value
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+    SettingRow {
         Text("Theme", style = Type.name, color = p.text)
-        Gap(8.dp)
+        Gap(10.dp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ThemeChoice.entries.forEach { option ->
                 Choice(option.name, option == choice) { model.chooseTheme(option) }
@@ -155,14 +184,12 @@ private fun ThemeSetting(model: AppModel) {
     }
 }
 
-// ---------- App lock ----------
-
 /**
- * The app lock, in Status: Off or On. Either way asks the person to unlock
- * first: on, so a lock that cannot be opened is never set; off, so someone
- * who picks the phone up in the minute after it was put down cannot turn
- * it off. It needs a screen lock on the phone, and says so when there is
- * none. [ask] shows the prompt.
+ * The app lock, in Settings: a switch beside what it does. Either way
+ * asks the person to unlock first: on, so a lock that cannot be opened is
+ * never set; off, so someone who picks the phone up in the minute after it
+ * was put down cannot turn it off. It needs a screen lock on the phone,
+ * and says so when there is none. [ask] shows the prompt.
  */
 @Composable
 private fun LockSetting(lock: LockState, ask: Ask) {
@@ -170,41 +197,51 @@ private fun LockSetting(lock: LockState, ask: Ask) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val on = lock.on.value
     var said by remember { mutableStateOf<String?>(null) }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Text("App lock", style = Type.name, color = p.text)
-        Gap(8.dp)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Choice("Off", !on) {
-                if (!on) return@Choice
-                ask("Turn off the app lock") { ok, why ->
-                    if (ok) lock.set(false)
-                    said = if (ok) null else why ?: "Not turned off."
-                }
+    val turn = { want: Boolean ->
+        when {
+            want == on -> Unit
+            !want -> ask("Turn off the app lock") { ok, why ->
+                if (ok) lock.set(false)
+                said = if (ok) null else why ?: "Not turned off."
             }
-            Choice("On", on) {
-                if (on) return@Choice
-                if (!AppLock.available(context)) {
-                    said = "Set a screen lock on this phone first: a PIN, a pattern or a password."
-                    return@Choice
-                }
-                ask("Turn on the app lock") { ok, why ->
-                    if (ok) lock.set(true)
-                    said = if (ok) null else why ?: "Not turned on."
-                }
+            !AppLock.available(context) -> said = "Set a screen lock on this phone first: a PIN, a pattern or a password."
+            else -> ask("Turn on the app lock") { ok, why ->
+                if (ok) lock.set(true)
+                said = if (ok) null else why ?: "Not turned on."
             }
         }
-        Gap(8.dp)
-        Text(
-            said ?: if (on) {
-                "Asks for your fingerprint, face or the phone's screen lock when the app opens, and when it comes back after a minute away."
-            } else if (lock.dropped.value) {
-                "Turned off: this phone no longer has a screen lock. Set one, then turn the lock on again."
-            } else {
-                "Ask for your fingerprint, face or the phone's screen lock when the app opens."
-            },
-            style = Type.small,
-            color = p.textMuted,
-        )
+    }
+    SettingRow(Modifier.toggleable(value = on, role = Role.Switch, onValueChange = { turn(it) })) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text("App lock", style = Type.name, color = p.text)
+                Gap(4.dp)
+                Text(
+                    said ?: if (on) {
+                        "Asks for your fingerprint, face or the phone's screen lock when the app opens, and when it comes back after a minute away."
+                    } else if (lock.dropped.value) {
+                        "Turned off: this phone no longer has a screen lock. Set one, then turn the lock on again."
+                    } else {
+                        "Ask for your fingerprint, face or the phone's screen lock when the app opens."
+                    },
+                    style = Type.small,
+                    color = p.textMuted,
+                )
+            }
+            // The row is the switch: this one only shows it.
+            androidx.compose.material3.Switch(
+                checked = on,
+                onCheckedChange = null,
+                colors = androidx.compose.material3.SwitchDefaults.colors(
+                    checkedThumbColor = p.bg,
+                    checkedTrackColor = p.accent,
+                    checkedBorderColor = p.accent,
+                    uncheckedThumbColor = p.textMuted,
+                    uncheckedTrackColor = p.surface,
+                    uncheckedBorderColor = p.lineStrong,
+                ),
+            )
+        }
     }
 }
 
@@ -774,14 +811,16 @@ private fun WorkingRow(model: AppModel, agent: Agent, on: List<Conversation>, on
     }
 }
 
-// ---------- Status ----------
+// ---------- Settings ----------
 
 /**
- * The paired hosts and their connections, and what the phone keeps: forget a
- * host, clear the cache. Nothing here acts on a sandbox.
+ * The app's settings, in sections: the paired hosts (each connection,
+ * Reconnect, Forget, and pairing another), security (the app lock),
+ * appearance (the theme), what is kept on this phone (Clear cache), and
+ * the versions. Nothing here acts on a sandbox.
  */
 @Composable
-fun StatusScreen(model: AppModel, pair: () -> Unit, ask: Ask) {
+fun SettingsScreen(model: AppModel, pair: () -> Unit, ask: Ask) {
     val p = palette
     var forgetting by remember { mutableStateOf<String?>(null) }
     // A host forgotten without being told: the dialog said it would be.
@@ -833,53 +872,65 @@ fun StatusScreen(model: AppModel, pair: () -> Unit, ask: Ask) {
         }
     }
     Column(Modifier.fillMaxSize()) {
-        LargeTitle("Status")
+        LargeTitle("Settings")
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            Hairline()
-            model.paired.forEach { host ->
-                val live = model.connected(host.name)
-                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        ConnectionDot(live)
-                        Text(host.name, style = Type.code.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold), color = p.text)
+            Section("Hosts") {
+                model.paired.forEach { host ->
+                    val live = model.connected(host.name)
+                    SettingRow {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            ConnectionDot(live)
+                            Text(host.name, style = Type.code.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold), color = p.text)
+                        }
+                        Gap(6.dp)
+                        Text(model.status[host.name] ?: "not connected", style = Type.small, color = p.textMuted)
+                        model.said[host.name]?.let { Text("The bridge said: $it", style = Type.small, color = p.textMuted) }
+                        Text(host.url.removePrefix("https://"), style = Type.code, color = p.textFaint)
+                        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                            if (!live) TextLink("Reconnect") { model.reconnect(host.name) }
+                            TextLink("Forget this host") { forgetting = host.name }
+                        }
                     }
-                    Gap(4.dp)
-                    Text(model.status[host.name] ?: "not connected", style = Type.small, color = p.textMuted)
-                    model.said[host.name]?.let { Text("The bridge said: $it", style = Type.small, color = p.textMuted) }
-                    Text(host.url.removePrefix("https://"), style = Type.code, color = p.textFaint)
-                    if (!live) TextLink("Reconnect →") { model.reconnect(host.name) }
-                    TextLink("Forget this host") { forgetting = host.name }
                 }
-                Hairline()
+                // Another host: the row is the action.
+                SettingRow(Modifier.clickable(onClickLabel = "Pair a host", onClick = pair)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Glyph(Glyphs.qr, p.accent, size = 20.dp)
+                        Text("Pair a host", style = Type.label, color = p.accent)
+                    }
+                }
             }
-            ThemeSetting(model)
-            Hairline()
-            LockSetting(model.lock, ask)
-            Hairline()
+            Section("Security") { LockSetting(model.lock, ask) }
+            Section("Appearance") { ThemeSetting(model) }
             // What the phone keeps: synced again from the hosts when cleared.
-            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-                Text("On this phone", style = Type.label, color = p.text)
-                Gap(4.dp)
-                val count = model.conversations.count(model::listed)
-                Text(
-                    "$count ${if (count == 1) "conversation" else "conversations"} and the files shown in them, kept to open at once.",
-                    style = Type.small,
-                    color = p.textMuted,
-                )
-                if (model.keptUnreadable.value) {
+            Section("On this phone") {
+                SettingRow {
+                    val count = model.conversations.count(model::listed)
                     Text(
-                        "The conversations kept here could not be read (a newer version of the app may have written them): they show from the hosts only, and nothing more is kept until the app that wrote them is installed again.",
+                        "$count ${if (count == 1) "conversation" else "conversations"} and the files shown in them, kept to open at once.",
                         style = Type.small,
                         color = p.textMuted,
                     )
+                    if (model.keptUnreadable.value) {
+                        Text(
+                            "The conversations kept here could not be read (a newer version of the app may have written them): they show from the hosts only, and nothing more is kept until the app that wrote them is installed again.",
+                            style = Type.small,
+                            color = p.textMuted,
+                        )
+                    }
+                    TextLink("Clear cache") { clearing = true }
                 }
-                TextLink("Clear cache") { clearing = true }
             }
-            Hairline()
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                TextLink("Pair a host →", pair)
-                Text("core ${coreVersion()}", style = Type.code, color = p.textFaint)
+            Section("About") {
+                SettingRow {
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    val app = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() }
+                    Text("Enclos ${app.orEmpty()}".trim(), style = Type.name, color = p.text)
+                    Gap(2.dp)
+                    Text("core ${coreVersion()}", style = Type.code, color = p.textFaint)
+                }
             }
+            Gap(24.dp)
         }
     }
 }

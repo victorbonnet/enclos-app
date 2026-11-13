@@ -223,7 +223,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         store.query()
     } catch (e: android.database.SQLException) {
         android.util.Log.w("enclos", "could not read what the phone kept: ${e.javaClass.simpleName}")
-        // Said on the Status screen: the app runs from the bridges alone.
+        // Said in Settings: the app runs from the bridges alone.
         ui { keptUnreadable.value = true }
         null
     }
