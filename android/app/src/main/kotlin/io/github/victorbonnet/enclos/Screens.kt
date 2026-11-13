@@ -669,11 +669,48 @@ private fun ArchiveFeedback(model: AppModel, c: Conversation, modifier: Modifier
     text?.let { Text(it, style = Type.small, color = palette.textMuted, modifier = modifier) }
 }
 
-/** A long press offers archive without changing what a normal tap opens. */
+/** Delete uses the same confirmation from a row's long press and the conversation menu. */
+@Composable
+private fun DeleteMenuItem(model: AppModel, c: Conversation, request: () -> Unit) {
+    if (c.home) return
+    val unavailable = model.deletion.unavailable(c)
+    DropdownMenuItem(
+        enabled = unavailable == null,
+        leadingIcon = { Glyph(Glyphs.delete, if (unavailable == null) palette.text else palette.textFaint, size = 20.dp) },
+        text = { Column {
+            Text("Delete", style = Type.name, color = if (unavailable == null) palette.text else palette.textFaint)
+            unavailable?.let { Text(it, style = Type.small, color = palette.textFaint) }
+        } },
+        onClick = request,
+    )
+}
+
+@Composable
+private fun DeleteConfirmation(model: AppModel, c: Conversation, dismiss: () -> Unit) {
+    val problem = model.deletion.unavailable(c) ?: model.deletion.errors[ConversationKey(c.host, c.id)]
+    ConfirmDialog(
+        title = if (c.group) "Delete group conversation?" else "Delete conversation?",
+        text = "This permanently deletes this conversation, its history and files from the host and your paired phones. Running work in it is stopped. The agents stay available." + problem?.let { "\n\n$it" }.orEmpty(),
+        confirm = "Delete",
+        enabled = model.deletion.unavailable(c) == null,
+        onDismiss = dismiss,
+    ) { if (model.deletion.delete(c)) dismiss() }
+}
+
+@Composable
+private fun DeleteFeedback(model: AppModel, c: Conversation, modifier: Modifier = Modifier) {
+    val key = ConversationKey(c.host, c.id)
+    val text = if (key in model.deletion.pending) "Deleting conversation…" else model.deletion.errors[key]
+    text?.let { Text(it, style = Type.small, color = palette.textMuted, modifier = modifier) }
+}
+
+/** A long press offers conversation actions without changing what a normal tap opens. */
 @Composable
 private fun ConversationActions(model: AppModel, c: Conversation, open: () -> Unit, content: @Composable (Modifier) -> Unit) {
     val haptics = LocalHapticFeedback.current
     var menu by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    if (deleting) DeleteConfirmation(model, c) { deleting = false }
     Column {
         Box {
             content(Modifier.combinedClickable(
@@ -683,9 +720,11 @@ private fun ConversationActions(model: AppModel, c: Conversation, open: () -> Un
             ))
             DropdownMenu(menu, { menu = false }, modifier = Modifier.background(palette.bg)) {
                 ArchiveMenuItem(model, c) { menu = false }
+                DeleteMenuItem(model, c) { menu = false; deleting = true }
             }
         }
         ArchiveFeedback(model, c, Modifier.padding(start = 60.dp, end = 16.dp, bottom = 8.dp))
+        DeleteFeedback(model, c, Modifier.padding(start = 60.dp, end = 16.dp, bottom = 8.dp))
     }
 }
 
@@ -1370,6 +1409,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     }
     var renaming by remember { mutableStateOf(false) }
     var options by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    if (deleting) DeleteConfirmation(model, conversation) { deleting = false }
     // Which answers' steps are open.
     val opened = remember { mutableStateMapOf<Long, Boolean>() }
     if (renaming) {
@@ -1407,6 +1448,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 DropdownMenu(options, { options = false }, modifier = Modifier.background(p.bg)) {
                     MenuRow(Glyphs.compose, "Rename") { options = false; renaming = true }
                     ArchiveMenuItem(model, conversation) { options = false }
+                    DeleteMenuItem(model, conversation) { options = false; deleting = true }
                 }
             }
         }
@@ -1414,6 +1456,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         if (conversation.archived) SystemLine("Archived · kept out of Active conversations.")
         if (model.archiving(conversation)) SystemLine("Saving archive state…")
         model.archiveError(conversation)?.let { SystemLine(it) }
+        DeleteFeedback(model, conversation, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         // Newest first, drawn from the bottom up: the conversation stays
         // anchored at its last message when the keyboard opens or a message
         // arrives. What arrives fades in while the rest slides up.
