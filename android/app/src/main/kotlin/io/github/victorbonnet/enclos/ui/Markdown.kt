@@ -16,10 +16,16 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -34,6 +40,11 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.victorbonnet.enclos.Visible
+import io.github.victorbonnet.enclos.LinkDestination
+import io.github.victorbonnet.enclos.MessageLink
+import io.github.victorbonnet.enclos.WebLinks
+import io.github.victorbonnet.enclos.openMailLink
+import io.github.victorbonnet.enclos.openWebLink
 import org.commonmark.ext.autolink.AutolinkExtension
 import org.commonmark.ext.gfm.strikethrough.Strikethrough
 import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
@@ -122,6 +133,9 @@ object Markdown {
         }
     }
 
+    /** A link's text as the person reads it: its words, an image's alt text. */
+    fun label(link: Node): String = buildString { words(link) }.replace(Regex("\\s+"), " ").trim()
+
     /**
      * Whether [url] may be opened from a message: a web address with a host
      * and no user-info (`https://bank.example@evil.example` reads as the
@@ -186,10 +200,34 @@ object Markdown {
 @Composable
 fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier) {
     val document = remember(text) { Markdown.parse(text) }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Blocks(document, color)
+    val context = LocalContext.current
+    // A web link waiting for the person to confirm it, as a page's link does.
+    var leaving by remember { mutableStateOf<LinkDestination?>(null) }
+    val open: (String, String) -> Unit = remember(context) {
+        { label, url ->
+            when (val link = if (WebLinks.accepts(url)) WebLinks.fromMessage(label, url) else null) {
+                null -> openMailLink(context, url)
+                is MessageLink.Open -> openWebLink(context, link.address)
+                is MessageLink.Confirm -> leaving = link.destination
+                MessageLink.Refused -> linkRefused(context)
+            }
+        }
+    }
+    CompositionLocalProvider(LocalLinkOpener provides open) {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Blocks(document, color)
+        }
+    }
+    leaving?.let { destination ->
+        WebsiteConfirmation(destination, "this conversation", dismiss = { leaving = null }) {
+            leaving = null
+            openWebLink(context, destination.address)
+        }
     }
 }
+
+/** Opens a message's link from its text and address: [MarkdownText] provides it. */
+private val LocalLinkOpener = staticCompositionLocalOf<(String, String) -> Unit> { { _, _ -> } }
 
 /** The block children of [parent], in order. */
 @Composable
@@ -204,10 +242,11 @@ private fun Blocks(parent: Node, color: Color) {
 @Composable
 private fun Block(node: Node, color: Color) {
     val p = palette
+    val open = LocalLinkOpener.current
     when (node) {
-        is Paragraph -> Text(inlines(node, p), style = Type.message, color = color)
+        is Paragraph -> Text(inlines(node, p, open), style = Type.message, color = color)
         is Heading -> Text(
-            inlines(node, p),
+            inlines(node, p, open),
             style = Type.message.copy(
                 fontSize = when (node.level) {
                     1 -> 19.sp
@@ -277,6 +316,7 @@ private fun Table(table: TableBlock, color: Color) {
     val rows = all.take(shownRows)
     val p = palette
     Markdown.cutNote(allColumns, all.size)?.let { Text(it, style = Type.small, color = p.textMuted) }
+    val open = LocalLinkOpener.current
     Box(Modifier.horizontalScroll(rememberScrollState())) {
         Layout(
             content = {
@@ -284,7 +324,7 @@ private fun Table(table: TableBlock, color: Color) {
                     repeat(columns) { c ->
                         val cell = cells.getOrNull(c)
                         Text(
-                            cell?.let { inlines(it, p) } ?: AnnotatedString(""),
+                            cell?.let { inlines(it, p, open) } ?: AnnotatedString(""),
                             style = Type.small.copy(fontWeight = if (head) FontWeight.SemiBold else FontWeight.Normal),
                             color = color,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
@@ -320,9 +360,9 @@ private fun Table(table: TableBlock, color: Color) {
 /**
  * A paragraph's, heading's or cell's inline content: emphasis, code, links
  * and line breaks. A link's text drops hidden characters, so it cannot read
- * as another address.
+ * as another address. A tap on a link goes through [open].
  */
-internal fun inlines(parent: Node, p: Palette): AnnotatedString = buildAnnotatedString {
+internal fun inlines(parent: Node, p: Palette, open: (String, String) -> Unit = { _, _ -> }): AnnotatedString = buildAnnotatedString {
     var inLink = false
     fun walk(node: Node) {
         var child = node.firstChild
@@ -335,16 +375,16 @@ internal fun inlines(parent: Node, p: Palette): AnnotatedString = buildAnnotated
                 is Strikethrough -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { walk(child) }
                 // A single newline stays one: chat is written line by line.
                 is SoftLineBreak, is HardLineBreak -> append("\n")
-                is Link -> link(child.destination, p) {
+                is Link -> link(child.destination, Markdown.label(child), p, open) {
                     inLink = true
                     walk(child)
                     inLink = false
                 }
                 // Never fetched: the alt text, linking to the image when it is on the web.
-                is Image -> link(child.destination, p) {
+                is Image -> {
                     val alt = Markdown.plain(buildString { var c = child.firstChild; while (c != null) { if (c is TextNode) append(c.literal); c = c.next } })
-                    append(Visible.stripped(alt).ifEmpty { "image" })
-                    append(" ↗")
+                    val shown = Visible.stripped(alt).ifEmpty { "image" } + " ↗"
+                    link(child.destination, shown, p, open) { append(shown) }
                 }
                 is HtmlInline -> append(child.literal)
                 else -> walk(child)
@@ -355,9 +395,12 @@ internal fun inlines(parent: Node, p: Palette): AnnotatedString = buildAnnotated
     walk(parent)
 }
 
-/** [content] as a link to [url] in `accent`, or as plain text when the link is not one the app opens. */
-private fun AnnotatedString.Builder.link(url: String, p: Palette, content: AnnotatedString.Builder.() -> Unit) {
+/**
+ * [content] as a link to [url] in `accent`, or as plain text when the link is not one the app opens.
+ * A tap goes through [open] with the link's [label], which decides whether to ask first.
+ */
+private fun AnnotatedString.Builder.link(url: String, label: String, p: Palette, open: (String, String) -> Unit, content: AnnotatedString.Builder.() -> Unit) {
     if (!Markdown.opens(url)) return content()
     val style = TextLinkStyles(SpanStyle(color = p.accent, textDecoration = TextDecoration.Underline))
-    withLink(LinkAnnotation.Url(url, style)) { content() }
+    withLink(LinkAnnotation.Url(url, style) { open(label, url) }) { content() }
 }

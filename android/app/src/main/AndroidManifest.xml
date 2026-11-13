@@ -11,6 +11,13 @@
          waits for a tap instead of coming by itself -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Select the person's supporting browser for Custom Tabs on Android 11+. -->
+    <queries>
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
+    </queries>
+
     <!-- No backup and no transfer to a new phone: the app holds device keys
          and the conversations kept. allowBackup="false" and
          fullBackupContent cover Android 11 and older; dataExtractionRules
