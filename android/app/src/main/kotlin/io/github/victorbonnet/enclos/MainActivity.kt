@@ -3,6 +3,7 @@ package io.github.victorbonnet.enclos
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -37,6 +38,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -76,15 +78,39 @@ private sealed interface Route {
 
 class MainActivity : ComponentActivity() {
     private val model: AppModel by viewModels()
+    /** The unlock prompt: made with the activity, as the screen-lock page it may open requires. */
+    private val unlocker = Unlocker(this)
 
     override fun onStart() {
         super.onStart()
+        model.lock.returned()
         model.foreground()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Locked: the prompt shows on its own as the app starts or comes back; the lock screen's button asks again.
+        if (model.lock.promptNow(unlocker.asking)) unlock()
+    }
+
     override fun onStop() {
+        model.lock.stopped(unlocker.asking)
         model.background()
         super.onStop()
+    }
+
+    /** Asks the person to unlock the app. */
+    private fun unlock() = unlocker.ask("Unlock Enclos") { ok, why -> model.lock.unlocked(ok, why) }
+
+    /**
+     * While the lock is on, the window is secure: no screenshot, recording
+     * or cast shows the app, nor does the recent apps' picture of it (all
+     * versions; the app's dialogs inherit it). From Android 13 the recent
+     * apps also keep no picture at all.
+     */
+    private fun secure(on: Boolean) {
+        if (on) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) setRecentsScreenshotEnabled(!on)
     }
 
     /** An `enclos://pair` link the system opened the app with: shown on the pairing screen, which asks first. */
@@ -102,6 +128,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         applyTheme(this, model.theme.value)
+        // Before the first frame, so none is drawn unsecured.
+        secure(model.lock.on.value)
         // Not again when the activity is recreated: the link was handled.
         if (savedInstanceState == null) open(intent)
         // The launch screen stays until what the phone kept for the first
@@ -126,7 +154,20 @@ class MainActivity : ComponentActivity() {
                 val bars = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark }
                 enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
             }
-            EnclosTheme(dark) { Screens(model) }
+            val lockOn = model.lock.on.value
+            LaunchedEffect(lockOn) { secure(lockOn) }
+            // Kept while the screens are not composed: the route, the tab, scroll positions.
+            val kept = rememberSaveableStateHolder()
+            EnclosTheme(dark) {
+                // Locked, the lock screen is all that is composed: no screen, dialog, sheet or menu
+                // of the app is there to see or reach, by touch, keyboard or accessibility services,
+                // and none marks a message read. Unlocked, the screens come back where they were.
+                if (model.lock.locked.value) {
+                    LockScreen(model.lock, unlock = ::unlock, leave = { moveTaskToBack(true) })
+                } else {
+                    kept.SaveableStateProvider("screens") { Screens(model, unlocker::ask) }
+                }
+            }
         }
     }
 }
@@ -139,7 +180,7 @@ class MainActivity : ComponentActivity() {
  * ground, so two never show through each other mid-move.
  */
 @Composable
-private fun Screens(model: AppModel) {
+private fun Screens(model: AppModel, ask: Ask) {
     var saved by rememberSaveable { mutableStateOf("tabs") }
     var tab by rememberSaveable { mutableStateOf(Tab.Inbox) }
     val routes = remember { SeekableTransitionState(Route.restore(saved)) }
@@ -201,7 +242,7 @@ private fun Screens(model: AppModel) {
                         go(Route.Tabs)
                     })
                     is Route.Chat -> ConversationScreen(model, route.id, back = { go(Route.Tabs) })
-                    Route.Tabs -> Tabs(model, tab, onTab = { tab = it }, go = go)
+                    Route.Tabs -> Tabs(model, tab, onTab = { tab = it }, go = go, ask = ask)
                 }
             }
         }
@@ -227,7 +268,7 @@ private fun routeMove(forward: Boolean): ContentTransform {
 }
 
 @Composable
-private fun Tabs(model: AppModel, tab: Tab, onTab: (Tab) -> Unit, go: (Route) -> Unit) {
+private fun Tabs(model: AppModel, tab: Tab, onTab: (Tab) -> Unit, go: (Route) -> Unit, ask: Ask) {
     val pair = { go(Route.Pair) }
     Column(Modifier.fillMaxSize()) {
         // Fade through: the tab left fades out quickly, the one chosen fades
@@ -245,7 +286,7 @@ private fun Tabs(model: AppModel, tab: Tab, onTab: (Tab) -> Unit, go: (Route) ->
                 when (shown) {
                     Tab.Inbox -> InboxScreen(model, open = { go(Route.Chat(it)) }, newConversation = { onTab(Tab.Agents) }, pair = pair)
                     Tab.Agents -> AgentsScreen(model, start = { go(Route.Chat(model.newConversation(it))) }, open = { go(Route.Chat(it)) }, pair = pair)
-                    Tab.Status -> StatusScreen(model, pair = pair)
+                    Tab.Status -> StatusScreen(model, pair = pair, ask = ask)
                 }
             }
         }

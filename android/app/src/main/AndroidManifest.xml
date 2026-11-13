@@ -4,6 +4,8 @@
 
     <!-- The bridge, over the tailnet -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The app lock's prompt: a fingerprint or a face, else the screen lock -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <!-- Whether the network is metered (mobile data): a large file then
          waits for a tap instead of coming by itself -->

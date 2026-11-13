@@ -155,6 +155,93 @@ private fun ThemeSetting(model: AppModel) {
     }
 }
 
+// ---------- App lock ----------
+
+/**
+ * The app lock, in Status: Off or On. Either way asks the person to unlock
+ * first: on, so a lock that cannot be opened is never set; off, so someone
+ * who picks the phone up in the minute after it was put down cannot turn
+ * it off. It needs a screen lock on the phone, and says so when there is
+ * none. [ask] shows the prompt.
+ */
+@Composable
+private fun LockSetting(lock: LockState, ask: Ask) {
+    val p = palette
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val on = lock.on.value
+    var said by remember { mutableStateOf<String?>(null) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Text("App lock", style = Type.name, color = p.text)
+        Gap(8.dp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Choice("Off", !on) {
+                if (!on) return@Choice
+                ask("Turn off the app lock") { ok, why ->
+                    if (ok) lock.set(false)
+                    said = if (ok) null else why ?: "Not turned off."
+                }
+            }
+            Choice("On", on) {
+                if (on) return@Choice
+                if (!AppLock.available(context)) {
+                    said = "Set a screen lock on this phone first: a PIN, a pattern or a password."
+                    return@Choice
+                }
+                ask("Turn on the app lock") { ok, why ->
+                    if (ok) lock.set(true)
+                    said = if (ok) null else why ?: "Not turned on."
+                }
+            }
+        }
+        Gap(8.dp)
+        Text(
+            said ?: if (on) {
+                "Asks for your fingerprint, face or the phone's screen lock when the app opens, and when it comes back after a minute away."
+            } else if (lock.dropped.value) {
+                "Turned off: this phone no longer has a screen lock. Set one, then turn the lock on again."
+            } else {
+                "Ask for your fingerprint, face or the phone's screen lock when the app opens."
+            },
+            style = Type.small,
+            color = p.textMuted,
+        )
+    }
+}
+
+/**
+ * All the app shows while it is locked: the mark, what to do, and Unlock,
+ * which asks again (the prompt shows on its own as the app starts or comes
+ * back). Nothing else of the app is composed meanwhile, and Back leaves
+ * the app.
+ */
+@Composable
+fun LockScreen(lock: LockState, unlock: () -> Unit, leave: () -> Unit) {
+    val p = palette
+    androidx.activity.compose.BackHandler(onBack = leave)
+    Box(
+        Modifier.fillMaxSize().background(p.bg).padding(32.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(Modifier.size(72.dp), contentAlignment = Alignment.Center) {
+                Corners(p.accent, Modifier.size(72.dp), stroke = 3.dp)
+                Box(Modifier.size(14.dp).background(p.accent))
+            }
+            Gap(24.dp)
+            Text("Enclos is locked", style = Type.heading, color = p.text)
+            Gap(8.dp)
+            Text(
+                lock.said.value ?: "Unlock with your fingerprint, your face or the phone's screen lock.",
+                style = Type.small,
+                color = p.textMuted,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            Gap(24.dp)
+            PrimaryButton("Unlock", onClick = unlock)
+        }
+    }
+}
+
 // ---------- Inbox ----------
 
 /**
@@ -694,7 +781,7 @@ private fun WorkingRow(model: AppModel, agent: Agent, on: List<Conversation>, on
  * host, clear the cache. Nothing here acts on a sandbox.
  */
 @Composable
-fun StatusScreen(model: AppModel, pair: () -> Unit) {
+fun StatusScreen(model: AppModel, pair: () -> Unit, ask: Ask) {
     val p = palette
     var forgetting by remember { mutableStateOf<String?>(null) }
     // A host forgotten without being told: the dialog said it would be.
@@ -766,6 +853,8 @@ fun StatusScreen(model: AppModel, pair: () -> Unit) {
                 Hairline()
             }
             ThemeSetting(model)
+            Hairline()
+            LockSetting(model.lock, ask)
             Hairline()
             // What the phone keeps: synced again from the hosts when cleared.
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {

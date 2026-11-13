@@ -300,6 +300,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         applyTheme(getApplication(), choice)
     }
 
+    /** The app lock: on or off, kept on this device, and whether the app is locked now ([LockState]). */
+    val lock = LockState(
+        on = settings.getBoolean("lock", false),
+        screenLock = { AppLock.available(getApplication()) },
+        clock = android.os.SystemClock::elapsedRealtime,
+        // Written at once (commit), not later: a choice must survive the app being stopped right after.
+        keep = { on -> settings.edit(commit = true) { putBoolean("lock", on) } },
+    )
+
     /** The agents (`host/sandbox/agent`) whose conversations the inbox shows unfolded, while the app runs. */
     val unfolded = mutableStateListOf<String>()
 
@@ -362,6 +371,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Marks every message of [conversation] read. */
     fun markRead(conversation: String) {
+        // Locked, nobody has seen it: nothing of the app is composed then, and this holds should a caller forget.
+        if (lock.locked.value) return
         val last = lines[conversation]?.lastOrNull()?.seq ?: return
         if ((lastRead[conversation] ?: 0) >= last) return
         read(conversation, last)
