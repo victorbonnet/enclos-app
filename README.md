@@ -18,6 +18,8 @@ Supporting agents ask [questions with native choices](docs/spec.md#questions): s
 
 [Runtime approvals](docs/spec.md#runtime-approvals) have native scope buttons too: review the complete command and reason, then Allow once, Allow for session, Always allow or Deny when offered. The exact native request stays with the runtime; approving it changes no enclos sandbox policy. Updated Hermes APIs, bridge and channel are required; older combinations retain typed approval commands. Android is implemented; the spec and ADR define matching iOS behaviour.
 
+With an updated bridge, the host's person can create a sandbox and install a runtime from Agents on a paired phone. Runtime login and app channel setup continue on the host; restart the bridge after setup to list the agent.
+
 ## Build
 
 Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK, the NDK version named in `android/gradle/libs.versions.toml` (`sdkmanager "ndk;<version>"`), JDK 17 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).

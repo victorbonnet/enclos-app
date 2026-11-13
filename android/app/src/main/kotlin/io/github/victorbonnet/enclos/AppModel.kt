@@ -277,6 +277,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val pendingApprovalActions = mutableStateMapOf<String, PendingPolicyRequestAction>()
     val approvalErrors = mutableStateMapOf<String, String>()
     val agents = mutableStateListOf<Agent>()
+    private val provisioningClient = ProvisioningClient(
+        connected = ::connected,
+        send = { host, command -> connections[host]?.send(command) == true },
+        agents = { host -> agents.filter { it.host == host } },
+    )
+    private val sandboxes get() = provisioningClient.sandboxes
+    val runtimes get() = provisioningClient.runtimes
+    val provisioning get() = provisioningClient.provisioning
     val agentNames = AgentNames(
         send = { host, command -> connections[host]?.send(command) == true },
         connected = ::connected,
@@ -535,6 +543,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Whether [host] is connected and authenticated. */
     fun connected(host: String) = status[host]?.startsWith("connected") == true
 
+    fun canManageSandboxes(host: String) = provisioningClient.canManageSandboxes(host)
+    fun sandboxesOf(host: String) = provisioningClient.sandboxesOf(host)
+    fun refreshProvisioning(host: String) = provisioningClient.refreshProvisioning(host)
+    fun clearProvisioning(key: String) = provisioningClient.clearProvisioning(key)
+    fun createSandbox(host: String, name: String, template: String = "minimal") = provisioningClient.createSandbox(host, name, template)
+    fun installRuntime(host: String, sandbox: String, runtime: String) = provisioningClient.installRuntime(host, sandbox, runtime)
+    private fun provisioningEnded(host: String) = provisioningClient.ended(host)
+
     /** Resolve current names at render time, including previously cached conversation history. */
     fun agentLabel(address: String): String = resolveAgentLabel(agents, address)
 
@@ -774,6 +790,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * message after the newest kept. [foreground] opens it, and [ended] again.
      */
     fun connect(host: Host) {
+        provisioningEnded(host.name)
         auditEnded(host.name)
         agentNames.ended(host.name)
         routines.ended(host.name)
@@ -829,6 +846,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun ended(host: Host, why: String) {
         auditEnded(host.name)
         connections.remove(host.name)
+        provisioningEnded(host.name)
         deletion.ended(host.name)
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         routines.ended(host.name)
@@ -878,6 +896,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun received(host: Host, m: JSONObject) {
+        if (provisioningClient.received(host.name, m)) return
         if (deletion.received(host.name, m)) return
         val conversationId = m.optString("conversation")
         if (m.optString("type") in conversationScoped && ConversationKey(host.name, conversationId) in deletion.deleted) return
@@ -921,7 +940,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val json = JSONObject(m.toString()).put("host", host.name).toString()
                 saving.execute { approvalCache.edit { putString(request.key, json) } }
             }
-            "synced" -> { approvalsFresh[host.name] = true; questions.synced(host.name) }
             "authenticated" -> {
                 questions.authenticated(host.name)
                 approvalsFresh[host.name] = false
@@ -934,6 +952,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("${host.name}/") }.forEach { remove(it) } } }
                 failures.remove(host.name)
                 status[host.name] = "connected as ${m.optString("person")}"
+                provisioningClient.authenticated(host.name, hostCapabilitiesIn(m))
                 connections[host.name]?.send(message("agents"))
                 // What is on the phone is kept: only what is newer comes.
                 connections[host.name]?.send(message("sync", "since" to since(host.name)))
@@ -998,6 +1017,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             // The sync's messages came: a read position still past them is
             // taken up to the newest, as the bridge itself never goes further.
             "synced" -> {
+                approvalsFresh[host.name] = true
+                questions.synced(host.name)
                 conversations.filter { it.host == host.name && it.id in unsettledRead }.forEach { c ->
                     val newest = lines[c.id]?.lastOrNull()?.seq ?: 0L
                     val seq = settledRead(lastRead[c.id] ?: 0L, unsettledRead.remove(c.id) ?: 0L, newest)
@@ -1716,6 +1737,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         groups.clear()
         lines.clear()
         agents.clear()
+        sandboxes.clear()
         kept.clear()
         steps.clear()
         fetching.clear()
@@ -1742,6 +1764,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
+        provisioningEnded(host)
+        sandboxes.remove(host)
+        provisioning.keys.filter { it == host || it.startsWith("$host/") }.forEach { provisioning.remove(it) }
         audit.remove(host)
         hostCapabilities.remove(host)
         clashes.remove(host)
