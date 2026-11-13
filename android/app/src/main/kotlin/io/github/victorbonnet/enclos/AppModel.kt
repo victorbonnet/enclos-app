@@ -274,6 +274,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private val unanswered = Awaiting()
     /** By conversation: the tools the agent runs now, live from the bridge. */
     val steps = mutableStateMapOf<String, List<Step>>()
+    /**
+     * By agent (`host/sandbox/agent`): the commands the person may type to
+     * its runtime, as its bridge last sent them; kept while the host is
+     * connected (the bridge sends them again after `agents`).
+     */
+    val commands = mutableStateMapOf<String, List<AgentCommand>>()
     /** By conversation: the last message read on this device, kept across launches. */
     private val lastRead = mutableStateMapOf<String, Long>().apply {
         reads.all.forEach { (id, seq) -> if (seq is Long) put(id, seq) }
@@ -595,6 +601,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         typing.keys.filter { it in ids }.forEach { typing.remove(it) }
         ids.forEach { answered(it) }
         steps.keys.filter { it in ids }.forEach { steps.remove(it) }
+        // Its agents' commands come again with the next connection.
+        commands.keys.filter { it.startsWith("${host.name}/") }.forEach { commands.remove(it) }
         // Files being fetched from it stop; asked again, they go on from where they were.
         fetching.filterValues { it.host == host.name }.keys.forEach {
             fetching.remove(it)
@@ -748,6 +756,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             // A part of a file: written where it goes, then the next asked for.
             "attachment.data" -> received(host, m.getString("attachment"), m.getLong("offset"), m.getLong("size"), m.getString("data"))
+            // An agent's commands, the whole list: replaces the one before.
+            "commands" -> {
+                val list = m.optJSONArray("commands")
+                commands["${host.name}/${m.getString("agent")}"] = (0 until (list?.length() ?: 0)).mapNotNull { i ->
+                    val c = list!!.optJSONObject(i) ?: return@mapNotNull null
+                    val name = c.optString("name").ifBlank { return@mapNotNull null }
+                    AgentCommand(name, c.optString("description"), c.optString("args").ifBlank { null })
+                }.distinctBy { it.name } // The bridge sends each name once; the app does not count on it.
+            }
             // A tool the agent starts, or ends: added, or marked done.
             "tool" -> {
                 val id = m.getString("conversation")
@@ -1024,6 +1041,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         status.remove(name)
         said.remove(name)
         unfolded.removeAll { it.startsWith("$name/") }
+        commands.keys.filter { it.startsWith("$name/") }.forEach { commands.remove(it) }
         val ids = conversations.filter { it.host == name }.map { it.id }.toSet()
         val attached = ids.flatMap { lines[it].orEmpty() }.flatMap { it.attachments }
         unreadable.remove(name)
@@ -1073,6 +1091,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         fetching.clear()
         asked.clear()
         files.clear()
+        commands.clear()
         save { clear() }
         saving.execute { java.io.File(getApplication<Application>().cacheDir, "attachments").deleteRecursively() }
         // Each connection again, its sync from the start.

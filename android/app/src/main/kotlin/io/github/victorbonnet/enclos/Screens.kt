@@ -7,10 +7,12 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.selection.selectable
@@ -30,6 +32,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -910,6 +913,10 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 if (i == 0 || Times.day(lines[i - 1].time) != day) item(key = "day-${line.seq}") { Arriving { DaySeparator(day) } }
             }
         }
+        // The agent's commands that match what is typed after `/`; picking one puts it in the field.
+        val known = model.commands["${conversation.host}/${conversation.agent}"].orEmpty()
+        val offered = remember(known, draft) { suggest(known, draft) }
+        CommandSuggestions(offered, draft.drop(1)) { model.unsent[id] = picked(it) }
         // Not connected: write, but nothing goes until the host is back. A
         // message the bridge did not get is back in the field, saying so; one
         // that could not go (too long) stays, saying why.
@@ -929,6 +936,53 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             unsent = model.send(conversation, draft.trim())
             // What the person just sent shows, wherever they had scrolled.
             if (unsent == null) atNewest = true
+        }
+    }
+}
+
+/**
+ * The agent's commands to pick from as the person types `/`, over the
+ * field, on `surface`: each `/name` in mono with the part [typed] in
+ * `accent`, what follows it faint, and what it does on one line. At most
+ * about four and a half rows show; the rest scroll. It opens and closes
+ * with the list.
+ */
+@Composable
+private fun CommandSuggestions(offered: List<AgentCommand>, typed: String, onPick: (AgentCommand) -> Unit) {
+    val p = palette
+    // Kept while it closes, so the rows do not vanish before it does.
+    var shown by remember { mutableStateOf(offered) }
+    if (offered.isNotEmpty()) shown = offered
+    AnimatedVisibility(
+        offered.isNotEmpty(),
+        enter = fadeIn(Motion.enter(Motion.SHORT)) + expandVertically(Motion.enter(Motion.SHORT), expandFrom = Alignment.Bottom),
+        exit = fadeOut(Motion.exit()) + shrinkVertically(Motion.exit(), shrinkTowards = Alignment.Bottom),
+    ) {
+        Column(Modifier.fillMaxWidth().background(p.surface)) {
+            Hairline()
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
+                items(shown, key = { it.name }) { c ->
+                    Column(
+                        Modifier.fillMaxWidth().clickable(onClickLabel = "Use /${c.name}") { onPick(c) }
+                            .padding(horizontal = 16.dp, vertical = 9.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                highlighted("/${c.name}", typed, p.accent),
+                                style = Type.code.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
+                                color = p.text,
+                                maxLines = 1,
+                            )
+                            c.args?.let {
+                                Text(it, style = Type.code, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        if (c.description.isNotBlank()) {
+                            Text(c.description, style = Type.small, color = p.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
         }
     }
 }
