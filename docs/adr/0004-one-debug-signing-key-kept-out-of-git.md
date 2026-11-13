@@ -10,6 +10,8 @@ Decision (proposed): **debug builds are signed with one project debug key, kept 
 
 Reason: any debug build then installs over any other. The key stays out of the repository because an update signed with it runs as the same app: whoever holds it could ship an APK that uses the installed app's device keys and reads its conversations, if the person installs it.
 
+Who can read it in CI: GitHub gives the secret to every `pull_request` run from a branch of this repository (not from a fork), and the keystore is a file on the runner while Gradle runs, so any build script, Gradle plugin or dependency the `android` job executes can read it. That is accepted for a debug key, which only installs over debug builds; it is the reason the release key must not follow this job's pattern.
+
 ## Considered options
 
 - **The debug keystore in git**: simplest, common for debug keys, but it gives that power to anyone who can read the repository.

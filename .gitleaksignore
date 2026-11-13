@@ -1,0 +1,6 @@
+# Findings gitleaks reports that are not secrets, by fingerprint
+# (commit:file:rule:line). Each names one commit, so it covers nothing else.
+
+# The bytes 0 to 31 in base64, a test's bridge key; the next commit replaced
+# it, and the commit cannot be rewritten on a shared branch.
+ae587c15f15068cb6024ab4d8f7ff4ac6aef0c7d:android/app/src/test/kotlin/io/github/victorbonnet/enclos/HostsTest.kt:generic-api-key:49
