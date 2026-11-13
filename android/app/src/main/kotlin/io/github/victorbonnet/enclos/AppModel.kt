@@ -864,6 +864,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun received(host: Host, m: JSONObject) {
+        if (provisioningClient.received(host.name, m)) return
         if (deletion.received(host.name, m)) return
         val conversationId = m.optString("conversation")
         if (m.optString("type") in conversationScoped && ConversationKey(host.name, conversationId) in deletion.deleted) return
@@ -872,7 +873,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (about != null && leftOutForClash(conversations, host.name, m.optString("type"), about)) {
             return refusedClash(host.name, about, m.optString("agent").ifBlank { null })
         }
-        if (provisioningClient.received(host.name, m)) return
         if (m.optString("type") in setOf("question", "question.result", "error") && questions.received(host.name, m)) return
         if (m.optString("type") in setOf("agent.name", "error") && agentNames.received(host.name, m)) return
         if (m.optString("type") in setOf("routine.response", "error") && routines.received(host.name, m)) return
