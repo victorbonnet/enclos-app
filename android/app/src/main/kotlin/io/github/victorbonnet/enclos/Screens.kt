@@ -1431,7 +1431,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                         return@item
                     }
                     Arriving {
-                        val question = if (line.kind == "question" && line.from == "agent") model.questions.current(conversation, line.question) else null
+                        val question = if (line.from == "agent") model.questions.current(conversation, line.question)?.takeIf { it.matchesMessageKind(line.kind) } else null
                         Bubble(
                             text = line.text,
                             time = Times.clock(line.time),
@@ -1443,7 +1443,9 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             files = line.attachments.takeIf { it.isNotEmpty() }?.let { attached ->
                                 { Files(attached, model.files) { model.fetch(conversation.host, it) } }
                             },
-                            content = question?.let { known -> { QuestionCard(model.questions, known) } },
+                            content = question?.let { known -> {
+                                if (known.approval != null) RuntimeApprovalCard(model.questions, known) else QuestionCard(model.questions, known)
+                            } },
                         )
                     }
                 }

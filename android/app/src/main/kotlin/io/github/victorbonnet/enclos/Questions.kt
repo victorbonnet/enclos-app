@@ -20,12 +20,13 @@ private const val MAX_AGENT_BYTES = 512
 data class QuestionKey(val host: String, val id: String)
 
 enum class QuestionState(val wire: String) {
-    Pending("pending"), Answered("answered"), Skipped("skipped"), Expired("expired"), Cancelled("cancelled"),
+    Pending("pending"), Answered("answered"), Skipped("skipped"), Expired("expired"), Cancelled("cancelled"), Resolved("resolved"),
 }
 
 sealed interface QuestionAnswer {
     data class Choices(val indices: List<Int>) : QuestionAnswer
     data class Text(val text: String) : QuestionAnswer
+    data class Approval(val action: RuntimeApprovalAction) : QuestionAnswer
     data object Skip : QuestionAnswer
 }
 
@@ -46,6 +47,7 @@ data class QuestionInfo(
      * the card shows as the agent's report rather than the person's choice.
      */
     val confirmed: Boolean = false,
+    val approval: RuntimeApprovalDefinition? = null,
 ) {
     val key: QuestionKey get() = QuestionKey(host, id)
 
@@ -55,10 +57,16 @@ data class QuestionInfo(
         require(revision >= 0) { "Invalid question revision." }
         validateDefinition()
         require(!confirmed || state != QuestionState.Pending) { "A pending question has no confirmed answer." }
-        // Answered may come without an answer: the runtime accepted one this contract cannot carry.
-        if (answer != null) {
-            require(state == QuestionState.Answered && answer != QuestionAnswer.Skip) { "Question state and answer disagree." }
-            validateAnswer(answer)
+        when (state) {
+            QuestionState.Pending, QuestionState.Expired, QuestionState.Cancelled ->
+                require(answer == null) { "Question state and answer disagree." }
+            QuestionState.Skipped -> require(approval == null && answer == null) { "Question state and answer disagree." }
+            QuestionState.Resolved -> require(approval != null && answer == null) { "Question state and answer disagree." }
+            // Answered may come without an answer: the runtime accepted one this contract cannot carry.
+            QuestionState.Answered -> answer?.let {
+                require(it != QuestionAnswer.Skip) { "Question state and answer disagree." }
+                validateAnswer(it)
+            }
         }
         val metadata = definitionJson().dropLast(1) +
             ",\"conversation\":${jsonString(conversation)},\"agent\":${jsonString(agent)}" +
@@ -76,12 +84,19 @@ data class QuestionInfo(
         require(choices.all { textValid(it, lines = false) }) { "Invalid choice label." }
         // Distinct once joiners are set aside ([Visible.bare]): two labels must not read the same.
         require(choices.map(Visible::bare).distinct().size == choices.size) { "Choice labels must be distinct." }
+        approval?.let {
+            it.validate()
+            require(choices.isEmpty() && !multiple) { "Runtime approvals cannot offer ordinary question choices." }
+        }
         require(definitionJson().utf8Size() <= MAX_QUESTION_BYTES) { "This question is too large." }
     }
 
     /** `QuestionAnswer::validate` against this question. */
     fun validateAnswer(value: QuestionAnswer) {
-        when (value) {
+        val runtime = approval
+        if (runtime != null) {
+            require(value is QuestionAnswer.Approval && value.action in runtime.actions) { "Choose an offered runtime approval action." }
+        } else when (value) {
             is QuestionAnswer.Choices -> require(
                 value.indices.isNotEmpty() && (multiple || value.indices.size == 1) &&
                     value.indices.distinct().size == value.indices.size && value.indices.all { it in choices.indices },
@@ -90,6 +105,7 @@ data class QuestionInfo(
                 "Enter an answer without tabs or hidden characters."
             }
             QuestionAnswer.Skip -> Unit
+            is QuestionAnswer.Approval -> throw IllegalArgumentException("This is an ordinary question, not a runtime approval.")
         }
         require(answerJsonText(value).utf8Size() <= MAX_ANSWER_BYTES) { "This answer is too long." }
     }
@@ -97,16 +113,20 @@ data class QuestionInfo(
     fun belongsTo(c: Conversation): Boolean =
         host == c.host && conversation == c.id && if (c.group) agent in c.members else agent == c.agent
 
+    fun matchesMessageKind(kind: String): Boolean = kind == if (approval == null) "question" else "runtime_approval"
+
     fun json(): JSONObject = JSONObject()
         .put("id", id).put("text", text).put("choices", JSONArray(choices)).put("multiple", multiple)
         .put("conversation", conversation).put("agent", agent).put("state", state.wire).put("revision", revision)
         .apply { answer?.let { put("answer", it.json()) } }
         .apply { if (confirmed) put("confirmed", true) }
+        .apply { approval?.let { put("approval", it.json()) } }
 
     /** The definition as serde writes it, for its size. */
     private fun definitionJson(): String =
         "{\"id\":${jsonString(id)},\"text\":${jsonString(text)}," +
-            "\"choices\":[${choices.joinToString(",", transform = ::jsonString)}],\"multiple\":$multiple}"
+            "\"choices\":[${choices.joinToString(",", transform = ::jsonString)}],\"multiple\":$multiple" +
+            (approval?.let { ",\"approval\":${it.jsonText()}" } ?: "") + "}"
 
     companion object {
         fun from(host: String, json: JSONObject): QuestionInfo {
@@ -131,9 +151,14 @@ data class QuestionInfo(
             } else {
                 false
             }
+            val approval = if (json.has("approval") && !json.isNull("approval")) {
+                RuntimeApprovalDefinition.from(json.getJSONObject("approval"))
+            } else {
+                null
+            }
             val info = QuestionInfo(
                 host, string("id"), string("text"), choices, multiple, string("conversation"), string("agent"), state,
-                (revision as Number).toLong(), answer, confirmed,
+                (revision as Number).toLong(), answer, confirmed, approval,
             )
             info.validate()
             return info.normalized()
@@ -211,6 +236,7 @@ private fun answerFrom(json: JSONObject): QuestionAnswer = when (json.getString(
         )
     }
     "text" -> QuestionAnswer.Text((json.get("text") as? String) ?: throw IllegalArgumentException("Invalid text"))
+    "approval" -> QuestionAnswer.Approval(RuntimeApprovalAction.entries.firstOrNull { it.wire == json.get("action") } ?: throw IllegalArgumentException("Invalid approval action"))
     "skip" -> QuestionAnswer.Skip
     else -> throw IllegalArgumentException("Invalid answer")
 }
@@ -218,6 +244,7 @@ private fun answerFrom(json: JSONObject): QuestionAnswer = when (json.getString(
 private fun answerJsonText(answer: QuestionAnswer): String = when (answer) {
     is QuestionAnswer.Choices -> "{\"kind\":\"choices\",\"indices\":[${answer.indices.joinToString(",")}]}"
     is QuestionAnswer.Text -> "{\"kind\":\"text\",\"text\":${jsonString(answer.text)}}"
+    is QuestionAnswer.Approval -> "{\"kind\":\"approval\",\"action\":${jsonString(answer.action.wire)}}"
     QuestionAnswer.Skip -> "{\"kind\":\"skip\"}"
 }
 
@@ -237,8 +264,17 @@ private fun agentValid(value: String): Boolean = value.isNotEmpty() && value.utf
 private fun textValid(value: String, lines: Boolean): Boolean =
     value.isNotBlank() && !Visible.hasHidden(value, lines) && !hasSurrogate(value)
 
+/**
+ * A runtime approval's command and reason: not blank, no control character
+ * but newlines and tabs. Looser than [textValid] on purpose: the card shows
+ * them written out ([Visible.revealed]), never applied.
+ */
+internal fun questionTextValid(value: String): Boolean = value.isNotBlank() && value.codePoints().noneMatch {
+    (Character.isISOControl(it) && it != 10 && it != 13 && it != 9) || it in 0xD800..0xDFFF
+}
+
 /** serde_json's escaping, for sizes: hidden characters are refused before, newlines aside. */
-private fun jsonString(value: String): String = buildString {
+internal fun jsonString(value: String): String = buildString {
     append('"')
     value.forEach { c ->
         when (c) {
