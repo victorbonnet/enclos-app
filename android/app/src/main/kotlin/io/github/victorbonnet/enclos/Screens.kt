@@ -1051,7 +1051,7 @@ private fun MoreRow(name: String, hidden: Int, shown: Int, unfolded: Boolean, on
  * whose address or runtime has every word of it.
  */
 @Composable
-fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, openSandbox: (String) -> Unit, pair: () -> Unit) {
+fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, openSandbox: (String) -> Unit, pair: () -> Unit, openHost: (String) -> Unit) {
     // "5 min ago" stays true while the screen shows.
     val now by produceState(System.currentTimeMillis() / 1000) {
         while (true) {
@@ -1076,7 +1076,12 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
             val key = model.hostFold(host.name)
             val open = query.isNotBlank() || key !in model.folded
             item(key = key) {
-                FoldHeading(host.name, open, 0, query.isBlank(), lead = { ConnectionDot(live) }) { model.fold(key) }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) {
+                        FoldHeading(host.name, open, 0, query.isBlank(), lead = { ConnectionDot(live) }) { model.fold(key) }
+                    }
+                    IconButton(Glyphs.chevron, "Open ${host.name}", { openHost(host.name) })
+                }
             }
             if (!open) return@forEach
             val leftOut = model.leftOut(host.name)
@@ -1197,7 +1202,7 @@ internal fun ListHeading(
  * the versions. Nothing here acts on a sandbox.
  */
 @Composable
-fun SettingsScreen(model: AppModel, pair: () -> Unit, ask: Ask) {
+fun SettingsScreen(model: AppModel, pair: () -> Unit, ask: Ask, openHost: (String) -> Unit) {
     val p = palette
     var forgetting by remember { mutableStateOf<String?>(null) }
     // A host forgotten without being told: the dialog said it would be.
@@ -1257,7 +1262,9 @@ fun SettingsScreen(model: AppModel, pair: () -> Unit, ask: Ask) {
                     SettingRow {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             ConnectionDot(live)
-                            Text(host.name, style = Type.code.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold), color = p.text)
+                            Text(host.name, style = Type.code.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold), color = p.text,
+                                modifier = Modifier.weight(1f).clickable(role = Role.Button) { openHost(host.name) }.padding(vertical = 10.dp))
+                            IconButton(Glyphs.chevron, "Open ${host.name}", { openHost(host.name) })
                         }
                         Gap(6.dp)
                         Text(model.status[host.name] ?: "not connected", style = Type.small, color = p.textMuted)

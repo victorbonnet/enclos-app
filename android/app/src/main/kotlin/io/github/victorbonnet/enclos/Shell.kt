@@ -91,6 +91,7 @@ fun HomeShell(
     settings: () -> Unit,
     compose: () -> Unit,
     pair: () -> Unit,
+    openHost: (String) -> Unit,
 ) {
     val p = palette
     // The view settled on: the top bar's actions and the search's label
@@ -122,7 +123,7 @@ fun HomeShell(
                 Box(Modifier.fillMaxSize().background(p.bg)) {
                     when (View.entries[page]) {
                         View.Conversations -> InboxScreen(model, query, unreadOnly, archivedOnly, openChat, start, openAgent, openRoutines, pair, openApproval)
-                        View.Agents -> AgentsScreen(model, query, openAgent, openSandbox, pair)
+                        View.Agents -> AgentsScreen(model, query, openAgent, openSandbox, pair, openHost)
                     }
                 }
             }

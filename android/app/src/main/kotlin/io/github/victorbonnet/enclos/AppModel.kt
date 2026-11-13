@@ -266,6 +266,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val paired = mutableStateListOf<Host>().apply { addAll(hosts.all()) }
     /** By host: connected, the reason it is not, or connecting. */
     val status = mutableStateMapOf<String, String>()
+    val audit = mutableStateMapOf<String, HostAudit>()
+    private val auditSupported = mutableStateMapOf<String, Boolean>()
     /** By host: the last error its bridge sent, such as an agent it could not reach. */
     val said = mutableStateMapOf<String, String>()
     private val policyCache = application.getSharedPreferences("sandbox-policies", Context.MODE_PRIVATE)
@@ -492,6 +494,34 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * for the person to confirm the replacement (docs/spec.md, Pairing).
      */
     val replacing = mutableStateOf<Replacing?>(null)
+
+    fun canReadAudit(host: String) = connected(host) && auditSupported[host] == true
+
+    /** Refresh newest entries, or append the next page. No unknown requests to older bridges. */
+    fun loadAudit(host: String, older: Boolean = false) {
+        if (!canReadAudit(host)) return
+        val current = audit[host] ?: HostAudit()
+        if (current.request != null) return
+        val before = if (older) current.nextBefore ?: return else null
+        val request = message("audit")
+        if (before != null) request.put("before", before)
+        val id = request.getString("id")
+        audit[host] = current.loading(id, before)
+        if (connections[host]?.send(request) != true) {
+            audit[host] = audit.getValue(host).failed(id, "The audit request could not be sent. Reconnect and try again.")
+            return
+        }
+        main.postDelayed({
+            audit[host]?.let { audit[host] = it.failed(id, "The host did not return the audit. Try again.") }
+        }, 15_000)
+    }
+
+    private fun auditEnded(host: String) {
+        auditSupported.remove(host)
+        audit[host]?.let { state ->
+            state.request?.let { audit[host] = state.failed(it, "The connection ended. Reconnect to refresh the audit.") }
+        }
+    }
 
     /** Whether [host] is connected and authenticated. */
     fun connected(host: String) = status[host]?.startsWith("connected") == true
@@ -735,6 +765,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * message after the newest kept. [foreground] opens it, and [ended] again.
      */
     fun connect(host: Host) {
+        auditEnded(host.name)
         agentNames.ended(host.name)
         routines.ended(host.name)
         questions.ended(host.name)
@@ -787,6 +818,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * The phone ends connections on its own, such as when it locks.
      */
     private fun ended(host: Host, why: String) {
+        auditEnded(host.name)
         connections.remove(host.name)
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         routines.ended(host.name)
@@ -884,6 +916,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 // A connection that replaced another without ending it: what the old one said is not fresh.
                 policyConnectionEnded(host.name)
                 val capabilities = m.optJSONArray("capabilities")
+                auditSupported[host.name] = (0 until (capabilities?.length() ?: 0)).any { capabilities?.optString(it) == "audit" }
+                if (auditSupported[host.name] != true) audit.remove(host.name)
                 approvalCloseSupported[host.name] = (0 until (capabilities?.length() ?: 0)).any { capabilities?.optString(it) == "approval.close" }
                 pendingApprovalActions.keys.filter { it.startsWith("${host.name}/") }.forEach { pendingApprovalActions.remove(it) }
                 approvals.keys.filter { approvals[it]?.host == host.name }.forEach { approvals.remove(it) }
@@ -893,6 +927,20 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 connections[host.name]?.send(message("agents"))
                 // What is on the phone is kept: only what is newer comes.
                 connections[host.name]?.send(message("sync", "since" to since(host.name)))
+            }
+            "audit.list" -> {
+                val state = audit[host.name] ?: return
+                val of = m.optString("of")
+                if (state.request != of || !canReadAudit(host.name)) return
+                val list = m.getJSONArray("entries")
+                val entries = (0 until list.length()).map { i ->
+                    val e = list.getJSONObject(i)
+                    HostAuditEntry(e.getLong("seq"), e.getLong("time"), e.getString("user"), e.getString("host"),
+                        e.getString("command"), e.optString("target").takeUnless { e.isNull("target") },
+                        e.getString("result"), e.optString("message").takeUnless { e.isNull("message") },
+                        if (e.isNull("finished")) null else e.getLong("finished"))
+                }
+                audit[host.name] = state.received(of, entries, if (m.isNull("next_before")) null else m.getLong("next_before"))
             }
             "agent.avatar" -> agentImages.received(host.name, m)
             "agents.list" -> {
@@ -1045,6 +1093,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             "error" -> {
+                val auditOf = m.optString("of")
+                if (audit[host.name]?.request == auditOf) {
+                    audit[host.name]?.let { audit[host.name] = it.failed(auditOf, m.optString("message")) }
+                    return
+                }
                 val request = m.optString("of")
                 val archive = archiveRequests[request]?.takeIf { it.host == host.name }
                 if (archive != null) {
@@ -1585,6 +1638,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
+        audit.clear()
         paired.forEach { questions.forget(it.name) }
         paired.forEach { agentNames.forget(it.name) }
         paired.forEach { routines.forget(it.name) }
@@ -1631,6 +1685,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
+        audit.remove(host)
+        auditSupported.remove(host)
         clashes.remove(host)
         clashAgents.remove(host)
         questions.forget(host)
