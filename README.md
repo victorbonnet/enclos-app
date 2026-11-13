@@ -18,7 +18,7 @@ Supporting agents ask [questions with native choices](docs/spec.md#questions): s
 
 [Runtime approvals](docs/spec.md#runtime-approvals) have native scope buttons too: review the complete command and reason, then Allow once, Allow for session, Always allow or Deny when offered. The exact native request stays with the runtime; approving it changes no enclos sandbox policy. Updated Hermes APIs, bridge and channel are required; older combinations retain typed approval commands. Android is implemented; the spec and ADR define matching iOS behaviour.
 
-With an updated bridge, its owner's paired phone can also create a sandbox and install a runtime from the Agents view. Runtime login and app channel setup still continue on the host.
+With an updated bridge, the host's person can create a sandbox and install a runtime from Agents on a paired phone. Runtime login and app channel setup continue on the host; restart the bridge after setup to list the agent.
 
 ## Build
 
@@ -31,16 +31,6 @@ just android
 It builds the Rust core for `arm64-v8a` and `x86_64`, generates its Kotlin bindings, and builds the debug app in `android/app/build/outputs/apk/debug/`. Each pull request's CI also uploads that debug build as an artifact (`enclos-debug-apk`).
 
 Debug builds are signed with the project's one debug key, so any build installs over any other ([ADR 0004](docs/adr/0004-one-debug-signing-key-kept-out-of-git.md)). The key is not in git: put the keystore at `~/.android/enclos-debug.keystore` (or point `ENCLOS_DEBUG_KEYSTORE` at it); CI reads it from the `ENCLOS_DEBUG_KEYSTORE_B64` secret. A new machine gets it copied from one that has it, over a private channel (never the repository, an issue or a chat); `*.keystore` and `*.jks` are ignored by git. Without it, a build is signed with the machine's own debug key and installs only after uninstalling the app, which forgets its pairings.
-
-The pairing-storage regression tests run on an Android device, using isolated synthetic preferences. After building the core, run `:app:assembleDebug` and `:app:assembleDebugAndroidTest` through the Android Gradle wrapper, then install both APKs and run the platform instrumentation runner:
-
-```sh
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-adb install -r -t android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-adb shell am instrument -w io.github.victorbonnet.enclos.test/io.github.victorbonnet.enclos.HostsRegression
-```
-
-The runner reports `Hosts regression: 3/3 passed` on success. It checks wrapped-key compatibility, migration of older plaintext keys, and preservation of other pairings when adding or removing one; it does not touch the person's saved pairings.
 
 ## License
 

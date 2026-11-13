@@ -129,7 +129,7 @@ internal fun RuntimeInstallation(model: AppModel, host: String, sandbox: String)
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         Text("Install a runtime", style = Type.name, color = p.text)
         Gap(8.dp)
-        Text("The runtime's installer runs inside this sandbox. Installation can take several minutes. Login and channel setup continue on the host after installation.", style = Type.small, color = p.textMuted)
+        Text("The runtime's installer runs inside this sandbox. Installation can take several minutes. Login and channel setup continue on the host after installation. Then restart the bridge to list the agent.", style = Type.small, color = p.textMuted)
         if (model.canManageSandboxes(host)) {
             options.forEach { option ->
                 ProvisioningChoice(option.name, option.description, option.runtime == runtime?.runtime, !busy) { selected = option.runtime }
@@ -160,7 +160,7 @@ internal fun ProvisioningStatus(operation: SandboxOperation) {
             Text(operation.error ?: operation.message, style = Type.small, color = if (operation.busy) p.accent else p.textMuted)
         }
         operation.login?.let { login ->
-            Text("Continue login and setup on the host:", style = Type.small, color = p.textMuted)
+            Text("Continue login and setup on the host, then restart the bridge:", style = Type.small, color = p.textMuted)
             SelectionContainer { Text(login, style = Type.code, color = p.text) }
         }
     }

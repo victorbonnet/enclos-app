@@ -390,7 +390,7 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
             ListHeading("Agents · ${agents.size}")
             if (agents.isEmpty()) {
                 Text(
-                    if (runtime == null) "Install a runtime to begin setting up an agent." else "No agent listed yet. Complete the runtime's login and app channel setup on the host.",
+                    if (runtime == null) "Install a runtime to begin setting up an agent." else "No agent listed yet. Complete the runtime's login and app channel setup on the host, then restart the bridge to list the agent.",
                     style = Type.small,
                     color = p.textMuted,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),

@@ -276,15 +276,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val approvalCloseSupported = mutableStateMapOf<String, Boolean>()
     val approvalErrors = mutableStateMapOf<String, String>()
     val agents = mutableStateListOf<Agent>()
-    /** The host's own list includes sandboxes with no runtime or agent yet. */
-    private val sandboxes = mutableStateMapOf<String, List<Sandbox>>()
-    /** Capabilities from the current authenticated connection only. Older bridges advertise none. */
-    private val hostCapabilities = mutableStateMapOf<String, Set<String>>()
-    val runtimes = mutableStateMapOf<String, List<RuntimeOption>>()
-    /** Creation by host name; installation by `host/sandbox`. Kept while the app runs. */
-    val provisioning = mutableStateMapOf<String, SandboxOperation>()
-    /** The request ids awaiting a terminal response, with the operation's host and display key. */
-    private val provisioningRequests = mutableMapOf<String, Pair<String, String>>()
+    private val provisioningClient = ProvisioningClient(
+        connected = ::connected,
+        send = { host, command -> connections[host]?.send(command) == true },
+        agents = { host -> agents.filter { it.host == host } },
+    )
+    private val sandboxes get() = provisioningClient.sandboxes
+    val runtimes get() = provisioningClient.runtimes
+    val provisioning get() = provisioningClient.provisioning
     val agentNames = AgentNames(
         send = { host, command -> connections[host]?.send(command) == true },
         connected = ::connected,
@@ -505,80 +504,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Whether [host] is connected and authenticated. */
     fun connected(host: String) = status[host]?.startsWith("connected") == true
 
-    /** Only the host owner, on a bridge that advertises these operations, may manage sandboxes. */
-    fun canManageSandboxes(host: String) = connected(host) && "sandboxes" in hostCapabilities[host].orEmpty()
-
-    /** On older bridges, the sandboxes the agent list implies remain visible. */
-    fun sandboxesOf(host: String): List<Sandbox> = sandboxes[host]
-        ?: agents.filter { it.host == host }.groupBy { it.sandbox }.map { (name, agents) ->
-            Sandbox(host, name, agents.first().runtime.ifBlank { null })
-        }
-
-    /** Refreshes what the current bridge offers, without sending unknown requests to older bridges. */
-    fun refreshProvisioning(host: String) {
-        if (!canManageSandboxes(host)) return
-        connections[host]?.send(message("sandboxes"))
-        connections[host]?.send(message("runtimes"))
-    }
-
-    /** Clears an earlier result when its screen is opened again; running work keeps its correlation. */
-    fun clearProvisioning(key: String) {
-        if (provisioning[key]?.busy != true) provisioning.remove(key)
-    }
-
-    /** Creates a sandbox on the host. Choosing the template is explicit on the wire. */
-    fun createSandbox(host: String, name: String, template: String = "minimal"): Boolean {
-        val sandbox = name.trim()
-        val request = message("sandbox.create", "sandbox" to sandbox, "template" to template)
-        val operation = SandboxOperation(request.getString("id"), "sandbox.create", sandbox, message = "Creating $sandbox…")
-        if (provisioning[host]?.busy == true) return false
-        val invalid = sandboxNameError(sandbox)
-            ?: if (sandboxesOf(host).any { it.name == sandbox }) "A sandbox named $sandbox already exists on $host." else null
-        return submitProvisioning(host, host, request, operation, invalid)
-    }
-
-    /** Installs one of the runtimes the host advertised in a sandbox without a runtime. */
-    fun installRuntime(host: String, sandbox: String, runtime: String): Boolean {
-        val key = "$host/$sandbox"
-        if (provisioning[key]?.busy == true) return false
-        val offered = runtimes[host].orEmpty().firstOrNull { it.runtime == runtime }
-        val request = message("runtime.install", "sandbox" to sandbox, "runtime" to runtime)
-        val operation = SandboxOperation(request.getString("id"), "runtime.install", sandbox, runtime, message = "Installing ${offered?.name ?: runtime}…")
-        val invalid = when {
-            offered == null -> "This host has not offered that runtime for installation."
-            sandboxesOf(host).none { it.name == sandbox } -> "This sandbox is no longer listed by its host."
-            sandboxesOf(host).any { it.name == sandbox && it.runtime != null } -> "This sandbox already has a runtime."
-            else -> null
-        }
-        return submitProvisioning(host, key, request, operation, invalid)
-    }
-
-    private fun submitProvisioning(host: String, key: String, request: JSONObject, operation: SandboxOperation, invalid: String?): Boolean {
-        val why = when {
-            !connected(host) -> "Not connected to $host. Reconnect before trying again."
-            !canManageSandboxes(host) -> "This connection does not offer sandbox management. Update the host and connect as its owner."
-            else -> invalid
-        }
-        if (why != null) {
-            provisioning[key] = operation.failed(operation.request, why)
-            return false
-        }
-        provisioning[key] = operation
-        provisioningRequests[operation.request] = host to key
-        if (connections[host]?.send(request) == true) return true
-        provisioningRequests.remove(operation.request)
-        provisioning[key] = operation.failed(operation.request, "The request could not be sent. Reconnect before trying again.")
-        return false
-    }
-
-    private fun provisioningEnded(host: String) {
-        hostCapabilities.remove(host)
-        runtimes.remove(host)
-        provisioningRequests.filterValues { it.first == host }.toMap().forEach { (request, location) ->
-            provisioningRequests.remove(request)
-            provisioning[location.second]?.let { provisioning[location.second] = it.disconnected() }
-        }
-    }
+    fun canManageSandboxes(host: String) = provisioningClient.canManageSandboxes(host)
+    fun sandboxesOf(host: String) = provisioningClient.sandboxesOf(host)
+    fun refreshProvisioning(host: String) = provisioningClient.refreshProvisioning(host)
+    fun clearProvisioning(key: String) = provisioningClient.clearProvisioning(key)
+    fun createSandbox(host: String, name: String, template: String = "minimal") = provisioningClient.createSandbox(host, name, template)
+    fun installRuntime(host: String, sandbox: String, runtime: String) = provisioningClient.installRuntime(host, sandbox, runtime)
+    private fun provisioningEnded(host: String) = provisioningClient.ended(host)
 
     /** Resolve current names at render time, including previously cached conversation history. */
     fun agentLabel(address: String): String = resolveAgentLabel(agents, address)
@@ -928,6 +860,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (about != null && leftOutForClash(conversations, host.name, m.optString("type"), about)) {
             return refusedClash(host.name, about, m.optString("agent").ifBlank { null })
         }
+        if (provisioningClient.received(host.name, m)) return
         if (m.optString("type") in setOf("question", "question.result", "error") && questions.received(host.name, m)) return
         if (m.optString("type") in setOf("agent.name", "error") && agentNames.received(host.name, m)) return
         if (m.optString("type") in setOf("routine.response", "error") && routines.received(host.name, m)) return
@@ -976,13 +909,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 failures.remove(host.name)
                 status[host.name] = "connected as ${m.optString("person")}"
                 val features = m.optJSONArray("capabilities")
-                hostCapabilities[host.name] = (0 until (features?.length() ?: 0)).map { features!!.getString(it) }.toSet()
-                // Owner-only metadata from an earlier connection must not survive authentication as a guest.
-                if ("sandboxes" !in hostCapabilities[host.name].orEmpty()) {
-                    sandboxes.remove(host.name)
-                    provisioning.keys.filter { it == host.name || it.startsWith("${host.name}/") }.forEach { provisioning.remove(it) }
-                }
-                refreshProvisioning(host.name)
+                provisioningClient.authenticated(host.name, (0 until (features?.length() ?: 0)).map { features!!.getString(it) }.toSet())
                 connections[host.name]?.send(message("agents"))
                 // What is on the phone is kept: only what is newer comes.
                 connections[host.name]?.send(message("sync", "since" to since(host.name)))
@@ -995,53 +922,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val listed = agents.filter { it.host == host.name }
                 agentImages.listed(host.name, listed)
                 save { agents(host.name, listed) }
-            }
-            "sandboxes.list" -> {
-                val list = m.getJSONArray("sandboxes")
-                sandboxes[host.name] = (0 until list.length()).map { i ->
-                    val s = list.getJSONObject(i)
-                    Sandbox(host.name, s.getString("sandbox"), s.optString("runtime").takeUnless { s.isNull("runtime") || it.isBlank() }, s.optString("state").ifBlank { null })
-                }
-            }
-            "runtimes.list" -> {
-                val list = m.getJSONArray("runtimes")
-                runtimes[host.name] = (0 until list.length()).map { i ->
-                    val r = list.getJSONObject(i)
-                    RuntimeOption(r.getString("runtime"), r.getString("name"), r.optString("description"))
-                }
-            }
-            "operation.progress" -> {
-                val of = m.optString("of")
-                val (owner, key) = provisioningRequests[of] ?: return
-                if (owner != host.name) return
-                provisioning[key]?.let {
-                    provisioning[key] = it.progress(of, m.optString("operation"), m.optString("sandbox"), m.optString("message"))
-                }
-            }
-            "sandbox.created", "runtime.installed" -> {
-                val of = m.optString("of")
-                val (owner, key) = provisioningRequests[of] ?: return
-                if (owner != host.name) return
-                val operation = provisioning[key] ?: return
-                val installing = m.optString("type") == "runtime.installed"
-                val sandbox = m.optString("sandbox")
-                val runtime = if (installing) m.optString("runtime").ifBlank { null } else null
-                // A matching request id still must name the sandbox and operation that was sent.
-                if (installing && runtime != operation.runtime) return
-                val completed = operation.completed(
-                    of, if (installing) "runtime.install" else "sandbox.create", sandbox,
-                    if (installing) "${runtimes[host.name].orEmpty().firstOrNull { it.runtime == runtime }?.name ?: runtime} installed." else "$sandbox created.",
-                    m.optString("login").takeUnless { m.isNull("login") || it.isBlank() },
-                )
-                if (!completed.done) return
-                provisioningRequests.remove(of)
-                provisioning[key] = completed
-                val listed = sandboxesOf(host.name)
-                val old = listed.firstOrNull { it.name == sandbox }
-                val confirmed = old?.copy(runtime = runtime ?: old.runtime) ?: Sandbox(host.name, sandbox, runtime, "created")
-                sandboxes[host.name] = listed.filterNot { it.name == sandbox } + confirmed
-                refreshProvisioning(host.name)
-                connections[host.name]?.send(message("agents"))
             }
             // A conversation and its name: at each sync (so an empty one is
             // known too), when one starts, and when its name changes.
@@ -1187,14 +1067,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             "error" -> {
-                val of = m.optString("of")
-                val operation = provisioningRequests[of]
-                if (operation != null && operation.first == host.name) {
-                    provisioningRequests.remove(of)
-                    provisioning[operation.second]?.let { provisioning[operation.second] = it.failed(of, m.optString("message")) }
-                    refreshProvisioning(host.name)
-                    return
-                }
                 val request = m.optString("of")
                 val archive = archiveRequests[request]?.takeIf { it.host == host.name }
                 if (archive != null) {
