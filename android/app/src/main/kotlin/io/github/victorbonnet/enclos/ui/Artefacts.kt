@@ -1,7 +1,9 @@
 package io.github.victorbonnet.enclos.ui
 
-import android.annotation.SuppressLint
+import android.content.Context
+import android.view.View
 import android.webkit.CookieManager
+import android.widget.Toast
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -19,16 +21,24 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +55,7 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import io.github.victorbonnet.enclos.ArtefactDocument
 import io.github.victorbonnet.enclos.Attachment
+import io.github.victorbonnet.enclos.LinkDestination
 import io.github.victorbonnet.enclos.WebLinks
 import io.github.victorbonnet.enclos.openWebLink
 import io.github.victorbonnet.enclos.shareAttachment
@@ -60,6 +71,9 @@ fun ArtefactViewer(a: Attachment, file: File, close: () -> Unit) {
     val context = LocalContext.current
     val p = palette
     var shareMissing by remember(file) { mutableStateOf(false) }
+    // A link the page asked to open, waiting for the person to confirm it.
+    var leaving by remember(file) { mutableStateOf<LinkDestination?>(null) }
+    var sharing by remember(file) { mutableStateOf(false) }
     val loaded by produceState<Result<ArtefactDocument>?>(null, file) {
         value = withContext(Dispatchers.IO) { runCatching { ArtefactDocument.read(file) } }
     }
@@ -82,7 +96,7 @@ fun ArtefactViewer(a: Attachment, file: File, close: () -> Unit) {
                 Text(a.shownName, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 Box(
                     Modifier.height(48.dp).clickable(onClickLabel = "Share the page", role = Role.Button) {
-                        if (file.isFile) shareAttachment(context, a, file) else shareMissing = true
+                        if (file.isFile) sharing = true else shareMissing = true
                     }
                         .padding(horizontal = 14.dp),
                     contentAlignment = Alignment.Center,
@@ -99,10 +113,65 @@ fun ArtefactViewer(a: Attachment, file: File, close: () -> Unit) {
                         else -> "This page cannot be read. Close it and try fetching it again."
                     },
                 )
-                else -> StaticPage(result.getOrThrow())
+                else -> StaticPage(result.getOrThrow()) { leaving = it }
             }
         }
+        leaving?.let { destination ->
+            WebsiteConfirmation(destination, "this page", dismiss = { leaving = null }) {
+                leaving = null
+                openWebLink(context, destination.address)
+            }
+        }
+        if (sharing) AlertDialog(
+            onDismissRequest = { sharing = false },
+            title = { Text("Share the page's file?") },
+            text = {
+                Text(
+                    "The app you choose shows it its own way. It may run scripts the page holds and load what it links to, which this viewer does not.",
+                    style = Type.small, color = p.textMuted,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    sharing = false
+                    if (file.isFile) shareAttachment(context, a, file) else shareMissing = true
+                }) { Text("Share") }
+            },
+            dismissButton = { TextButton(onClick = { sharing = false }) { Text("Cancel") } },
+        )
     }
+}
+
+/**
+ * Asks before a link leaves [from] (a page, a conversation) for the browser: its
+ * host as the network spells it, then the whole address, in a box that scrolls.
+ */
+@Composable
+fun WebsiteConfirmation(destination: LinkDestination, from: String, dismiss: () -> Unit, open: () -> Unit) {
+    val p = palette
+    AlertDialog(
+        onDismissRequest = dismiss,
+        title = { Text("Open this website?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(destination.host, style = Type.name, color = p.text)
+                Box(Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState())) {
+                    SelectionContainer { Text(destination.address, style = Type.code, color = p.textMuted) }
+                }
+                Text(
+                    "The link leaves $from for the browser. All of the address above goes to that website.",
+                    style = Type.small, color = p.textMuted,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = open) { Text("Open") } },
+        dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } },
+    )
+}
+
+/** Says that a link was not opened: one the confirmation could not show whole. */
+fun linkRefused(context: Context) {
+    Toast.makeText(context, "This link is too long or malformed to check, so it was not opened.", Toast.LENGTH_SHORT).show()
 }
 
 @Composable
@@ -116,13 +185,15 @@ private fun PageNotice(text: String) {
  * The only served response is the page in memory, with a CSP the document cannot
  * relax. No route in this WebView reads a file, a content provider or the network.
  */
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun StaticPage(document: ArtefactDocument) {
-    val context = LocalContext.current
+private fun StaticPage(document: ArtefactDocument, confirm: (LinkDestination) -> Unit) {
+    val ask by rememberUpdatedState(confirm)
     var opening by remember(document) { mutableStateOf(true) }
     var failed by remember(document) { mutableStateOf(false) }
-    val created = remember(document, context) { runCatching {
+    var unavailable by remember(document) { mutableStateOf(false) }
+    // Made in the factory, not in `remember`: a composition abandoned before it
+    // applies never made a WebView, and one that applied destroys it on release.
+    fun page(context: Context): WebView? = runCatching {
         val webView = WebView(context)
         try { webView.apply {
             settings.apply {
@@ -159,8 +230,9 @@ private fun StaticPage(document: ArtefactDocument) {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     val target = request.url.toString()
                     if (document.isAnchor(target)) return false
+                    // Nothing leaves from here: the person sees where it goes and confirms first.
                     if (WebLinks.opensFromPage(target, document.url, request.isForMainFrame, request.hasGesture(), request.isRedirect)) {
-                        openWebLink(context, target)
+                        WebLinks.destination(target)?.let(ask) ?: linkRefused(view.context)
                     }
                     return true
                 }
@@ -183,20 +255,19 @@ private fun StaticPage(document: ArtefactDocument) {
             }
             loadUrl(document.url)
         } } catch (error: Exception) { webView.destroy(); throw error }
-    } }
-    val view = created.getOrNull()
+    }.getOrNull()
     Box(Modifier.fillMaxSize()) {
-        if (view != null && !failed) {
+        if (!unavailable && !failed) key(document) {
             AndroidView(
-                factory = { view },
+                factory = { context -> page(context) ?: View(context).also { unavailable = true } },
                 modifier = Modifier.fillMaxSize(),
-                onRelease = { it.stopLoading(); it.destroy() },
+                onRelease = { (it as? WebView)?.run { stopLoading(); destroy() } },
             )
         }
-        if (failed || opening || view == null) {
+        if (failed || opening || unavailable) {
             Box(Modifier.fillMaxSize().background(palette.bg)) {
                 PageNotice(when {
-                    view == null -> "The page viewer is unavailable on this phone. You can still share the file."
+                    unavailable -> "The page viewer is unavailable on this phone. You can still share the file."
                     failed -> "This page could not be displayed. Close it and try again."
                     else -> "Opening the page…"
                 })
