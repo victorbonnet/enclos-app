@@ -33,6 +33,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.victorbonnet.enclos.Visible
 import org.commonmark.ext.autolink.AutolinkExtension
 import org.commonmark.ext.gfm.strikethrough.Strikethrough
 import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
@@ -61,6 +62,7 @@ import org.commonmark.node.SoftLineBreak
 import org.commonmark.node.StrongEmphasis
 import org.commonmark.node.ThematicBreak
 import org.commonmark.parser.Parser
+import java.net.URI
 import org.commonmark.node.Text as TextNode
 
 /**
@@ -70,6 +72,22 @@ import org.commonmark.node.Text as TextNode
  * HTML as its literal text, and only http, https and mailto links open.
  */
 object Markdown {
+    /**
+     * The most columns and rows of a table that are drawn, the header row
+     * included: each cell is composed and measured at once, and the table's
+     * width must stay one Compose can measure (see [fitting]).
+     */
+    const val TABLE_COLUMNS = 12
+    const val TABLE_ROWS = 50
+
+    /**
+     * The most pixels a hairline is measured across. Compose packs a size
+     * in `Constraints` with 13 to 18 bits a side; 32,766 fits whichever
+     * split it takes while the other side is no larger, so no table can
+     * make it throw.
+     */
+    const val MOST_PX = 32_766
+
     private val extensions = listOf(TablesExtension.create(), StrikethroughExtension.create(), AutolinkExtension.create())
     private val parser = Parser.builder().extensions(extensions).build()
 
@@ -87,6 +105,10 @@ object Markdown {
             is Code -> append(node.literal)
             is FencedCodeBlock -> append(node.literal).append(' ')
             is IndentedCodeBlock -> append(node.literal).append(' ')
+            // Shown as its literal text, so previewed and searched as it too:
+            // HTML keeps its text in `literal`, with no children.
+            is HtmlBlock -> append(node.literal).append(' ')
+            is HtmlInline -> append(node.literal)
             is SoftLineBreak, is HardLineBreak -> append(' ')
             else -> {
                 var child = node.firstChild
@@ -100,8 +122,64 @@ object Markdown {
         }
     }
 
-    /** Whether [url] may be opened from a message: the web and mail only. */
-    fun opens(url: String): Boolean = url.substringBefore(':').lowercase() in setOf("http", "https", "mailto")
+    /**
+     * Whether [url] may be opened from a message: a web address with a host
+     * and no user-info (`https://bank.example@evil.example` reads as the
+     * bank), or a mail address; nothing else, whatever its case.
+     */
+    fun opens(url: String): Boolean = runCatching {
+        val uri = URI(url)
+        when (uri.scheme?.lowercase()) {
+            "mailto" -> !uri.schemeSpecificPart.isNullOrBlank()
+            "http", "https" -> {
+                if (uri.isOpaque) return@runCatching false
+                // URL's host accepts international names, which URI.host leaves null.
+                val web = uri.toURL()
+                !web.host.isNullOrEmpty() && web.userInfo == null && web.port in -1..65535
+            }
+            else -> false
+        }
+    }.getOrDefault(false)
+
+    /** A table's rows, the header's first, each with whether it is the header and its cells. */
+    fun rows(table: TableBlock): List<Pair<Boolean, List<TableCell>>> {
+        val rows = mutableListOf<Pair<Boolean, List<TableCell>>>()
+        var section = table.firstChild
+        while (section != null) {
+            var row = section.firstChild
+            while (row != null) {
+                if (row is TableRow) {
+                    val cells = mutableListOf<TableCell>()
+                    var cell = row.firstChild
+                    while (cell != null) {
+                        if (cell is TableCell) cells += cell
+                        cell = cell.next
+                    }
+                    rows += (section is TableHead) to cells
+                }
+                row = row.next
+            }
+            section = section.next
+        }
+        return rows
+    }
+
+    /** Of a table of [columns] by [rows], the columns and rows drawn. */
+    fun shown(columns: Int, rows: Int): Pair<Int, Int> = minOf(columns, TABLE_COLUMNS) to minOf(rows, TABLE_ROWS)
+
+    /** [px] bounded to what Compose can measure, whatever a table's size. */
+    fun fitting(px: Int): Int = px.coerceIn(0, MOST_PX)
+
+    /** What a table drawn in part says of the rest, or null when it is drawn whole. */
+    fun cutNote(columns: Int, rows: Int): String? {
+        val (c, r) = shown(columns, rows)
+        if (c == columns && r == rows) return null
+        val parts = listOfNotNull(
+            if (c < columns) "$c of $columns columns" else null,
+            if (r < rows) "$r of $rows rows" else null,
+        )
+        return "Table too large: ${parts.joinToString(" and ")} shown"
+    }
 }
 
 /** A message's markdown, as blocks: paragraphs, headings, lists, quotes, code and tables. */
@@ -192,26 +270,13 @@ private fun CodeBlock(code: String) {
  */
 @Composable
 private fun Table(table: TableBlock, color: Color) {
-    val rows = mutableListOf<Pair<Boolean, List<TableCell>>>()
-    var section = table.firstChild
-    while (section != null) {
-        var row = section.firstChild
-        while (row != null) {
-            if (row is TableRow) {
-                val cells = mutableListOf<TableCell>()
-                var cell = row.firstChild
-                while (cell != null) {
-                    if (cell is TableCell) cells += cell
-                    cell = cell.next
-                }
-                rows += (section is TableHead) to cells
-            }
-            row = row.next
-        }
-        section = section.next
-    }
-    val columns = rows.maxOfOrNull { it.second.size } ?: return
+    val all = Markdown.rows(table)
+    val allColumns = all.maxOfOrNull { it.second.size } ?: return
+    // A table an agent wrote may be as large as a message: draw a part of it.
+    val (columns, shownRows) = Markdown.shown(allColumns, all.size)
+    val rows = all.take(shownRows)
     val p = palette
+    Markdown.cutNote(allColumns, all.size)?.let { Text(it, style = Type.small, color = p.textMuted) }
     Box(Modifier.horizontalScroll(rememberScrollState())) {
         Layout(
             content = {
@@ -235,7 +300,7 @@ private fun Table(table: TableBlock, color: Color) {
             val widths = (0 until columns).map { c -> rows.indices.maxOf { r -> placed[r * columns + c].width } }
             val heights = rows.indices.map { r -> (0 until columns).maxOf { c -> placed[r * columns + c].height } }
             val total = widths.sum()
-            val lines = measurables.drop(cellCount).map { it.measure(Constraints.fixed(total, 1.dp.roundToPx())) }
+            val lines = measurables.drop(cellCount).map { it.measure(Constraints.fixed(Markdown.fitting(total), 1.dp.roundToPx())) }
             layout(total, heights.sum()) {
                 var y = 0
                 rows.indices.forEach { r ->
@@ -252,24 +317,33 @@ private fun Table(table: TableBlock, color: Color) {
     }
 }
 
-/** A paragraph's, heading's or cell's inline content: emphasis, code, links and line breaks. */
-private fun inlines(parent: Node, p: Palette): AnnotatedString = buildAnnotatedString {
+/**
+ * A paragraph's, heading's or cell's inline content: emphasis, code, links
+ * and line breaks. A link's text drops hidden characters, so it cannot read
+ * as another address.
+ */
+internal fun inlines(parent: Node, p: Palette): AnnotatedString = buildAnnotatedString {
+    var inLink = false
     fun walk(node: Node) {
         var child = node.firstChild
         while (child != null) {
             when (child) {
-                is TextNode -> append(child.literal)
-                is Code -> withStyle(SpanStyle(fontFamily = Type.mono, fontSize = 13.sp, color = p.accent)) { append(child.literal) }
+                is TextNode -> append(if (inLink) Visible.stripped(child.literal) else child.literal)
+                is Code -> withStyle(SpanStyle(fontFamily = Type.mono, fontSize = 13.sp, color = p.accent)) { append(if (inLink) Visible.stripped(child.literal) else child.literal) }
                 is Emphasis -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { walk(child) }
                 is StrongEmphasis -> withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { walk(child) }
                 is Strikethrough -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { walk(child) }
                 // A single newline stays one: chat is written line by line.
                 is SoftLineBreak, is HardLineBreak -> append("\n")
-                is Link -> link(child.destination, p) { walk(child) }
+                is Link -> link(child.destination, p) {
+                    inLink = true
+                    walk(child)
+                    inLink = false
+                }
                 // Never fetched: the alt text, linking to the image when it is on the web.
                 is Image -> link(child.destination, p) {
                     val alt = Markdown.plain(buildString { var c = child.firstChild; while (c != null) { if (c is TextNode) append(c.literal); c = c.next } })
-                    append(alt.ifEmpty { "image" })
+                    append(Visible.stripped(alt).ifEmpty { "image" })
                     append(" ↗")
                 }
                 is HtmlInline -> append(child.literal)
