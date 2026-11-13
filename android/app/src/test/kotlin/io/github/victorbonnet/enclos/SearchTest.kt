@@ -57,8 +57,8 @@ class SearchTest {
     /** Newest first: coder's, then main's (its Home among them), then pi's. */
     private val sorted = listOf(code, weather, home, pi, again)
     private val unreadToo = mapOf("c-4" to 2)
-    private fun entries(unfolded: Set<String> = emptySet(), found: List<Found> = sorted.map { Found(it, null) }, narrowed: Boolean = false) =
-        byAgent(sorted, found, unfolded, { unreadToo[it] ?: 0 }, narrowed)
+    private fun entries(expanded: Set<String> = emptySet(), found: List<Found> = sorted.map { Found(it, null) }, narrowed: Boolean = false) =
+        byAgent(sorted, found, expanded, { unreadToo[it] ?: 0 }, narrowed)
 
     @Test
     fun each_agent_once_in_the_order_of_its_newest_conversation_its_home_on_its_row() {
@@ -100,11 +100,17 @@ class SearchTest {
     }
 
     @Test
-    fun folded_an_agent_shows_only_its_unread_conversations_unfolded_all_newest_first() {
-        assertEquals(listOf("c-4"), entries()[1].under.map { it.conversation.id })
-        assertEquals(emptyList<String>(), entries()[0].under.map { it.conversation.id })
-        val open = entries(unfolded = setOf("mac/lab/main"))[1]
-        assertEquals(listOf("c-1", "c-4"), open.under.map { it.conversation.id })
+    fun an_agent_shows_its_newest_conversations_and_older_unread_ones_expanded_all() {
+        // Eight of main's, newest first; o-8, the oldest, has something unread.
+        val many = (1..8).map { Conversation("mac", "lab/main", "o-$it") }
+        val list = listOf(home) + many
+        val unread = mapOf("o-8" to 1)
+        val entry = { expanded: Set<String> ->
+            byAgent(list, list.map { Found(it, null) }, expanded, { unread[it] ?: 0 }, narrowed = false).single()
+        }
+        assertEquals(listOf("o-1", "o-2", "o-3", "o-4", "o-5", "o-8"), entry(emptySet()).under.map { it.conversation.id })
+        assertEquals(8, entry(emptySet()).others)
+        assertEquals(many.map { it.id }, entry(setOf("mac/lab/main")).under.map { it.conversation.id })
     }
 
     @Test

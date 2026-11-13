@@ -30,28 +30,10 @@ class Saved(
  * Read off the main thread, in two passes: [recent], what the first screens
  * show, then [lines], every message.
  */
-class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", null, 2) {
-    override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL(
-            "CREATE TABLE conversations (id TEXT PRIMARY KEY, host TEXT NOT NULL, agent TEXT NOT NULL, title TEXT, titled_by TEXT, " +
-                "home INTEGER NOT NULL DEFAULT 0)",
-        )
-        // `seq` is the bridge's, increasing per host.
-        db.execSQL(
-            "CREATE TABLE messages (host TEXT NOT NULL, seq INTEGER NOT NULL, conversation TEXT NOT NULL, sender TEXT NOT NULL, " +
-                "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, PRIMARY KEY (host, seq))",
-        )
-        db.execSQL("CREATE INDEX messages_of ON messages (conversation, seq)")
-        db.execSQL(
-            "CREATE TABLE agents (host TEXT NOT NULL, name TEXT NOT NULL, runtime TEXT NOT NULL, capabilities TEXT NOT NULL, PRIMARY KEY (host, name))",
-        )
-    }
+class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", null, STORE_VERSION) {
+    override fun onCreate(db: SQLiteDatabase) = CREATE.forEach(db::execSQL)
 
-    // Step by step from the version on the phone, never by dropping what was kept.
-    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
-        // 2: an agent's Home conversation is marked.
-        if (old < 2) db.execSQL("ALTER TABLE conversations ADD COLUMN home INTEGER NOT NULL DEFAULT 0")
-    }
+    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) = upgrades(old).forEach(db::execSQL)
 
     /**
      * What the first screens show: the agents, every conversation with its
@@ -63,8 +45,13 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         val agents = db.rawQuery("SELECT host, name, runtime, capabilities FROM agents ORDER BY rowid", null).use { c ->
             c.rows { Agent(it.getString(0), it.getString(1), it.getString(2), strings(it.getString(3))) }
         }
-        val conversations = db.rawQuery("SELECT host, agent, id, title, titled_by, home FROM conversations ORDER BY rowid", null).use { c ->
-            c.rows { Conversation(it.getString(0), it.getString(1), it.getString(2), it.getStringOrNull(3), it.getStringOrNull(4), it.getInt(5) != 0) }
+        val conversations = db.rawQuery("SELECT host, agent, id, title, titled_by, home, members FROM conversations ORDER BY rowid", null).use { c ->
+            c.rows {
+                Conversation(
+                    it.getString(0), it.getString(1), it.getString(2), it.getStringOrNull(3), it.getStringOrNull(4), it.getInt(5) != 0,
+                    members = it.getStringOrNull(6)?.let(::strings).orEmpty(),
+                )
+            }
         }
         val lines = mutableMapOf<String, List<Line>>()
         // Each conversation's last message, through the (conversation, seq) index.
@@ -101,6 +88,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         time = c.getLong(5),
         attachments = attachments(c.getStringOrNull(6)),
         steps = steps(c.getStringOrNull(7)),
+        agent = c.getStringOrNull(8),
     )
 
     /** A conversation the bridge sent, new or renamed. */
@@ -111,6 +99,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
             put("title", c.title)
             put("titled_by", c.titledBy)
             put("home", if (c.home) 1 else 0)
+            put("members", if (c.members.isEmpty()) null else JSONArray(c.members).toString())
         }
         // An update, else an insert: Android 9 and 10's SQLite has no upsert.
         // insertOrThrow, not insert, which on a failure (a full disk) logs
@@ -134,6 +123,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
             put("time", line.time)
             if (line.attachments.isNotEmpty()) put("attachments", attachments(line.attachments))
             if (line.steps.isNotEmpty()) put("steps", steps(line.steps))
+            put("speaker", line.agent)
         }
         writableDatabase.insertWithOnConflict("messages", null, values, SQLiteDatabase.CONFLICT_IGNORE)
     }
@@ -189,7 +179,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
 
     private companion object {
         /** A message's columns, its conversation first, as [line] reads them. */
-        const val LINE = "conversation, seq, sender, text, kind, time, attachments, steps"
+        const val LINE = "conversation, seq, sender, text, kind, time, attachments, steps, speaker"
     }
 
     private fun android.database.Cursor.getStringOrNull(i: Int) = if (isNull(i)) null else getString(i)
@@ -258,5 +248,30 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
                 durationMs = if (it.has("duration_ms")) it.getLong("duration_ms") else null,
             )
         }
+    }
+}
+
+/** The database's version: [upgrades] brings an older one to it. */
+internal const val STORE_VERSION = 3
+
+/** A new database, at [STORE_VERSION]. */
+internal val CREATE = listOf(
+    "CREATE TABLE conversations (id TEXT PRIMARY KEY, host TEXT NOT NULL, agent TEXT NOT NULL, title TEXT, titled_by TEXT, " +
+        "home INTEGER NOT NULL DEFAULT 0, members TEXT)",
+    // `seq` is the bridge's, increasing per host.
+    "CREATE TABLE messages (host TEXT NOT NULL, seq INTEGER NOT NULL, conversation TEXT NOT NULL, sender TEXT NOT NULL, " +
+        "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, speaker TEXT, PRIMARY KEY (host, seq))",
+    "CREATE INDEX messages_of ON messages (conversation, seq)",
+    "CREATE TABLE agents (host TEXT NOT NULL, name TEXT NOT NULL, runtime TEXT NOT NULL, capabilities TEXT NOT NULL, PRIMARY KEY (host, name))",
+)
+
+/** What brings a database of version [old] to [STORE_VERSION]: step by step, never by dropping what was kept. */
+internal fun upgrades(old: Int): List<String> = buildList {
+    // 2: an agent's Home conversation is marked.
+    if (old < 2) add("ALTER TABLE conversations ADD COLUMN home INTEGER NOT NULL DEFAULT 0")
+    // 3: a group's members, and who of them said each message.
+    if (old < 3) {
+        add("ALTER TABLE conversations ADD COLUMN members TEXT")
+        add("ALTER TABLE messages ADD COLUMN speaker TEXT")
     }
 }

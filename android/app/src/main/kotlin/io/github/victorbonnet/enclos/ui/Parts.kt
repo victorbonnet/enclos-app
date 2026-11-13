@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -52,6 +53,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import kotlin.math.PI
 import kotlin.math.sin
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
@@ -152,6 +154,72 @@ fun AgentAvatar(name: String, live: Boolean, small: Boolean = false, working: Bo
     }
 }
 
+/**
+ * A sandbox: the Enclos mark, its corners around a filled square, in
+ * `accent` while its host is connected, `line-strong` otherwise.
+ */
+@Composable
+fun SandboxMark(live: Boolean, side: Dp = 32.dp) {
+    val color = if (live) palette.accent else palette.lineStrong
+    Box(Modifier.size(side), contentAlignment = Alignment.Center) {
+        Corners(color, Modifier.size(side), stroke = 2.dp)
+        Box(Modifier.size(side * 0.22f).background(color))
+    }
+}
+
+/**
+ * An agent's two colours: a hue from its name, so each agent keeps its own,
+ * deep enough for white letters in light and dark alike.
+ */
+private fun agentColors(name: String): Pair<Color, Color> {
+    val hue = ((name.hashCode() % 360) + 360) % 360f
+    return Color.hsl(hue, 0.42f, 0.46f) to Color.hsl((hue + 40f) % 360f, 0.48f, 0.32f)
+}
+
+/**
+ * An agent: a round picture of its own two colours, a diagonal blend, with
+ * the first letter of its name in white. While it is [working], a ring in
+ * `accent` swells out of it and fades, every 1.4 s; with animations off,
+ * the ring stays.
+ */
+@Composable
+fun AgentInitial(name: String, working: Boolean = false, side: Dp = 28.dp) {
+    val p = palette
+    val (from, to) = remember(name) { agentColors(name) }
+    Box(
+        Modifier.size(side).then(if (working) Modifier.semantics { contentDescription = "$name is working" } else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (working) {
+            if (animationsOff()) {
+                Box(Modifier.size(side + 6.dp).border(1.5.dp, p.accent, CircleShape))
+            } else {
+                val pulse = rememberInfiniteTransition(label = "active")
+                val t by pulse.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "pulse")
+                Box(
+                    Modifier.size(side).graphicsLayer {
+                        // Read here, the pulse redraws the ring without recomposing it.
+                        val grow = (t / 0.7f).coerceAtMost(1f)
+                        scaleX = 1f + 0.45f * grow
+                        scaleY = 1f + 0.45f * grow
+                        alpha = 0.8f * (1f - grow)
+                    }.border(2.dp, p.accent, CircleShape),
+                )
+            }
+        }
+        Box(
+            Modifier.size(side).clip(CircleShape).background(Brush.linearGradient(listOf(from, to))),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                name.take(1).uppercase(),
+                style = Type.name.copy(fontSize = (side.value * 0.44f).coerceAtLeast(11f).sp, fontWeight = FontWeight.SemiBold),
+                color = Color.White,
+            )
+        }
+    }
+}
+
 /** An unread count: a pill in `accent`. */
 @Composable
 fun UnreadBadge(count: Int) {
@@ -165,15 +233,6 @@ fun UnreadBadge(count: Int) {
     }
 }
 
-/** What a runtime's channel can do, in its own words: `full channel` outlined in `accent`. */
-@Composable
-fun CapabilityChip(text: String, full: Boolean) {
-    val color = if (full) palette.accent else palette.textMuted
-    Box(
-        Modifier.height(22.dp).border(1.dp, if (full) palette.accent else palette.lineStrong).padding(horizontal = 7.dp),
-        contentAlignment = Alignment.Center,
-    ) { Text(text, style = Type.meta, color = color, maxLines = 1) }
-}
 
 /** A host's connection: a filled square while connected, an outline otherwise. */
 @Composable
@@ -325,8 +384,21 @@ fun Bubble(
     outgoing: Boolean,
     header: String? = null,
     files: (@Composable () -> Unit)? = null,
+    speaker: String? = null,
 ) {
     val p = palette
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = if (outgoing) Alignment.End else Alignment.Start) {
+        // In a group, who of its members said it: its avatar and name above.
+        if (speaker != null && !outgoing) {
+            Row(
+                Modifier.padding(start = 2.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                AgentInitial(speaker, side = 20.dp)
+                Text(speaker, style = Type.meta.copy(fontWeight = FontWeight.SemiBold), color = p.textMuted)
+            }
+        }
     Box(Modifier.fillMaxWidth(), contentAlignment = if (outgoing) Alignment.CenterEnd else Alignment.CenterStart) {
         val shape = if (outgoing) Shapes.bubbleOut else Shapes.bubbleIn
         val base = Modifier.widthIn(max = 300.dp).clip(shape)
@@ -356,6 +428,7 @@ fun Bubble(
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
+    }
     }
 }
 

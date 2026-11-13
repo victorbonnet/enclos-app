@@ -23,6 +23,14 @@ import io.github.victorbonnet.enclos.ui.ThemeChoice
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,6 +60,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -63,6 +73,7 @@ import kotlinx.coroutines.withContext
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -85,9 +96,10 @@ import com.journeyapps.barcodescanner.ScanOptions
 import com.google.zxing.client.android.Intents
 import io.github.victorbonnet.enclos.core.coreVersion
 import io.github.victorbonnet.enclos.ui.AgentAvatar
+import io.github.victorbonnet.enclos.ui.AgentInitial
+import io.github.victorbonnet.enclos.ui.SandboxMark
 import io.github.victorbonnet.enclos.ui.AppBar
 import io.github.victorbonnet.enclos.ui.Bubble
-import io.github.victorbonnet.enclos.ui.CapabilityChip
 import io.github.victorbonnet.enclos.ui.Composer
 import io.github.victorbonnet.enclos.ui.ConnectionDot
 import io.github.victorbonnet.enclos.ui.Corners
@@ -119,12 +131,6 @@ import kotlinx.coroutines.delay
 /** The header of a message an agent sent on its own, such as a cron job's: the protocol does not say which job. */
 private const val ON_ITS_OWN = "on its own"
 
-/** What a runtime's channel can do, from the capabilities its plugin announced; none before it was reached. */
-private fun channel(agent: Agent): Pair<String, Boolean>? = when {
-    agent.capabilities.isEmpty() -> null
-    "notify" in agent.capabilities -> "full channel" to true
-    else -> "request/reply" to false
-}
 
 // ---------- Settings: sections and rows ----------
 
@@ -133,7 +139,7 @@ private fun channel(agent: Agent): Pair<String, Boolean>? = when {
  * then its rows, each ending with a hairline of its own.
  */
 @Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
+internal fun Section(title: String, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         Text(
             title.uppercase(),
@@ -148,7 +154,7 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 
 /** A row of a section: its content padded as every row is, then a hairline. */
 @Composable
-private fun SettingRow(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+internal fun SettingRow(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth().then(modifier)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), content = content)
         Hairline()
@@ -288,11 +294,25 @@ fun LockScreen(lock: LockState, unlock: () -> Unit, leave: () -> Unit) {
  * yet is not listed.
  */
 @Composable
-fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> Unit, pair: () -> Unit) {
+fun InboxScreen(
+    model: AppModel,
+    query: String,
+    unreadOnly: Boolean,
+    open: (String) -> Unit,
+    start: (Agent) -> Unit,
+    openAgent: (Agent) -> Unit,
+    pair: () -> Unit,
+) {
+    // "5 min ago" stays true while the screen shows.
+    val now by produceState(System.currentTimeMillis() / 1000) {
+        while (true) {
+            delay(30_000)
+            value = System.currentTimeMillis() / 1000
+        }
+    }
     val sorted = model.conversations.filter(model::listed)
         .sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: 0L }
-    var query by rememberSaveable { mutableStateOf("") }
-    var filter by remember { mutableStateOf<InboxFilter>(InboxFilter.All) }
+    val filter = if (unreadOnly) InboxFilter.Unread else InboxFilter.All
     // What search reads, taken here on the main thread: lists that are
     // replaced, never changed, when a message arrives.
     val said = sorted.associate { it.id to model.lines[it.id].orEmpty() }
@@ -312,21 +332,14 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
     }
     val found = if (query.isBlank()) listed else searched ?: listed
     val narrowed = query.isNotBlank() || filter != InboxFilter.All
-    val agents = byAgent(sorted, found, model.unfolded.toSet(), model::unread, narrowed)
+    // Groups have their own section; the agents' trees hold one-to-one conversations.
+    val groupsFound = found.filter { it.conversation.group }
+    val agents = byAgent(sorted.filter { !it.group }, found.filter { !it.conversation.group }, model.unfolded.toSet(), model::unread, narrowed)
+    // A section folded away stays so, except under a search: that shows all it finds.
+    val shown = { s: InboxSection -> query.isNotBlank() || s.name !in model.folded }
+    val unreadIn = { group: Boolean -> sorted.filter { it.group == group }.sumOf { model.unread(it.id) } }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            // Unread only sits on the title's line: in `accent` while on.
-            val unreadOnly = filter == InboxFilter.Unread
-            LargeTitle("Inbox", action = if (model.paired.isEmpty() || sorted.isEmpty()) null else {
-                {
-                    IconButton(
-                        if (unreadOnly) Glyphs.unreadOn else Glyphs.unreadOff,
-                        if (unreadOnly) "Show all conversations" else "Show unread only",
-                        { filter = if (unreadOnly) InboxFilter.All else InboxFilter.Unread },
-                        tint = if (unreadOnly) palette.accent else palette.textMuted,
-                    )
-                }
-            })
             when {
                 model.paired.isEmpty() -> Empty(
                     "No host yet.",
@@ -334,11 +347,27 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
                     "Pair a host →",
                     pair,
                 )
-                sorted.isEmpty() -> Empty("No conversation yet.", "Start one with an agent.", "Agents →", newConversation)
+                sorted.isEmpty() -> Empty("No conversation yet.", "Start one with the compose button below.", "Pair another host →", pair)
                 else -> {
-                    SearchField(query, { query = it })
                     LazyColumn(Modifier.weight(1f)) {
-                        item { Hairline() }
+                        val groupsShown = shown(InboxSection.Groups)
+                        val agentsShown = shown(InboxSection.Agents)
+                        if (groupsFound.isNotEmpty()) {
+                            item(key = "groups") {
+                                FoldHeading("Groups", groupsShown, if (groupsShown) 0 else unreadIn(true), query.isBlank()) { model.fold(InboxSection.Groups.name) }
+                            }
+                            if (groupsShown) {
+                                items(groupsFound, key = { "group:${it.conversation.id}" }) { f ->
+                                    Arriving { GroupRow(model, f.conversation, f.match, query, now) { open(f.conversation.id) } }
+                                }
+                                item(key = "groups-gap") { Gap(6.dp) }
+                            }
+                        }
+                        if (agents.isNotEmpty()) {
+                            item(key = "agents") {
+                                FoldHeading("Agents", agentsShown, if (agentsShown) 0 else unreadIn(false), query.isBlank()) { model.fold(InboxSection.Agents.name) }
+                            }
+                        }
                         if (found.isEmpty()) {
                             item {
                                 Text(
@@ -350,38 +379,328 @@ fun InboxScreen(model: AppModel, open: (String) -> Unit, newConversation: () -> 
                             }
                         }
                         // An agent that moves to the top slides there, its conversations with it.
-                        agents.forEach { entry ->
-                            val unfolded = entry.address in model.unfolded
+                        if (agentsShown) agents.forEach { entry ->
+                            val expanded = entry.address in model.unfolded
+                            val rows = entry.under
+                            // Searching shows everything found: no "more" then.
+                            val hidden = entry.others - rows.size
+                            val more = !narrowed && (hidden > 0 || (expanded && entry.others > RECENT))
+                            val toggle: () -> Unit = { if (expanded) model.unfolded.remove(entry.address) else model.unfolded.add(entry.address) }
+                            val agent = model.agents.firstOrNull { it.address == entry.address }
                             item(key = "agent:${entry.address}") {
                                 Arriving {
-                                    val fold = { if (unfolded) model.unfolded.remove(entry.address) else model.unfolded.add(entry.address) }
-                                    // Its Home; with none, its conversations.
-                                    AgentRow(model, entry, query) { entry.home?.let { open(it.id) } ?: fold() }
-                                }
-                            }
-                            items(entry.under, key = { it.conversation.id }) { f ->
-                                Arriving { ConversationRow(model, f.conversation, f.match, query) { open(f.conversation.id) } }
-                            }
-                            // A search or filter shows everything it found: nothing to fold.
-                            val hidden = entry.others - entry.under.size
-                            if (!narrowed && (unfolded || hidden > 0)) {
-                                item(key = "more:${entry.address}") {
-                                    Arriving {
-                                        MoreRow(entry.address.substringAfterLast('/'), hidden, entry.under.size, unfolded) {
-                                            if (unfolded) model.unfolded.remove(entry.address) else model.unfolded.add(entry.address)
-                                        }
+                                    AgentHead(
+                                        model,
+                                        entry,
+                                        query,
+                                        now,
+                                        branches = rows.isNotEmpty() || more,
+                                        menu = AgentMenu(
+                                            start = agent?.let { { start(it) } },
+                                            all = if (more) toggle else null,
+                                            expanded = expanded,
+                                            about = agent?.let { { openAgent(it) } },
+                                        ),
+                                    ) {
+                                        // Its Home; with none (an older bridge), its conversations.
+                                        entry.home?.let { open(it.id) } ?: toggle()
                                     }
                                 }
                             }
+                            items(rows.size, key = { rows[it].conversation.id }) { i ->
+                                val f = rows[i]
+                                Arriving {
+                                    TreeRow(model, f.conversation, f.match, query, now, last = i == rows.lastIndex && !more) { open(f.conversation.id) }
+                                }
+                            }
+                            if (more) {
+                                item(key = "more:${entry.address}") {
+                                    Arriving {
+                                        MoreBranch(if (expanded) "Show less" else "$hidden more ${if (hidden == 1) "conversation" else "conversations"}", expanded, toggle)
+                                    }
+                                }
+                            }
+                            item(key = "gap:${entry.address}") { Gap(14.dp) }
                         }
-                        item { Spacer(Modifier.height(88.dp)) }
+                        // Room for the search and compose bar over the list's end.
+                        item { Spacer(Modifier.height(96.dp)) }
                     }
                 }
             }
         }
-        if (model.paired.isNotEmpty()) {
-            Fab("New conversation", Glyphs.compose, newConversation, Modifier.align(Alignment.BottomEnd).padding(16.dp))
+    }
+}
+
+/**
+ * A group in the conversations view: its members' avatars, its name, the
+ * wave while a member answers or how long ago its last message was, and
+ * a chevron; under the name, its last message with who said it (or the
+ * message a search found), and its unread count.
+ */
+@Composable
+private fun GroupRow(model: AppModel, c: Conversation, match: Line?, query: String, now: Long, onClick: () -> Unit) {
+    val p = palette
+    val handles = c.members.map { it.substringAfterLast('/') }
+    val all = model.lines[c.id].orEmpty()
+    val last = match ?: (all.lastOrNull { !it.status } ?: all.lastOrNull())
+    val unread = model.unread(c.id)
+    val working = model.groups[c.id]?.state == "working"
+    Row(
+        Modifier.fillMaxWidth().clickable(onClickLabel = "Open the group", onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        MemberStack(handles, side = 32.dp)
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(c.title ?: handles.joinToString(", "), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                when {
+                    working -> WorkingWave(square = 4.dp, lift = 3.dp)
+                    last != null -> Text(Times.ago(last.time, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint)
+                }
+                Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+            }
+            Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val text = when {
+                    last == null -> "${handles.size} agents: ${handles.joinToString(" ") { "@$it" }}"
+                    last.from != "agent" -> "You: ${last.text}"
+                    else -> (last.agent?.substringAfterLast('/')?.let { "$it: " } ?: "") + remember(last.text) { words(last) }
+                }
+                Text(
+                    if (match != null) highlighted(text, query, p.accent) else AnnotatedString(text),
+                    style = Type.small,
+                    color = if (unread > 0) p.text else p.textMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (unread > 0) UnreadBadge(unread)
+            }
         }
+    }
+}
+
+/** Where the tree's trunk runs, under the agent's initial (16dp in, 32dp wide), and where its branches end. */
+private val TRUNK = 32.dp
+private val BRANCH = 18.dp
+
+/** Draws the tree beside a conversation: the trunk down (to the middle on the [last] one) and a branch to it. */
+private fun Modifier.branch(color: Color, last: Boolean) = drawBehind {
+    val x = TRUNK.toPx()
+    val mid = size.height / 2
+    val w = 1.dp.toPx()
+    drawLine(color, Offset(x, 0f), Offset(x, if (last) mid else size.height), w)
+    drawLine(color, Offset(x, mid), Offset(x + BRANCH.toPx(), mid), w)
+}
+
+/**
+ * An agent in the inbox: its initial (pulsing while it works), its name,
+ * then working (the wave) or how long ago it last said something, and a
+ * chevron; under the name, its Home's last message on one line (or, while
+ * it works, what it does), and Home's unread count. Tapping it opens its
+ * Home; a long press opens its [menu]. With conversations under it, the
+ * tree's trunk starts below the initial.
+ */
+@Composable
+private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Long, branches: Boolean, menu: AgentMenu, onOpen: () -> Unit) {
+    val p = palette
+    val name = entry.address.substringAfterLast('/')
+    val haptics = LocalHapticFeedback.current
+    var menuOpen by remember { mutableStateOf(false) }
+    val working = model.workingOn(entry.address)
+    val home = entry.home
+    val homeLines = home?.let { model.lines[it.id] }.orEmpty()
+    val last = homeLines.lastOrNull { !it.status } ?: homeLines.lastOrNull()
+    val unread = home?.let { model.unread(it.id) } ?: 0
+    val newest = model.lastAt(entry.address)
+    val line = p.lineStrong
+    Row(
+        Modifier.fillMaxWidth()
+            .combinedClickable(
+                onClickLabel = if (home != null) "Open $name's Home" else null,
+                onLongClickLabel = "More for $name",
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    menuOpen = true
+                },
+                onClick = onOpen,
+            )
+            .then(
+                if (branches) {
+                    Modifier.drawBehind {
+                        // The trunk, from under the initial down into the first conversation.
+                        val x = TRUNK.toPx()
+                        drawLine(line, Offset(x, (12.dp + 32.dp + 4.dp).toPx()), Offset(x, size.height), 1.dp.toPx())
+                    }
+                } else {
+                    Modifier
+                },
+            )
+            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        AgentInitial(name, working.isNotEmpty(), side = 32.dp)
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(name, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (working.isNotEmpty()) {
+                    WorkingWave(square = 4.dp, lift = 3.dp)
+                    Text("working", style = Type.small, color = p.accent)
+                } else if (newest != null) {
+                    Text(Times.ago(newest, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint)
+                }
+                Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+            }
+            Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val at = working.firstOrNull()
+                val shown = entry.homeMatch ?: last
+                val text = when {
+                    at != null && entry.homeMatch == null -> model.doing(at.id) ?: "working"
+                    shown == null -> if (home != null) "Cron jobs and the agent's notices come here." else ""
+                    shown.from == "agent" -> remember(shown.text) { words(shown) }
+                    else -> "You: ${shown.text}"
+                }
+                Text(
+                    if (entry.homeMatch != null) highlighted(text, query, p.accent) else AnnotatedString(text),
+                    style = Type.small,
+                    color = if (unread > 0) p.text else p.textMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (unread > 0) UnreadBadge(unread)
+            }
+            // Under the name, as the row's own options; here, it takes no room in the row.
+            DropdownMenu(menuOpen, { menuOpen = false }, offset = DpOffset((-8).dp, (-4).dp), modifier = Modifier.background(p.bg)) {
+                val pick = { action: () -> Unit ->
+                    menuOpen = false
+                    action()
+                }
+                menu.start?.let { MenuRow(Glyphs.compose, "New conversation") { pick(it) } }
+                menu.all?.let { MenuRow(Glyphs.inbox, if (menu.expanded) "Fewer conversations" else "All conversations") { pick(it) } }
+                menu.about?.let {
+                    Hairline()
+                    MenuRow(Glyphs.agents, "About $name") { pick(it) }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * What a long press on an agent in the inbox offers: a new conversation
+ * with it ([start]; none while its host does not list it), all its
+ * conversations or fewer ([all], when some are folded away), and its page
+ * ([about]).
+ */
+class AgentMenu(val start: (() -> Unit)?, val all: (() -> Unit)?, val expanded: Boolean, val about: (() -> Unit)?)
+
+@Composable
+private fun MenuRow(glyph: ImageVector, text: String, onClick: () -> Unit) {
+    val p = palette
+    DropdownMenuItem(
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { Glyph(glyph, p.text, size = 20.dp) }
+                Text(text, style = Type.name, color = p.text)
+            }
+        },
+        onClick = onClick,
+    )
+}
+
+/**
+ * A section's heading in the conversations view (or a host's, in the
+ * agents view), which folds it away or back: what it leads with ([lead],
+ * such as a host's connection), its name, the unread count of what it
+ * folds away, and a chevron
+ * pointing down while open; no line under it. Under a search ([foldable]
+ * false) it only names the section.
+ */
+@Composable
+private fun FoldHeading(
+    text: String,
+    open: Boolean,
+    unread: Int,
+    foldable: Boolean,
+    lead: (@Composable () -> Unit)? = null,
+    toggle: () -> Unit,
+) {
+    val p = palette
+    val turn by animateFloatAsState(if (open) 90f else 0f, Motion.change(Motion.MEDIUM), label = "fold")
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth()
+                .then(
+                    if (foldable) {
+                        Modifier.clickable(onClickLabel = if (open) "Fold $text away" else "Show $text", role = Role.Button, onClick = toggle)
+                    } else {
+                        Modifier
+                    },
+                )
+                .padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 8.dp)
+                .semantics(mergeDescendants = true) {
+                    heading()
+                    stateDescription = if (open) "Shown" else "Folded"
+                },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            lead?.invoke()
+            Text(text, style = Type.meta.copy(letterSpacing = 0.04.em), color = p.textMuted, maxLines = 1, modifier = Modifier.weight(1f))
+            if (unread > 0) UnreadBadge(unread)
+            if (foldable) Box(Modifier.rotate(turn)) { Glyph(Glyphs.chevron, p.textMuted, size = 16.dp) }
+        }
+    }
+}
+
+/**
+ * A conversation on the agent's tree, on one line: a small square in
+ * `accent` while it has something unread, its name ("No name yet" while it
+ * has none), the wave while the agent works on it or how long ago its last
+ * message was, and a chevron. Found by a message, that message shows under
+ * it, its words in `accent`.
+ */
+@Composable
+private fun TreeRow(model: AppModel, c: Conversation, match: Line?, query: String, now: Long, last: Boolean, onClick: () -> Unit) {
+    val p = palette
+    val unread = model.unread(c.id)
+    val latest = model.lines[c.id]?.lastOrNull()
+    Column(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).branch(p.lineStrong, last)
+            .padding(start = 60.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (unread > 0) Box(Modifier.size(7.dp).background(p.accent).semantics { contentDescription = "$unread unread" })
+            Text(
+                c.title?.let { highlighted(it, query, p.accent) } ?: AnnotatedString("No name yet"),
+                style = Type.name.copy(fontSize = 15.sp, fontWeight = if (unread > 0) FontWeight.SemiBold else FontWeight.Normal),
+                color = if (c.title != null) p.text else p.textMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            when {
+                model.working(c.id) -> WorkingWave(square = 4.dp, lift = 3.dp)
+                latest != null -> Text(Times.ago(latest.time, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint, maxLines = 1)
+            }
+            Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+        }
+        if (match != null) Preview(match, true, query, false, "", model.statusSource(c), Modifier.padding(top = 2.dp))
+    }
+}
+
+/** The tree's last branch when more is folded away: "2 more conversations", or Show less, and a chevron. */
+@Composable
+private fun MoreBranch(text: String, expanded: Boolean, onClick: () -> Unit) {
+    val p = palette
+    Row(
+        Modifier.fillMaxWidth().clickable(onClickLabel = text, role = Role.Button, onClick = onClick).branch(p.lineStrong, last = true)
+            .padding(start = 60.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(text, style = Type.small, color = p.textMuted)
+        Box(Modifier.rotate(if (expanded) -90f else 0f)) { Glyph(Glyphs.chevron, p.textMuted, size = 14.dp) }
     }
 }
 
@@ -431,7 +750,7 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
 
 /** A choice among a few, outlined in `accent` when chosen (filters, the theme). */
 @Composable
-private fun Choice(label: String, on: Boolean, onClick: () -> Unit) {
+internal fun Choice(label: String, on: Boolean, onClick: () -> Unit) {
     val p = palette
     val edge by animateColorAsState(if (on) p.accent else p.lineStrong, Motion.change(), label = "edge")
     val text by animateColorAsState(if (on) p.accent else p.textMuted, Motion.change(), label = "text")
@@ -444,7 +763,7 @@ private fun Choice(label: String, on: Boolean, onClick: () -> Unit) {
 }
 
 /** [text] with the words of [query] in `accent`, where search found them: its own rules (case, accents, spaces). */
-private fun highlighted(text: String, query: String, accent: Color): AnnotatedString = buildAnnotatedString {
+internal fun highlighted(text: String, query: String, accent: Color): AnnotatedString = buildAnnotatedString {
     append(text)
     matches(text, query).forEach { range ->
         addStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold), range.first, range.last + 1)
@@ -638,14 +957,16 @@ private fun MoreRow(name: String, hidden: Int, shown: Int, unfolded: Boolean, on
 // ---------- Agents ----------
 
 /**
- * The agents at work first, each with what it does and where (tap one to
- * open that conversation); then hosts, their sandboxes and their agents,
- * whatever the runtime, each working or with when it was last active; tap
- * an agent to start a conversation.
+ * Every agent, under its host's heading (its connection and name, which
+ * folds the host away and back, kept across starts), then its sandbox's
+ * (the Enclos mark, the sandbox, its runtime), each as the conversations view shows it, without
+ * its conversations: its initial (pulsing while it works), its name, and
+ * working or when it was last active. Tapping one opens its page; tapping
+ * a heading, its sandbox's page (`host/sandbox`). [query] keeps those
+ * whose address or runtime has every word of it.
  */
 @Composable
-fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, open: (String) -> Unit, pair: () -> Unit) {
-    val p = palette
+fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, openSandbox: (String) -> Unit, pair: () -> Unit) {
     // "5 min ago" stays true while the screen shows.
     val now by produceState(System.currentTimeMillis() / 1000) {
         while (true) {
@@ -653,161 +974,123 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, open: (String) -> Unit
             value = System.currentTimeMillis() / 1000
         }
     }
-    val busy = model.agents.mapNotNull { a -> model.workingOn(a).takeIf { it.isNotEmpty() }?.let { a to it } }
-    Column(Modifier.fillMaxSize()) {
-        // Pairing another host sits on the title's line: no bar above it.
-        LargeTitle("Agents") { IconButton(Glyphs.qr, "Pair a host", pair) }
-        if (model.paired.isEmpty()) {
+    if (model.paired.isEmpty()) {
+        Column(Modifier.fillMaxSize()) {
             Empty("No host yet.", "On a host, run enclos app serve, then enclos app pair, and scan its code.", "Pair a host →", pair)
-            return
         }
-        LazyColumn(Modifier.weight(1f)) {
-            if (busy.isNotEmpty()) {
-                item(key = "working") {
+        return
+    }
+    val words = fold(query).split(' ').filter { it.isNotEmpty() }
+    val shown = model.agents.filter { a -> words.all { it in fold("${a.address} ${a.runtime}") } }
+    LazyColumn(Modifier.fillMaxSize()) {
+        model.paired.forEach { host ->
+            val live = model.connected(host.name)
+            val its = shown.filter { it.host == host.name }
+            // A search shows only the hosts with something found, unfolded.
+            if (query.isNotBlank() && its.isEmpty()) return@forEach
+            val key = model.hostFold(host.name)
+            val open = query.isNotBlank() || key !in model.folded
+            item(key = key) {
+                FoldHeading(host.name, open, 0, query.isBlank(), lead = { ConnectionDot(live) }) { model.fold(key) }
+            }
+            if (!open) return@forEach
+            if (its.isEmpty()) {
+                item(key = "$key-none") {
+                    Text("No agent yet: the host lists them once connected.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
+                }
+            }
+            its.groupBy { it.sandbox }.forEach { (sandbox, agents) ->
+                item(key = "sandbox-${host.name}-$sandbox") {
                     Arriving {
-                        Column {
-                            Hairline()
-                            Text(
-                                "Working now · ${busy.size}",
-                                style = Type.label,
-                                color = p.text,
-                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp).semantics { heading() },
-                            )
-                        }
+                        val runtime = agents.first().runtime.replaceFirstChar { it.uppercase() }
+                        ListHeading(sandbox, runtime, open = { openSandbox("${host.name}/$sandbox") }, top = 12.dp) { SandboxMark(live, side = 16.dp) }
                     }
                 }
-                items(busy, key = { "working-${it.first.address}" }) { (agent, on) ->
-                    Arriving { WorkingRow(model, agent, on) { open(on.first().id) } }
-                }
-                item(key = "working-end") { Arriving { Gap(8.dp) } }
-            }
-            model.paired.forEach { host ->
-                val live = model.connected(host.name)
-                item(key = "host-${host.name}") {
-                    Column {
-                        Hairline()
-                        Row(
-                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            ConnectionDot(live)
-                            Text(host.name, style = Type.code.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold), color = p.text)
-                            Text(
-                                if (live) "connected · tailnet" else model.status[host.name] ?: "not connected",
-                                style = Type.code,
-                                color = p.textFaint,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                                textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                            )
-                        }
-                    }
-                }
-                model.agents.filter { it.host == host.name }.groupBy { it.sandbox }.forEach { (sandbox, agents) ->
-                    item(key = "sandbox-${host.name}-$sandbox") {
-                        Row(
-                            Modifier.fillMaxWidth().padding(start = 34.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(sandbox, style = Type.code.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold), color = p.text)
-                            Text(agents.first().runtime.replaceFirstChar { it.uppercase() }, style = Type.small, color = p.textMuted)
-                            // Known once the bridge reached the agent: it fades in then.
-                            val chip = channel(agents.first())
-                            AnimatedVisibility(chip != null, enter = fadeIn(Motion.enter()), exit = fadeOut(Motion.exit())) {
-                                chip?.let { (text, full) -> CapabilityChip(text, full) }
-                            }
-                        }
-                    }
-                    items(agents, key = { "agent-${it.address}" }) { agent ->
-                        val working = busy.any { it.first == agent }
-                        Row(
-                            Modifier.fillMaxWidth().clickable(onClickLabel = "New conversation", onClick = { start(agent) })
-                                .padding(start = 34.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            AgentAvatar(agent.agent, live, small = true, working = working)
-                            Column(Modifier.weight(1f)) {
-                                Text(agent.agent, style = Type.name.copy(fontSize = 15.sp), color = p.text)
-                                // Working, or when it last sent a message; its address before its first.
-                                Crossfade(working, animationSpec = Motion.change(), label = "activity") { on ->
-                                    if (on) {
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Text("working", style = Type.small, color = p.accent)
-                                            WorkingWave(square = 4.dp, lift = 3.dp)
-                                        }
-                                    } else {
-                                        val last = model.lastActive(agent)
-                                        if (last != null) {
-                                            Text("active ${Times.ago(last, now)}", style = Type.small, color = p.textMuted)
-                                        } else {
-                                            Text(agent.address, style = Type.code, color = p.textFaint)
-                                        }
-                                    }
-                                }
-                            }
-                            Glyph(Glyphs.plus, p.accent, size = 20.dp)
-                        }
-                    }
+                items(agents, key = { "agent-${it.address}" }) { agent ->
+                    Arriving { AgentListRow(model, agent, now) { openAgent(agent) } }
                 }
             }
-            item { Gap(16.dp) }
+            item(key = "$key-gap") { Gap(8.dp) }
         }
+        if (shown.isEmpty() && query.isNotBlank()) {
+            item {
+                Text("No agent matches.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
+            }
+        }
+        // Room for the search and compose bar over the list's end.
+        item { Spacer(Modifier.height(96.dp)) }
+    }
+}
+
+/** An agent, as the conversations view shows it, without its conversations: tapping it opens its page. */
+@Composable
+internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () -> Unit) {
+    val p = palette
+    val working = model.workingOn(agent)
+    Row(
+        Modifier.fillMaxWidth().clickable(onClickLabel = "Open ${agent.agent}", onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        AgentInitial(agent.agent, working.isNotEmpty(), side = 32.dp)
+        Column(Modifier.weight(1f)) {
+            Text(agent.agent, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (working.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    WorkingWave(square = 4.dp, lift = 3.dp)
+                    Text(model.doing(working.first().id) ?: "working", style = Type.small, color = p.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            } else {
+                val last = model.lastActive(agent)
+                Text(if (last != null) "active ${Times.ago(last, now)}" else "no message yet", style = Type.small, color = p.textMuted)
+            }
+        }
+        Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
     }
 }
 
 /**
- * An agent at work, in Agents: its avatar pulsing, its name and where it
- * works (the conversation, or how many), the wave and the tool it runs.
- * Tapping it opens the conversation with the newest message.
+ * A heading of a list, small and faint with no line under it, with what
+ * it leads with ([lead], such as a sandbox's mark) and a note at its end;
+ * with [open], a chevron after the note, and tapping it opens what it
+ * names. [top] is the room above it.
  */
 @Composable
-private fun WorkingRow(model: AppModel, agent: Agent, on: List<Conversation>, onClick: () -> Unit) {
+internal fun ListHeading(
+    text: String,
+    note: String? = null,
+    open: (() -> Unit)? = null,
+    top: androidx.compose.ui.unit.Dp = 28.dp,
+    lead: (@Composable () -> Unit)? = null,
+) {
     val p = palette
-    val first = on.first()
-    val where = if (on.size > 1) {
-        "in ${on.size} conversations"
-    } else {
-        "in ${first.title ?: if (first.home) "Home" else "a new conversation"}"
-    }
-    Row(
-        Modifier.fillMaxWidth().clickable(onClickLabel = "Open the conversation", onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        AgentAvatar(agent.agent, model.connected(agent.host), working = true)
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(agent.agent, style = Type.name, color = p.text, maxLines = 1)
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth()
+                .then(if (open != null) Modifier.clickable(onClickLabel = "Open $text", onClick = open) else Modifier)
+                .padding(start = 16.dp, end = 16.dp, top = top, bottom = 8.dp).semantics(mergeDescendants = true) { heading() },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            lead?.invoke()
+            Text(text, style = Type.meta.copy(letterSpacing = 0.04.em), color = p.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (note != null) {
                 Text(
-                    where,
-                    style = Type.small,
-                    color = p.textMuted,
+                    note,
+                    style = Type.meta,
+                    color = p.textFaint,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false).padding(bottom = 1.dp),
+                    modifier = Modifier.weight(1f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
                 )
             }
-            Row(
-                Modifier.padding(top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                WorkingWave(square = 4.dp, lift = 3.dp)
-                Text(
-                    model.doing(first.id) ?: "working",
-                    style = Type.small,
-                    color = p.accent,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            if (open != null) {
+                if (note == null) Spacer(Modifier.weight(1f))
+                Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
             }
         }
-        Glyph(Glyphs.chevron, p.textMuted, size = 20.dp)
     }
 }
 
@@ -941,11 +1224,20 @@ fun SettingsScreen(model: AppModel, pair: () -> Unit, ask: Ask) {
 @Composable
 fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val p = palette
-    val conversation = model.conversations.firstOrNull { it.id == id } ?: return
+    val conversation = model.conversations.firstOrNull { it.id == id }
+    if (conversation == null) {
+        // A group the bridge would not start: gone, saying why.
+        model.refusedGroups[id]?.let { GroupRefused(it, back) }
+        return
+    }
     val lines = model.lines[id].orEmpty()
     val agent = conversation.agent.substringAfter('/')
     val live = model.connected(conversation.host)
-    val working = model.working(id)
+    // A group's members by handle, and where its discussion is.
+    val handles = conversation.members.map { it.substringAfterLast('/') }
+    val status = model.groups[id]
+    val turnOf = status?.turns?.firstOrNull { it.second == "working" }?.first?.substringAfterLast('/')
+    val working = if (conversation.group) status?.state == "working" else model.working(id)
     // What the person writes, kept when they leave and come back.
     val draft = model.unsent[id].orEmpty()
     // Why the last message could not go (too long, say): the draft stays.
@@ -978,7 +1270,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
-            AgentAvatar(agent, live, small = true)
+            if (conversation.group) MemberStack(handles, side = 30.dp) else AgentAvatar(agent, live, small = true)
             // Its name, and the agent under it; tap to rename.
             Column(Modifier.weight(1f).clickable(onClickLabel = "Rename the conversation") { renaming = true }) {
                 Text(
@@ -989,7 +1281,11 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    if (conversation.title != null) "$agent · ${conversation.host}/${conversation.agent}" else "${conversation.host}/${conversation.agent}",
+                    when {
+                        conversation.group -> handles.joinToString(" ") { "@$it" } + " · ${conversation.host}/${conversation.agent}"
+                        conversation.title != null -> "$agent · ${conversation.host}/${conversation.agent}"
+                        else -> "${conversation.host}/${conversation.agent}"
+                    },
                     style = Type.code,
                     color = p.textFaint,
                     maxLines = 1,
@@ -1010,7 +1306,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         ) {
             model.said[conversation.host]?.let { item(key = "said") { Arriving { SystemLine("The bridge said: $it") } } }
             if (!live) item(key = "status") { Arriving { SystemLine(model.status[conversation.host] ?: "not connected") } }
-            if (working) item(key = "working") { Arriving { WorkingBubble(agent) } }
+            if (working) item(key = "working") { Arriving { WorkingBubble(turnOf ?: agent) } }
             // The tools it runs now, above the working bubble; a turn that
             // ended with no answer shows none.
             val running = model.steps[id].orEmpty()
@@ -1030,7 +1326,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             text = line.text,
                             time = Times.clock(line.time),
                             outgoing = line.from != "agent",
-                            header = if (line.kind == "notify") ON_ITS_OWN else null,
+                            header = if (line.kind == "notify" && !conversation.group) ON_ITS_OWN else null,
+                            speaker = line.agent?.substringAfterLast('/'),
                             files = line.attachments.takeIf { it.isNotEmpty() }?.let { attached ->
                                 { Files(attached, model.files) { model.fetch(conversation.host, it) } }
                             },
@@ -1051,10 +1348,17 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 if (i == 0 || Times.day(lines[i - 1].time) != day) item(key = "day-${line.seq}") { Arriving { DaySeparator(day) } }
             }
         }
-        // The agent's commands that match what is typed after `/`; picking one puts it in the field.
-        val known = model.commands["${conversation.host}/${conversation.agent}"].orEmpty()
-        val offered = remember(known, draft) { suggest(known, draft) }
-        CommandSuggestions(offered, draft.drop(1)) { model.unsent[id] = picked(it) }
+        if (conversation.group) {
+            // Members to address, as the person types `@`.
+            val members = remember(handles, draft) { mentionsFor(handles, draft) }
+            MentionSuggestions(members) { model.unsent[id] = mentioned(draft, it) }
+            if (status != null) GroupStrip(status, turnOf) { model.stopGroup(conversation) }
+        } else {
+            // The agent's commands that match what is typed after `/`; picking one puts it in the field.
+            val known = model.commands["${conversation.host}/${conversation.agent}"].orEmpty()
+            val offered = remember(known, draft) { suggest(known, draft) }
+            CommandSuggestions(offered, draft.drop(1)) { model.unsent[id] = picked(it) }
+        }
         // Not connected: write, but nothing goes until the host is back. A
         // message the bridge did not get is back in the field, saying so; one
         // that could not go (too long) stays, saying why.
@@ -1066,7 +1370,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 unsent = null
                 model.outgoing.write(id, it)
             },
-            "Message $agent",
+            if (conversation.group) "Message the group, @ to address" else "Message $agent",
             canSend = live,
             notice = listOfNotNull(unsent, notSent, away).joinToString(" ").ifEmpty { null },
         ) {
@@ -1074,6 +1378,91 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             unsent = model.send(conversation, draft.trim())
             // What the person just sent shows, wherever they had scrolled.
             if (unsent == null) atNewest = true
+        }
+    }
+}
+
+/** A group's members' avatars, overlapping, at most three. */
+@Composable
+internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.Dp = 32.dp) {
+    val shown = handles.take(3)
+    val step = side * 0.55f
+    Box(Modifier.size(width = side + step * (shown.size - 1).coerceAtLeast(0), height = side)) {
+        shown.forEachIndexed { i, h ->
+            Box(
+                Modifier.padding(start = step * i).size(side).clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(palette.bg).padding(1.5.dp),
+            ) { AgentInitial(h, side = side - 3.dp) }
+        }
+    }
+}
+
+/**
+ * The members to address, over the field, as the person types `@` in a
+ * group: each with its avatar and `@handle`, `@all` last; picking one puts
+ * it in the field.
+ */
+@Composable
+private fun MentionSuggestions(offered: List<String>, onPick: (String) -> Unit) {
+    val p = palette
+    AnimatedVisibility(
+        offered.isNotEmpty(),
+        enter = fadeIn(Motion.enter(Motion.SHORT)) + expandVertically(Motion.enter(Motion.SHORT), expandFrom = Alignment.Bottom),
+        exit = fadeOut(Motion.exit()) + shrinkVertically(Motion.exit(), shrinkTowards = Alignment.Bottom),
+    ) {
+        Column(Modifier.fillMaxWidth().background(p.surface)) {
+            Hairline()
+            offered.forEach { h ->
+                Row(
+                    Modifier.fillMaxWidth().clickable(onClickLabel = "Address @$h") { onPick(h) }.padding(horizontal = 16.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (h == "all") {
+                        Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) { Glyph(Glyphs.inbox, p.textMuted, size = 20.dp) }
+                    } else {
+                        AgentInitial(h, side = 26.dp)
+                    }
+                    Text("@$h", style = Type.code.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), color = p.text)
+                    if (h == "all") Text("everyone answers", style = Type.small, color = p.textMuted)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Where a group's discussion is, over the field: who works now (the wave)
+ * and Stop; settled; bounded and why; stopped; failed.
+ */
+@Composable
+private fun GroupStrip(status: GroupStatus, turnOf: String?, onStop: () -> Unit) {
+    val p = palette
+    val text = when (status.state) {
+        "working" -> if (turnOf != null) "@$turnOf is answering · round ${status.round + 1} of ${status.maxRounds}" else "Working"
+        "settled" -> "Settled"
+        "bounded" -> if (status.reason == "max_replies") "Paused: reply limit reached" else "Paused after ${status.maxRounds} rounds"
+        "stopped" -> "Stopped"
+        "failed" -> "Failed" + (status.reason?.let { ": $it" } ?: "")
+        else -> return
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Hairline()
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (status.state == "working") WorkingWave(square = 4.dp, lift = 3.dp)
+            Text(
+                text,
+                style = Type.small,
+                color = if (status.state == "working") p.accent else p.textMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (status.state == "working") TextLink("Stop", onStop) else Spacer(Modifier.height(44.dp))
         }
     }
 }
@@ -1211,7 +1600,7 @@ private fun DialogButton(text: String, enabled: Boolean = true, onClick: () -> U
  * place when others arrive, and fades out when it goes.
  */
 @Composable
-private fun LazyItemScope.Arriving(content: @Composable () -> Unit) {
+internal fun LazyItemScope.Arriving(content: @Composable () -> Unit) {
     Box(
         Modifier.fillMaxWidth().animateItem(
             fadeInSpec = Motion.enter(),

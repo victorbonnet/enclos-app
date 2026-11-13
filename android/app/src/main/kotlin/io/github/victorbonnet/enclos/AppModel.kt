@@ -55,6 +55,8 @@ data class Line(
     val attachments: List<Attachment> = emptyList(),
     /** The tools the agent ran for this answer, which the bridge does not keep: this phone does. */
     val steps: List<Step> = emptyList(),
+    /** In a group, the member who said it (`host/sandbox/agent`); none otherwise. */
+    val agent: String? = null,
 )
 
 /** A file of a message, fetched from the bridge when it is shown. */
@@ -69,6 +71,9 @@ sealed interface FileState {
     data class Ready(val file: java.io.File) : FileState
     data class Failed(val why: String) : FileState
 }
+
+/** A section of the conversations view, which the person may fold away. */
+enum class InboxSection { Groups, Agents }
 
 /** A conversation: its host, agent (`<sandbox>/<agent>`) and id. */
 data class Conversation(
@@ -85,6 +90,26 @@ data class Conversation(
      * first, never hidden as empty.
      */
     val home: Boolean = false,
+    /**
+     * A group's members (`sandbox/agent` each), in its order; none for a
+     * conversation with one agent. A group's [agent] is its sandbox.
+     */
+    val members: List<String> = emptyList(),
+) {
+    val group: Boolean get() = members.isNotEmpty()
+}
+
+/**
+ * Where a group's discussion is, as its bridge said: [state] `working`,
+ * `settled`, `bounded`, `stopped` or `failed`; each member's turn
+ * (`queued`, `working`, `replied`, `passed`, `failed`, `cancelled`).
+ */
+data class GroupStatus(
+    val state: String,
+    val round: Int,
+    val maxRounds: Int,
+    val turns: List<Pair<String, String?>>,
+    val reason: String?,
 )
 
 /**
@@ -122,8 +147,8 @@ val Line.status: Boolean get() = kind == "status"
 /** The agent's messages among [lines] after [read]; a status line never counts. */
 internal fun unreadAmong(lines: List<Line>, read: Long): Int = lines.count { it.from == "agent" && !it.status && it.seq > read }
 
-/** Whether the inbox lists [conversation], whose messages are [lines]: once something was said in it, and an agent's Home always. */
-internal fun listedWith(conversation: Conversation, lines: List<Line>): Boolean = conversation.home || lines.isNotEmpty()
+/** Whether the inbox lists [conversation], whose messages are [lines]: once something was said in it, an agent's Home and a group always. */
+internal fun listedWith(conversation: Conversation, lines: List<Line>): Boolean = conversation.home || conversation.group || lines.isNotEmpty()
 
 /** The pairing in progress: what the link said, and how far it went. */
 data class Pairing(
@@ -312,10 +337,24 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** The agents (`host/sandbox/agent`) whose conversations the inbox shows unfolded, while the app runs. */
     val unfolded = mutableStateListOf<String>()
 
+    /**
+     * What the person folded away, kept across starts: the inbox's sections
+     * (an [InboxSection]'s name) and the agents view's hosts ([hostFold]).
+     */
+    val folded = mutableStateListOf<String>().apply { addAll(settings.getStringSet("folded", null).orEmpty()) }
+
+    /** Folds [key] away, or unfolds it. */
+    fun fold(key: String) {
+        if (!folded.remove(key)) folded.add(key)
+        settings.edit { putStringSet("folded", folded.toSet()) }
+    }
+
+    /** A host's key in [folded]. */
+    fun hostFold(host: String) = "host:$host"
+
     init {
         // The inbox is always by agent now: the earlier choice to group it goes.
-        if (settings.contains("inbox.grouped")) settings.edit { remove("inbox.grouped") }
-    }
+        if (settings.contains("inbox.grouped")) settings.edit { remove("inbox.grouped") }    }
 
     private fun ui(block: () -> Unit) = main.post(block)
 
@@ -671,14 +710,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val id = m.getString("conversation")
                 // Started on the bridge: no longer a draft.
                 drafts -= id
-                val known = Conversation(
-                    host.name,
-                    m.getString("agent"),
-                    id,
-                    shownTitle(m.optString("title")),
-                    m.optString("titled_by").ifBlank { null },
-                    home = m.optBoolean("home"),
-                )
+                val known = conversationOf(host.name, m)
+                // A group started here: the bridge made it.
+                startingGroups.values.remove(id)
                 val at = conversations.indexOfFirst { it.id == id }
                 if (at < 0 || conversations[at] != known) {
                     if (at < 0) conversations.add(known) else conversations[at] = known
@@ -712,7 +746,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "message" -> {
                 val id = m.getString("conversation")
-                var line = lineIn(m)
+                // In a group, who of its members said it; read before anything
+                // changes, as a message the app cannot read ends the connection.
+                var line = lineOf(host.name, m, group = conversations.firstOrNull { it.id == id }?.group == true)
+                // The bridge sends a conversation before its messages, at a
+                // sync and when one starts, so this is for an older bridge:
+                // the conversation is then taken as one with a single agent,
+                // and in a group its speakers would be lost.
                 if (conversations.none { it.id == id }) {
                     val started = Conversation(host.name, m.getString("agent"), id)
                     conversations.add(started)
@@ -754,6 +794,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     if (unsettled > (lastRead[id] ?: 0L)) read(id, unsettled)
                 }
             }
+            // Where a group's discussion is.
+            "group.state" -> groups[m.getString("conversation")] = groupStatusOf(host.name, m)
             "typing" -> {
                 val id = m.getString("conversation")
                 if (m.optBoolean("on")) {
@@ -796,14 +838,20 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     fetching.remove(file)
                     files[file] = FileState.Failed(m.optString("message"))
                 } else {
-                    // A message it refused goes back in its field, saying why; any other is the bridge's word.
                     val of = m.optString("of")
-                    if (outgoing.refused(of, m.optString("message").ifBlank { "the bridge refused it" }) == null) {
-                        said[host.name] = m.optString("message")
+                    // A group the bridge would not start: gone from the phone, saying why.
+                    val group = startingGroups.remove(of)
+                    if (group != null) {
+                        refused(group, m.optString("message").ifBlank { "the bridge refused it" })
+                    } else {
+                        // A message it refused goes back in its field, saying why; any other is the bridge's word.
+                        if (outgoing.refused(of, m.optString("message").ifBlank { "the bridge refused it" }) == null) {
+                            said[host.name] = m.optString("message")
+                        }
+                        // The bridge refused a message of the person's (the agent is
+                        // not reachable, say): nothing will answer it now.
+                        unanswered.refused(of)?.let { stillAwaiting(it) }
                     }
-                    // The bridge refused a message of the person's (the agent is
-                    // not reachable, say): nothing will answer it now.
-                    unanswered.refused(of)?.let { stillAwaiting(it) }
                 }
             }
         }
@@ -831,13 +879,65 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         conversations.removeAll { it.id == conversation }
     }
 
-    /** Whether the inbox lists [conversation]: once something was said in it, and an agent's Home always. */
+    /** Whether the inbox lists [conversation]: once something was said in it, an agent's Home and a group always. */
     fun listed(conversation: Conversation) = listedWith(conversation, lines[conversation.id].orEmpty())
 
     /** Who a status line of [conversation] is from: its agent's runtime, else the agent. */
     fun statusSource(conversation: Conversation): String =
         agents.firstOrNull { it.host == conversation.host && it.name == conversation.agent }?.runtime?.ifBlank { null }
             ?: conversation.agent.substringAfter('/')
+
+    /**
+     * Starts a group of [members] (two to six agents of one sandbox of
+     * one host) named [title] (their names when blank); returns its id.
+     * The bridge confirms it with the group's conversation.
+     */
+    fun newGroup(members: List<Agent>, title: String): String? {
+        val host = members.firstOrNull()?.host ?: return null
+        if (!connected(host)) return null
+        val connection = connections[host] ?: return null
+        val id = UUID.randomUUID().toString()
+        val names = members.map { it.name }
+        val message = message("group.new", "conversation" to id, "members" to org.json.JSONArray(names))
+        if (title.isNotBlank()) message.put("title", title.trim())
+        if (!connection.send(message)) return null
+        startingGroups[message.getString("id")] = id
+        // Shown at once, as the bridge will send it: its members `sandbox/agent`, as the bridge's are.
+        conversations.add(
+            Conversation(host, names.first().substringBefore('/'), id, title.trim().ifBlank { members.joinToString(", ") { it.agent } }, "person",
+                members = names),
+        )
+        return id
+    }
+
+    /** By the id of a `group.new` sent: its group, until the bridge sends the group back, or refuses it. */
+    private val startingGroups = mutableMapOf<String, String>()
+
+    /** By group: why the bridge would not start it; said where it was started. */
+    val refusedGroups = mutableStateMapOf<String, String>()
+
+    /** The bridge would not start [group]: it leaves the phone, and [why] is kept to say so. */
+    private fun refused(group: String, why: String) {
+        conversations.removeAll { it.id == group }
+        groups.remove(group)
+        lines.remove(group)
+        answered(group)
+        refusedGroups[group] = why
+    }
+
+    /** Drops [id] if it is still a draft (no message sent): a new conversation's screen left, or its agent changed. */
+    fun dropDraft(id: String) {
+        if (!drafts.remove(id)) return
+        conversations.removeAll { it.id == id }
+    }
+
+    /** Stops group [conversation]'s discussion; what was said stays. */
+    fun stopGroup(conversation: Conversation) {
+        connections[conversation.host]?.send(message("group.stop", "conversation" to conversation.id))
+    }
+
+    /** By group: where its discussion is, as its bridge said last. */
+    val groups = mutableStateMapOf<String, GroupStatus>()
 
     // Files. Fetched from the bridge over the conversation's connection, a
     // part at a time, into the app's cache (never backed up), one folder per
@@ -1053,12 +1153,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         said.remove(name)
         unfolded.removeAll { it.startsWith("$name/") }
         commands.keys.filter { it.startsWith("$name/") }.forEach { commands.remove(it) }
+        // Whether its heading was folded: nothing left to fold, and a host paired again under that name starts open.
+        if (folded.remove(hostFold(name))) settings.edit { putStringSet("folded", folded.toSet()) }
         val ids = conversations.filter { it.host == name }.map { it.id }.toSet()
         val attached = ids.flatMap { lines[it].orEmpty() }.flatMap { it.attachments }
         unreadable.remove(name)
         outgoing.forget(ids)
         drafts -= ids
         ids.forEach {
+            groups.remove(it)
             typing.remove(it)
             answered(it)
             steps.remove(it)
@@ -1095,6 +1198,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // What was written goes too: its conversations are gone, and drafts do not come back.
         outgoing.clear()
         drafts.clear()
+        groups.clear()
         lines.clear()
         agents.clear()
         kept.clear()

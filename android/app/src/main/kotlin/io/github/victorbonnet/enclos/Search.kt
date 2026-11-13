@@ -77,19 +77,22 @@ data class AgentEntry(
 
 private val Conversation.address get() = "$host/$agent"
 
+/** How many of an agent's conversations show under it, Home aside, before "more". */
+const val RECENT = 5
+
 /**
  * The inbox by agent. [sorted] is every listed conversation, the newest
  * first; [found] what the search and filter let through, in that order.
  * Each agent once, the one with the newest conversation first. Under it,
  * newest first, its conversations other than Home: every one while it is
- * in [unfolded], else only those with something [unread]. While [narrowed]
- * (a search or a filter), an agent shows only if something of it was
- * found, and everything found shows, folded or not.
+ * in [expanded], else the [RECENT] newest and any older one with something
+ * [unread]. While [narrowed] (a search or a filter), an agent shows only if
+ * something of it was found, and everything found shows.
  */
 fun byAgent(
     sorted: List<Conversation>,
     found: List<Found>,
-    unfolded: Set<String>,
+    expanded: Set<String>,
     unread: (String) -> Int,
     narrowed: Boolean,
 ): List<AgentEntry> {
@@ -102,7 +105,7 @@ fun byAgent(
         val under = if (narrowed) {
             found.filter { it.conversation.address == address && !it.conversation.home }
         } else {
-            others.filter { address in unfolded || unread(it.id) > 0 }.map { Found(it, null) }
+            others.filterIndexed { i, c -> address in expanded || i < RECENT || unread(c.id) > 0 }.map { Found(it, null) }
         }
         val homeMatch = found.firstOrNull { it.conversation.id == home?.id }?.match
         AgentEntry(address, home, homeMatch, under, others.size)
