@@ -56,6 +56,7 @@ object Glyphs {
     val compose = glyph("compose", strokes = listOf("M12 4H4v16h16v-8", "M10 14v-3l9-9 3 3-9 9z"))
     /** A stored conversation, with its original history kept. */
     val archive = glyph("archive", strokes = listOf(rect(3f, 4f, 18f, 4f), "M5 8v12h14V8", "M9 12h6"))
+    val delete = glyph("delete", strokes = listOf("M4 6h16M9 6V3h6v3M6 6v15h12V6M10 10v7M14 10v7"))
     val more = glyph("more", fills = listOf(rect(3f, 10f, 4f, 4f), rect(10f, 10f, 4f, 4f), rect(17f, 10f, 4f, 4f)))
     val check = glyph("check", stroke = 2.4f, strokes = listOf("M4 12l5 5L20 6"))
     val clock = glyph("clock", strokes = listOf(rect(4f, 4f, 16f, 16f), "M12 8v4h4"))
