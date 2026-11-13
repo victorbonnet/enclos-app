@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.Step
+import io.github.victorbonnet.enclos.Visible
 
 /**
  * What the agent did for an answer, one tool a line, in the manner of
@@ -77,9 +78,11 @@ private fun StepLine(step: Step) {
     val p = palette
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { StepMark(step) }
-        Text(step.name, style = Type.meta, color = if (step.ok) p.textMuted else p.textFaint, maxLines = 1)
+        // The runtime's words, written by the agent's tool call: a hidden
+        // character shows as ⟨U+XXXX⟩ instead of changing how they read.
+        Text(Visible.revealed(step.name), style = Type.meta, color = if (step.ok) p.textMuted else p.textFaint, maxLines = 1)
         Text(
-            step.label.orEmpty(),
+            Visible.revealed(step.label.orEmpty()),
             style = Type.small.copy(fontSize = Type.meta.fontSize, lineHeight = Type.meta.lineHeight),
             color = p.textFaint,
             maxLines = 1,

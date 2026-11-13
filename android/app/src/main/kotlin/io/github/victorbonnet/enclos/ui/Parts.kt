@@ -1,5 +1,7 @@
 package io.github.victorbonnet.enclos.ui
 
+import io.github.victorbonnet.enclos.Visible
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandVertically
@@ -232,12 +234,14 @@ fun NavBar(selected: Tab, onSelect: (Tab) -> Unit) {
         Row(Modifier.fillMaxWidth().height(80.dp).padding(top = 12.dp)) {
             Tab.entries.forEach { tab ->
                 val on = tab == selected
-                // The corners close in on the tab chosen, and open out of the one left.
+                // The whole column takes the tap, with no press shown: the
+                // corners closing in on the tab chosen are its answer, and
+                // they open out of the one left.
                 val enclosed by animateFloatAsState(if (on) 1f else 0f, Motion.change(Motion.MEDIUM), label = "enclosed")
                 val tint by animateColorAsState(if (on) palette.accent else palette.textMuted, Motion.change(), label = "tint")
                 val label by animateColorAsState(if (on) palette.text else palette.textMuted, Motion.change(), label = "label")
                 Column(
-                    Modifier.weight(1f).clickable(role = Role.Tab, onClick = { onSelect(tab) }),
+                    Modifier.weight(1f).clickable(interactionSource = null, indication = null, role = Role.Tab) { onSelect(tab) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
@@ -278,20 +282,32 @@ fun DaySeparator(text: String) {
 /**
  * The runtime about itself (gateway online, shutting down), not the agent
  * speaking: a quiet centred line, small and faint, with its time, as a day
- * separator is, never a bubble.
+ * separator is, never a bubble. Its kind and text come from the sandbox, so
+ * it is [statusText]: one line, nothing hidden, and the runtime's name
+ * before it, never to be read as the app's or the bridge's own word.
  */
 @Composable
-fun StatusLine(text: String, time: String) {
+fun StatusLine(source: String, text: String, time: String) {
     Box(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 2.dp), contentAlignment = Alignment.Center) {
         Text(
-            "$text · $time",
+            "${statusText(source, text)} · $time",
             style = Type.meta,
             color = palette.textFaint,
             textAlign = TextAlign.Center,
-            maxLines = 2,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+/**
+ * A status line as shown: [source] (the runtime that sent it), then its
+ * [text] on one line, without the characters that would reorder or hide
+ * part of it.
+ */
+fun statusText(source: String, text: String): String {
+    val line = Visible.stripped(text.replace(Regex("\\s+"), " ")).trim()
+    return "${Visible.stripped(source).trim()}: $line"
 }
 
 /**
