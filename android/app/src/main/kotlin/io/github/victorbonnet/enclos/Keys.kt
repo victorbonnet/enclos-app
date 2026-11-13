@@ -18,14 +18,14 @@ import javax.crypto.spec.GCMParameterSpec
  * a P-256 signing key per host, which never leaves the hardware, and an AES
  * key that wraps the Noise static keys the app keeps in its preferences.
  */
-object Keys {
+object Keys : PairingKeys {
     private const val KEYSTORE = "AndroidKeyStore"
     private const val WRAP_ALIAS = "enclos-noise-wrap"
 
     private fun keyStore(): KeyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
 
     /** Makes the signing key for [alias], in StrongBox where the phone has it. */
-    fun newDeviceKey(alias: String) {
+    override fun newDeviceKey(alias: String) {
         fun generate(strongBox: Boolean) {
             val spec = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
                 .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
@@ -44,7 +44,7 @@ object Keys {
         }
     }
 
-    fun deleteDeviceKey(alias: String) {
+    override fun deleteDeviceKey(alias: String) {
         keyStore().deleteEntry(alias)
     }
 
@@ -91,7 +91,7 @@ object Keys {
     }
 
     /** [plain] encrypted with the keystore's AES key: IV (12 bytes), then the ciphertext. */
-    fun wrap(plain: ByteArray): ByteArray {
+    override fun wrap(plain: ByteArray): ByteArray {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, wrapKey())
         return cipher.iv + cipher.doFinal(plain)

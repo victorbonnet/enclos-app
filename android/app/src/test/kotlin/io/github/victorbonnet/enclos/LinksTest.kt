@@ -18,4 +18,24 @@ class LinksTest {
         // Only the page's own path, right after the address.
         assertEquals("https://example.com/x/pair#$query", pairLink("https://example.com/x/pair#$query"))
     }
+
+    @Test
+    fun a_page_link_that_names_another_address_stays_as_it_is() {
+        val other = "v=1&host=mac&url=https://other.example&key=k&code=c&exp=1"
+        assertEquals("https://mac.tail1.ts.net/pair#$other", pairLink("https://mac.tail1.ts.net/pair#$other"))
+        // The same host name on another port is another address.
+        assertEquals("https://mac.tail1.ts.net:8443/pair#$query", pairLink("https://mac.tail1.ts.net:8443/pair#$query"))
+    }
+
+    @Test
+    fun a_page_link_with_its_port_reads_when_the_url_has_it_too() {
+        val q = "v=1&host=mac&url=https://mac.tail1.ts.net:8443&key=k&code=c&exp=1"
+        assertEquals("enclos://pair?$q", pairLink("https://mac.tail1.ts.net:8443/pair#$q"))
+    }
+
+    @Test
+    fun a_page_link_with_no_parameters_or_a_query_stays_as_it_is() {
+        assertEquals("https://mac.tail1.ts.net/pair#", pairLink("https://mac.tail1.ts.net/pair#"))
+        assertEquals("https://mac.tail1.ts.net/pair?a=b#$query", pairLink("https://mac.tail1.ts.net/pair?a=b#$query"))
+    }
 }
