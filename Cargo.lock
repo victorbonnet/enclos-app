@@ -485,7 +485,7 @@ dependencies = [
 [[package]]
 name = "enclos-protocol"
 version = "0.1.0"
-source = "git+https://github.com/victorbonnet/enclos?rev=d4d076e9772112c1be974cae6e4c929745a0ab0b#d4d076e9772112c1be974cae6e4c929745a0ab0b"
+source = "git+https://github.com/victorbonnet/enclos?rev=6bfa81319dd04e569da1631a37daa0362f946848#6bfa81319dd04e569da1631a37daa0362f946848"
 dependencies = [
  "base64",
  "chacha20poly1305 0.11.0",
@@ -496,6 +496,7 @@ dependencies = [
  "sha2 0.11.1",
  "snow",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
