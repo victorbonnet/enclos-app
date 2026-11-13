@@ -12,11 +12,12 @@ android {
     namespace = "io.github.victorbonnet.enclos"
     // The newest stable SDK platform: platforms;android-37.2
     compileSdk = 37
+    ndkVersion = libs.versions.ndk.get()
     compileSdkMinor = 2
 
     defaultConfig {
         applicationId = "io.github.victorbonnet.enclos"
-        // Android 9: StrongBox and hardware key attestation, for the device key
+        // Android 9: StrongBox, for the device key
         minSdk = 28
         targetSdk = 37
         versionCode = 2
@@ -70,4 +71,5 @@ dependencies {
     }
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
+    testImplementation(libs.json)
 }

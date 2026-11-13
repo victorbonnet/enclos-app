@@ -49,7 +49,6 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -73,6 +72,8 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -98,7 +99,6 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.google.zxing.client.android.Intents
 import io.github.victorbonnet.enclos.core.coreVersion
-import io.github.victorbonnet.enclos.core.parsePairLink
 import io.github.victorbonnet.enclos.ui.AgentAvatar
 import io.github.victorbonnet.enclos.ui.AgentInitial
 import io.github.victorbonnet.enclos.ui.SandboxMark
@@ -122,6 +122,7 @@ import io.github.victorbonnet.enclos.ui.Markdown
 import io.github.victorbonnet.enclos.ui.PrimaryButton
 import io.github.victorbonnet.enclos.ui.Shapes
 import io.github.victorbonnet.enclos.ui.StatusLine
+import io.github.victorbonnet.enclos.ui.statusText
 import io.github.victorbonnet.enclos.ui.SystemLine
 import io.github.victorbonnet.enclos.ui.TextLink
 import io.github.victorbonnet.enclos.ui.Type
@@ -197,26 +198,28 @@ private fun ThemeSetting(model: AppModel) {
 }
 
 /**
- * The app lock, in Settings: a switch beside what it does. Turning it on
- * asks the person to unlock once, so a lock that cannot be opened is never
- * set; it needs a screen lock on the phone, and says so when there is none.
+ * The app lock, in Settings: a switch beside what it does. Either way
+ * asks the person to unlock first: on, so a lock that cannot be opened is
+ * never set; off, so someone who picks the phone up in the minute after it
+ * was put down cannot turn it off. It needs a screen lock on the phone,
+ * and says so when there is none. [ask] shows the prompt.
  */
 @Composable
-private fun LockSetting(model: AppModel) {
+private fun LockSetting(lock: LockState, ask: Ask) {
     val p = palette
     val context = androidx.compose.ui.platform.LocalContext.current
-    val on = model.lockOn.value
+    val on = lock.on.value
     var said by remember { mutableStateOf<String?>(null) }
     val turn = { want: Boolean ->
         when {
-            !want -> {
-                model.setLock(false)
-                said = null
+            want == on -> Unit
+            !want -> ask("Turn off the app lock") { ok, why ->
+                if (ok) lock.set(false)
+                said = if (ok) null else why ?: "Not turned off."
             }
-            on -> Unit
             !AppLock.available(context) -> said = "Set a screen lock on this phone first: a PIN, a pattern or a password."
-            else -> (context as? MainActivity)?.unlocker?.ask("Turn on the app lock") { ok, why ->
-                if (ok) model.setLock(true)
+            else -> ask("Turn on the app lock") { ok, why ->
+                if (ok) lock.set(true)
                 said = if (ok) null else why ?: "Not turned on."
             }
         }
@@ -229,7 +232,7 @@ private fun LockSetting(model: AppModel) {
                 Text(
                     said ?: if (on) {
                         "Asks for your fingerprint, face or the phone's screen lock when the app opens, and when it comes back after a minute away."
-                    } else if (model.lockDropped.value) {
+                    } else if (lock.dropped.value) {
                         "Turned off: this phone no longer has a screen lock. Set one, then turn the lock on again."
                     } else {
                         "Ask for your fingerprint, face or the phone's screen lock when the app opens."
@@ -245,18 +248,17 @@ private fun LockSetting(model: AppModel) {
 }
 
 /**
- * Over the app while it is locked: the mark, what to do, and Unlock, which
- * asks again (the prompt shows on its own once). It takes every touch, and
- * Back leaves the app rather than reaching what is under it.
+ * All the app shows while it is locked: the mark, what to do, and Unlock,
+ * which asks again (the prompt shows on its own as the app starts or comes
+ * back). Nothing else of the app is composed meanwhile, and Back leaves
+ * the app.
  */
 @Composable
-fun LockScreen(model: AppModel, unlock: () -> Unit, leave: () -> Unit) {
+fun LockScreen(lock: LockState, unlock: () -> Unit, leave: () -> Unit) {
     val p = palette
     androidx.activity.compose.BackHandler(onBack = leave)
     Box(
-        Modifier.fillMaxSize().background(p.bg)
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
-            .padding(32.dp),
+        Modifier.fillMaxSize().background(p.bg).padding(32.dp),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -268,7 +270,7 @@ fun LockScreen(model: AppModel, unlock: () -> Unit, leave: () -> Unit) {
             Text("Enclos is locked", style = Type.heading, color = p.text)
             Gap(8.dp)
             Text(
-                model.lockSaid.value ?: "Unlock with your fingerprint, your face or the phone's screen lock.",
+                lock.said.value ?: "Unlock with your fingerprint, your face or the phone's screen lock.",
                 style = Type.small,
                 color = p.textMuted,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -310,7 +312,30 @@ fun InboxScreen(
     val sorted = inboxConversations(model.conversations.filter(model::listed), archivedOnly)
         .sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: 0L }
     val filter = if (unreadOnly) InboxFilter.Unread else InboxFilter.All
-    val found = search(sorted, { model.lines[it].orEmpty() }, model::unread, query, filter, archived = archivedOnly, agentNames = { c -> if (c.group) c.members.joinToString(" ") { model.agentLabel("${c.host}/$it") } else model.agentLabel("${c.host}/${c.agent}") })
+    // What search reads, taken here on the main thread: lists that are
+    // replaced, never changed, when a message arrives.
+    val said = sorted.associate { it.id to model.lines[it.id].orEmpty() }
+    val unread = sorted.associate { it.id to model.unread(it.id) }
+    // The agents' names as shown (display names too), found by search.
+    val names = sorted.associate { c ->
+        c.id to if (c.group) c.members.joinToString(" ") { model.agentLabel("${c.host}/$it") } else model.agentLabel("${c.host}/${c.agent}")
+    }
+    val listed = remember(sorted, said, unread, filter, archivedOnly) {
+        search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, "", filter, archived = archivedOnly, agentNames = { names[it.id].orEmpty() })
+    }
+    // A query reads every message: searched off the main thread, each
+    // message folded once (model.folds); the last result stays meanwhile.
+    var searched by remember { mutableStateOf<List<Found>?>(null) }
+    LaunchedEffect(sorted, said, unread, names, query, filter, archivedOnly) {
+        searched = if (query.isBlank()) {
+            null
+        } else {
+            withContext(Dispatchers.Default) {
+                search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, query, filter, model.folds::of, archived = archivedOnly, agentNames = { names[it.id].orEmpty() })
+            }
+        }
+    }
+    val found = if (query.isBlank()) listed else searched ?: listed
     val requests = model.approvals.values.filter { a -> !archivedOnly && a.attention && (query.isBlank() || "${a.title} ${a.sandbox} ${a.host}".contains(query, ignoreCase = true)) }.sortedByDescending { it.time }
     val narrowed = archivedOnly || query.isNotBlank() || filter != InboxFilter.All
     // Groups have their own section; the agents' trees hold one-to-one conversations.
@@ -400,7 +425,7 @@ fun InboxScreen(
                                             all = if (more) toggle else null,
                                             expanded = expanded,
                                             about = agent?.let { { openAgent(it) } },
-                                            routines = agent?.takeIf { "routines" in it.capabilities }?.let { { openRoutines(it) } },
+                                            routines = agent?.takeIf { it.offersRoutines }?.let { { openRoutines(it) } },
                                         ),
                                         onOpen = entry.home?.let { home -> { open(home.id) } } ?: if (more) toggle else null,
                                     )
@@ -449,7 +474,7 @@ private fun GroupRow(model: AppModel, c: Conversation, match: Line?, query: Stri
             Modifier.fillMaxWidth().then(action).padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            MemberStack(handles, side = 32.dp, scope = "${c.host}/${c.agent}", label = { model.agentLabel("${c.host}/${c.agent}/$it") })
+            MemberStack(handles, side = 32.dp, label = { model.agentLabel("${c.host}/${c.agent}/$it") }) { PhotoKey(c.host, "${c.agent}/$it") }
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(c.title ?: c.members.joinToString(", ") { model.agentLabel("${c.host}/$it") }, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -544,7 +569,7 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
             .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        AgentInitial(name, working.isNotEmpty(), side = 32.dp, address = entry.address)
+        AgentInitial(name, working.isNotEmpty(), side = 32.dp, photo = entry.photo)
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(name, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -740,7 +765,7 @@ private fun TreeRow(model: AppModel, c: Conversation, match: Line?, query: Strin
                 }
                 Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
             }
-            if (match != null) Preview(match, true, query, false, "", Modifier.padding(top = 2.dp))
+            if (match != null) Preview(match, true, query, false, "", model.statusSource(c), Modifier.padding(top = 2.dp))
         }
     }
 }
@@ -820,7 +845,7 @@ internal fun Choice(label: String, on: Boolean, enabled: Boolean = true, multipl
     ) { Text(label, style = Type.label, color = text, maxLines = 1) }
 }
 
-/** [text] with the words of [query] in `accent`, using search's matching rules. */
+/** [text] with the words of [query] in `accent`, where search found them: its own rules (case, accents, spaces). */
 internal fun highlighted(text: String, query: String, accent: Color): AnnotatedString = buildAnnotatedString {
     append(text)
     matches(text, query).forEach { range ->
@@ -868,7 +893,7 @@ private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, quer
                         Doing(model.doing(c.id) ?: "working", Modifier.weight(1f))
                     } else {
                         // The message the search found, else the last; the words, without markdown.
-                        Preview(match ?: last, match != null, query, unread > 0, "No message yet", Modifier.weight(1f))
+                        Preview(match ?: last, match != null, query, unread > 0, "No message yet", model.statusSource(c), Modifier.weight(1f))
                     }
                     AnimatedVisibility(
                         visible = unread > 0,
@@ -884,10 +909,11 @@ private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, quer
 
 /** A message in a list: its words without markdown on two lines at most, the person's prefixed "You:"; [found] words in `accent`. */
 @Composable
-private fun Preview(shown: Line?, found: Boolean, query: String, unread: Boolean, none: String, modifier: Modifier) {
+private fun Preview(shown: Line?, found: Boolean, query: String, unread: Boolean, none: String, statusFrom: String, modifier: Modifier) {
     val p = palette
     val words = when {
         shown == null -> none
+        shown.status -> statusText(statusFrom, shown.text)
         shown.from == "agent" -> remember(shown.text) { words(shown) }
         else -> "You: ${shown.text}"
     }
@@ -936,7 +962,7 @@ private fun AgentRow(model: AppModel, entry: AgentEntry, query: String, onOpen: 
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            AgentAvatar(name, live = model.connected(host), working = working.isNotEmpty(), address = entry.address)
+            AgentAvatar(name, live = model.connected(host), working = working.isNotEmpty(), photo = entry.photo)
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(name, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -960,6 +986,7 @@ private fun AgentRow(model: AppModel, entry: AgentEntry, query: String, onOpen: 
                             query,
                             unread > 0,
                             if (home != null) "Cron jobs and the agent's notices come here." else "${entry.others} conversations",
+                            home?.let(model::statusSource).orEmpty(),
                             Modifier.weight(1f),
                         )
                     }
@@ -1050,6 +1077,15 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
                 FoldHeading(host.name, open, 0, query.isBlank(), lead = { ConnectionDot(live) }) { model.fold(key) }
             }
             if (!open) return@forEach
+            val leftOut = model.leftOut(host.name)
+            if (leftOut > 0) {
+                item(key = "$key-clash") {
+                    Text(
+                        "$leftOut ${if (leftOut == 1) "conversation" else "conversations"} of this host not shown: another paired host has an agent with the same sandbox and name, whose conversations use the same ids.",
+                        style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            }
             if (its.isEmpty()) {
                 item(key = "$key-none") {
                     Text("No agent yet: the host lists them once connected.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
@@ -1089,7 +1125,7 @@ internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () 
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        AgentInitial(agent.label, working.isNotEmpty(), side = 32.dp, address = agent.address)
+        AgentInitial(agent.label, working.isNotEmpty(), side = 32.dp, photo = agent.photoKey)
         Column(Modifier.weight(1f)) {
             Text(agent.label, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (working.isNotEmpty()) {
@@ -1159,9 +1195,11 @@ internal fun ListHeading(
  * the versions. Nothing here acts on a sandbox.
  */
 @Composable
-fun SettingsScreen(model: AppModel, pair: () -> Unit) {
+fun SettingsScreen(model: AppModel, pair: () -> Unit, ask: Ask) {
     val p = palette
     var forgetting by remember { mutableStateOf<String?>(null) }
+    // A host forgotten without being told: the dialog said it would be.
+    var notTold by remember { mutableStateOf<String?>(null) }
     var clearing by remember { mutableStateOf(false) }
     forgetting?.let { name ->
         val live = model.connected(name)
@@ -1175,9 +1213,27 @@ fun SettingsScreen(model: AppModel, pair: () -> Unit) {
             confirm = "Forget",
             onDismiss = { forgetting = null },
         ) {
-            model.forgetHost(name)
+            // The dialog's words were chosen when it opened: the connection
+            // may have ended since. What happened is what counts.
+            if (!model.forgetHost(name) && live) notTold = name
             forgetting = null
         }
+    }
+    notTold?.let { name ->
+        AlertDialog(
+            onDismissRequest = { notTold = null },
+            containerColor = p.surface,
+            shape = Shapes.bubble,
+            title = { Text("$name was not told", style = Type.heading, color = p.text) },
+            text = {
+                Text(
+                    "The connection ended before Forget. This phone is forgotten here, but $name keeps it listed until you run enclos app unpair there.",
+                    style = Type.small,
+                    color = p.textMuted,
+                )
+            },
+            confirmButton = { DialogButton("OK", onClick = { notTold = null }) },
+        )
     }
     if (clearing) {
         ConfirmDialog(
@@ -1219,7 +1275,7 @@ fun SettingsScreen(model: AppModel, pair: () -> Unit) {
                     }
                 }
             }
-            Section("Security") { LockSetting(model) }
+            Section("Security") { LockSetting(model.lock, ask) }
             Section("Appearance") { ThemeSetting(model) }
             // What the phone keeps: synced again from the hosts when cleared.
             Section("On this phone") {
@@ -1230,6 +1286,13 @@ fun SettingsScreen(model: AppModel, pair: () -> Unit) {
                         style = Type.small,
                         color = p.textMuted,
                     )
+                    if (model.keptUnreadable.value) {
+                        Text(
+                            "The conversations kept here could not be read (a newer version of the app may have written them): they show from the hosts only, and nothing more is kept until the app that wrote them is installed again.",
+                            style = Type.small,
+                            color = p.textMuted,
+                        )
+                    }
                     TextLink("Clear cache") { clearing = true }
                 }
             }
@@ -1253,7 +1316,12 @@ fun SettingsScreen(model: AppModel, pair: () -> Unit) {
 @Composable
 fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val p = palette
-    val conversation = model.conversations.firstOrNull { it.id == id } ?: return
+    val conversation = model.conversations.firstOrNull { it.id == id }
+    if (conversation == null) {
+        // A group the bridge would not start: gone, saying why.
+        model.refusedGroups[id]?.let { GroupRefused(it, back) }
+        return
+    }
     val lines = model.lines[id].orEmpty()
     val scope = "${conversation.host}/${conversation.agent}"
     val agent = if (conversation.group) conversation.members.joinToString(", ") { model.agentLabel("${conversation.host}/$it") } else model.agentLabel(scope)
@@ -1268,6 +1336,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val working = if (conversation.group) status?.state == "working" else model.working(id)
     // What the person writes, kept when they leave and come back.
     val draft = model.unsent[id].orEmpty()
+    // Why the last message could not go (too long, say): the draft stays.
+    var unsent by remember { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
     // Whether the person is at the newest: the first item (the list is
     // reversed) at its very end. Read when a scroll ends, theirs or the
@@ -1290,15 +1360,14 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     // Which answers' steps are open.
     val opened = remember { mutableStateMapOf<Long, Boolean>() }
     if (renaming) {
-        RenameDialog(conversation.title, onDismiss = { renaming = false }) {
-            model.rename(conversation, it)
-            renaming = false
+        RenameDialog(conversation.title, live, conversation.host, onDismiss = { renaming = false }) {
+            model.rename(conversation, it).also { sent -> if (sent) renaming = false }
         }
     }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
-            if (conversation.group) MemberStack(handles, side = 30.dp, scope = scope, label = { model.agentLabel("$scope/$it") }) else AgentAvatar(agent, live, small = true, address = "${conversation.host}/${conversation.agent}")
+            if (conversation.group) MemberStack(handles, side = 30.dp, label = { model.agentLabel("$scope/$it") }) { PhotoKey(conversation.host, "${conversation.agent}/$it") } else AgentAvatar(agent, live, small = true, photo = PhotoKey(conversation.host, conversation.agent))
             // Its name, and the agent under it; tap to rename.
             Column(Modifier.weight(1f).clickable(onClickLabel = "Rename the conversation") { renaming = true }) {
                 Text(
@@ -1345,15 +1414,18 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             model.said[conversation.host]?.let { item(key = "said") { Arriving { SystemLine("The bridge said: $it") } } }
             if (!live) item(key = "status") { Arriving { SystemLine(model.status[conversation.host] ?: "not connected") } }
             if (working) item(key = "working") { Arriving { WorkingBubble(turnOf ?: agent) } }
-            // The tools it runs now, above the working bubble.
+            // The tools it runs now, above the working bubble; a turn that
+            // ended with no answer shows none.
             val running = model.steps[id].orEmpty()
-            if (running.isNotEmpty()) item(key = "steps-live") { Arriving { ToolSteps(running, live = true, expanded = true) {} } }
+            if (working && running.isNotEmpty()) item(key = "steps-live") { Arriving { ToolSteps(running, live = true, expanded = true) {} } }
+            val runtime = model.statusSource(conversation)
             for (i in lines.indices.reversed()) {
                 val line = lines[i]
                 item(key = line.seq) {
                     // The runtime about itself: a quiet line, not a bubble.
-                    if (line.status) {
-                        Arriving { StatusLine(line.text, Times.clock(line.time)) }
+                    // One with files is drawn as a message, so they show.
+                    if (line.status && line.attachments.isEmpty()) {
+                        Arriving { StatusLine(runtime, line.text, Times.clock(line.time)) }
                         return@item
                     }
                     Arriving {
@@ -1363,7 +1435,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             outgoing = line.from != "agent",
                             header = if (line.kind == "notify" && !conversation.group) ON_ITS_OWN else null,
                             speaker = line.agent?.let(model::agentLabel),
-                            speakerAddress = line.agent,
+                            // `host/sandbox/agent`, its host known here: the rest is the member.
+                            speakerPhoto = line.agent?.let { PhotoKey(conversation.host, it.removePrefix("${conversation.host}/")) },
                             files = line.attachments.takeIf { it.isNotEmpty() }?.let { attached ->
                                 { Files(attached, model.files) { model.fetch(conversation.host, it) } }
                             },
@@ -1388,7 +1461,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             // Members to address, as the person types `@`.
             val labels = handles.associateWith { model.agentLabel("$scope/$it") }
             val members = remember(handles, draft, labels) { mentionsFor(handles, draft) { labels[it] ?: it } }
-            MentionSuggestions(members, scope, label = { labels[it] ?: it }) { model.unsent[id] = mentioned(draft, it) }
+            MentionSuggestions(members, { PhotoKey(conversation.host, "${conversation.agent}/$it") }, label = { labels[it] ?: it }) { model.unsent[id] = mentioned(draft, it) }
             if (status != null) GroupStrip(status, turnOf) { model.stopGroup(conversation) }
         } else {
             // The agent's commands that match what is typed after `/`; picking one puts it in the field.
@@ -1396,23 +1469,32 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             val offered = remember(known, draft) { suggest(known, draft) }
             CommandSuggestions(offered, draft.drop(1)) { model.unsent[id] = picked(it) }
         }
-        // Not connected: write, but nothing goes until the host is back.
+        // Not connected: write, but nothing goes until the host is back. A
+        // message the bridge did not get is back in the field, saying so; one
+        // that could not go (too long) stays, saying why.
+        val notSent = model.outgoing.notSent[id]?.let { "Not sent: $it." }
+        val away = if (live) null else "Not connected to ${conversation.host}: send once it's back."
         Composer(
             draft,
-            { if (it.isEmpty()) model.unsent.remove(id) else model.unsent[id] = it },
+            {
+                unsent = null
+                model.outgoing.write(id, it)
+            },
             if (conversation.group) "Message the group, @ to address" else "Message $agent",
             canSend = live,
-            notice = if (live) null else "Not connected to ${conversation.host}: send once it's back.",
+            notice = listOfNotNull(unsent, notSent, away).joinToString(" ").ifEmpty { null },
         ) {
-            // Cleared once it went; else it stays, to send again.
-            if (model.send(conversation, draft.trim())) atNewest = true
+            // Cleared once handed to the connection; else it stays, to send again.
+            unsent = model.send(conversation, draft.trim())
+            // What the person just sent shows, wherever they had scrolled.
+            if (unsent == null) atNewest = true
         }
     }
 }
 
 /** A group's members' avatars, overlapping, at most three. */
 @Composable
-internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.Dp = 32.dp, scope: String? = null, label: (String) -> String = { it }) {
+internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.Dp = 32.dp, label: (String) -> String = { it }, photoOf: ((String) -> PhotoKey)? = null) {
     val shown = handles.take(3)
     val step = side * 0.55f
     Box(Modifier.size(width = side + step * (shown.size - 1).coerceAtLeast(0), height = side)) {
@@ -1420,7 +1502,7 @@ internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.D
             Box(
                 Modifier.padding(start = step * i).size(side).clip(androidx.compose.foundation.shape.CircleShape)
                     .background(palette.bg).padding(1.5.dp),
-            ) { AgentInitial(label(h), side = side - 3.dp, address = scope?.let { "$it/$h" }) }
+            ) { AgentInitial(label(h), side = side - 3.dp, photo = photoOf?.invoke(h)) }
         }
     }
 }
@@ -1431,7 +1513,7 @@ internal fun MemberStack(handles: List<String>, side: androidx.compose.ui.unit.D
  * it in the field.
  */
 @Composable
-private fun MentionSuggestions(offered: List<String>, scope: String, label: (String) -> String, onPick: (String) -> Unit) {
+private fun MentionSuggestions(offered: List<String>, photoOf: (String) -> PhotoKey, label: (String) -> String, onPick: (String) -> Unit) {
     val p = palette
     AnimatedVisibility(
         offered.isNotEmpty(),
@@ -1449,10 +1531,11 @@ private fun MentionSuggestions(offered: List<String>, scope: String, label: (Str
                     if (h == "all") {
                         Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) { Glyph(Glyphs.inbox, p.textMuted, size = 20.dp) }
                     } else {
-                        AgentInitial(label(h), side = 26.dp, address = "$scope/$h")
+                        AgentInitial(label(h), side = 26.dp, photo = photoOf(h))
                     }
-                    if (h != "all" && label(h) != h) Text(label(h), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Text("@$h", style = Type.code.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = if (h != "all" && label(h) != h) Modifier.widthIn(max = 160.dp) else Modifier)
+                    val named = h != "all" && !namesReadAlike(label(h), h)
+                    if (named) Text(label(h), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text("@$h", style = Type.code.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = if (named) Modifier.widthIn(max = 160.dp) else Modifier)
                     if (h == "all") Text("everyone answers", style = Type.small, color = p.textMuted)
                 }
             }
@@ -1545,12 +1628,16 @@ private fun CommandSuggestions(offered: List<AgentCommand>, typed: String, onPic
 
 /**
  * Names the conversation: the person's name replaces the agent's, which
- * then names it no more; clearing it lets the agent name it again.
+ * then names it no more; clearing it lets the agent name it again. The
+ * bridge keeps the name, so it is saved only while [host] is connected
+ * ([live]); [onSave] says whether it was.
  */
 @Composable
-private fun RenameDialog(current: String?, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+private fun RenameDialog(current: String?, live: Boolean, host: String, onDismiss: () -> Unit, onSave: (String) -> Boolean) {
     val p = palette
     var name by remember { mutableStateOf(current.orEmpty()) }
+    var refused by remember { mutableStateOf(false) }
+    val save = { title: String -> refused = !onSave(title) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     AlertDialog(
@@ -1567,13 +1654,17 @@ private fun RenameDialog(current: String?, onDismiss: () -> Unit, onSave: (Strin
                     placeholder = "Weather in Lyon",
                 )
                 Gap(8.dp)
-                Text("The agent names a conversation until you do.", style = Type.small, color = p.textMuted)
+                Text(
+                    if (!live || refused) "Not connected to $host: the name can be saved once it is." else "The agent names a conversation until you do.",
+                    style = Type.small,
+                    color = p.textMuted,
+                )
             }
         },
-        confirmButton = { DialogButton("Save", enabled = name.isNotBlank()) { onSave(name) } },
+        confirmButton = { DialogButton("Save", enabled = live && name.isNotBlank()) { save(name) } },
         dismissButton = {
             Row {
-                if (current != null) DialogButton("Clear name") { onSave("") }
+                if (current != null) DialogButton("Clear name", enabled = live) { save("") }
                 DialogButton("Cancel", onClick = onDismiss)
             }
         },
@@ -1690,7 +1781,17 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                         "${it.host} · ${it.address} · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired"
                     } ?: "Scan the code enclos app pair shows",
                 )
-                Step(2, if (pairing?.keyMade == true) StepState.Done else StepState.Next, "Device key made", "Kept in this phone's Android Keystore")
+                Step(
+                    2,
+                    when {
+                        pairing?.keyMade == true -> StepState.Done
+                        // Made off the main thread: StrongBox can take seconds.
+                        pairing != null && pairing.stopped == null -> StepState.Now
+                        else -> StepState.Next
+                    },
+                    "Device key made",
+                    "Kept in this phone's Android Keystore",
+                )
                 Step(
                     3,
                     when {
@@ -1722,6 +1823,7 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
                         done()
                     }
                 }
+                model.replacing.value?.let { Replace(it, model::replace, model::keep) }
                 if (pairing == null) {
                     if (!typed) {
                         TextLink("Type the code instead →") { typed = true }
@@ -1755,6 +1857,28 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
 }
 
 /**
+ * A link names a host already paired with another bridge: the person sees
+ * both addresses and chooses. Nothing connects, and no key is made, before
+ * Replace.
+ */
+@Composable
+private fun Replace(r: Replacing, replace: () -> Unit, keep: () -> Unit) {
+    val p = palette
+    val name = r.old.name
+    Column(
+        Modifier.padding(top = 12.dp).fillMaxWidth().border(1.dp, p.lineStrong, Shapes.control).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Replace $name?", style = Type.name, color = p.text)
+        Text("This phone is already paired with $name, at ${shownAddress(r.old.url)}.", style = Type.small, color = p.textMuted)
+        Text("This link pairs with another bridge under the same name, at ${shownAddress(r.link.url)}.", style = Type.small, color = p.textMuted)
+        Text("Replacing ends the pairing with ${shownAddress(r.old.url)} on this phone, and what it shows of it.", style = Type.small, color = p.textMuted)
+        PrimaryButton("Replace", onClick = replace)
+        TextLink("Keep $name", keep)
+    }
+}
+
+/**
  * A pairing link the app was opened with: the host and address it names and
  * when it expires, then Pair or Not now. Any page or message can hold such
  * a link, so nothing connects before Pair.
@@ -1762,22 +1886,23 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
 @Composable
 private fun OpenedLink(link: String, now: Long, pair: () -> Unit, dismiss: () -> Unit) {
     val p = palette
-    val read = remember(link) { runCatching { parsePairLink(link) } }
+    // Read as the pairing reads it: the same checks, the same address.
+    val read = remember(link) { readPairLink(link) }
     Column(Modifier.fillMaxWidth().border(1.dp, p.lineStrong, Shapes.control).padding(14.dp)) {
-        val parsed = read.getOrNull()
-        if (parsed == null) {
+        val ok = read.getOrNull()
+        if (ok == null) {
             Text("Not an enclos pairing link", style = Type.name, color = p.text)
-            // The core's reason, without what the title already says.
-            val why = read.exceptionOrNull()?.message.orEmpty().removePrefix("reason=").removePrefix("not an enclos pairing link: ")
-            Text(why, style = Type.small, color = p.textMuted)
+            // The app's own reason: never the link's text.
+            Text(read.exceptionOrNull()?.message.orEmpty(), style = Type.small, color = p.textMuted)
             TextLink("Dismiss", dismiss)
             return@Column
         }
+        val parsed = ok.link
         val left = (parsed.expires.toLong() - now).coerceAtLeast(0)
         Text("Pair with ${parsed.host}?", style = Type.name, color = p.text)
         Gap(2.dp)
         Text(
-            parsed.url.removePrefix("https://") + " · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired",
+            ok.address + " · " + if (left > 0) "expires in ${left / 60}:${"%02d".format(left % 60)}" else "expired",
             style = Type.code,
             color = p.textFaint,
         )

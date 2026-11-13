@@ -1,5 +1,7 @@
 package io.github.victorbonnet.enclos.ui
 
+import io.github.victorbonnet.enclos.Visible
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandVertically
@@ -78,9 +80,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.victorbonnet.enclos.PhotoKey
 
-/** Keyed by host/sandbox/agent, so names shared across hosts never share pictures. */
-val LocalAgentPictures = staticCompositionLocalOf<Map<String, Bitmap>> { emptyMap() }
+/** Keyed by host and agent kept apart, so names shared across hosts never share pictures. */
+val LocalAgentPictures = staticCompositionLocalOf<Map<PhotoKey, Bitmap>> { emptyMap() }
 
 /** A line of `line`: lists and bars are separated by hairlines, never shadows. */
 @Composable
@@ -134,12 +137,9 @@ fun Corners(color: Color, modifier: Modifier = Modifier, stroke: Dp = 2.dp, arm:
  * 1.4 s; with animations off, only the corners' `accent` says so.
  */
 @Composable
-fun AgentAvatar(name: String, live: Boolean, small: Boolean = false, working: Boolean = false, address: String? = null) {
+fun AgentAvatar(name: String, live: Boolean, small: Boolean = false, working: Boolean = false, photo: PhotoKey? = null) {
     val side = if (small) 32.dp else 44.dp
-    if (address != null && LocalAgentPictures.current[address] != null) {
-        AgentInitial(name, working, side, address)
-        return
-    }
+    val picture = photo?.let { LocalAgentPictures.current[it] }
     val stroke = if (small) 2.dp else 2.5.dp
     Box(
         Modifier.size(side).then(if (working) Modifier.semantics { contentDescription = "$name is working" } else Modifier),
@@ -160,8 +160,14 @@ fun AgentAvatar(name: String, live: Boolean, small: Boolean = false, working: Bo
                 stroke = stroke,
             )
         }
+        // The corners say whether the host is connected, photo or not.
         Corners(if (live || working) palette.accent else palette.lineStrong, Modifier.size(side), stroke = stroke)
-        Text(
+        if (picture != null) {
+            Image(
+                picture.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop,
+                modifier = Modifier.size(side - stroke * 4).clip(CircleShape),
+            )
+        } else Text(
             firstAgentCharacter(name).lowercase(),
             style = Type.code.copy(fontSize = if (small) 12.sp else 15.sp, fontWeight = FontWeight.SemiBold),
             color = palette.text,
@@ -198,10 +204,10 @@ private fun agentColors(name: String): Pair<Color, Color> {
  * the ring stays.
  */
 @Composable
-fun AgentInitial(name: String, working: Boolean = false, side: Dp = 28.dp, address: String? = null) {
+fun AgentInitial(name: String, working: Boolean = false, side: Dp = 28.dp, photo: PhotoKey? = null) {
     val p = palette
     // A display-name edit changes the letter, not the agent's established colours.
-    val identity = address?.substringAfterLast('/') ?: name
+    val identity = photo?.agent?.substringAfterLast('/') ?: name
     val (from, to) = remember(identity) { agentColors(identity) }
     Box(
         Modifier.size(side).then(if (working) Modifier.semantics { contentDescription = "$name is working" } else Modifier),
@@ -228,8 +234,8 @@ fun AgentInitial(name: String, working: Boolean = false, side: Dp = 28.dp, addre
             Modifier.size(side).clip(CircleShape).background(Brush.linearGradient(listOf(from, to))),
             contentAlignment = Alignment.Center,
         ) {
-            val photo = address?.let { LocalAgentPictures.current[it] }
-            if (photo != null) Image(photo.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(side))
+            val picture = photo?.let { LocalAgentPictures.current[it] }
+            if (picture != null) Image(picture.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(side))
             else Text(
                 firstAgentCharacter(name).uppercase(),
                 style = Type.name.copy(fontSize = (side.value * 0.44f).coerceAtLeast(11f).sp, fontWeight = FontWeight.SemiBold),
@@ -314,7 +320,9 @@ fun NavBar(selected: Tab, onSelect: (Tab) -> Unit) {
         Row(Modifier.fillMaxWidth().height(80.dp).padding(top = 12.dp)) {
             Tab.entries.forEach { tab ->
                 val on = tab == selected
-                // The corners close in on the tab chosen, and open out of the one left.
+                // The whole column takes the tap, with no press shown: the
+                // corners closing in on the tab chosen are its answer, and
+                // they open out of the one left.
                 val enclosed by animateFloatAsState(if (on) 1f else 0f, Motion.change(Motion.MEDIUM), label = "enclosed")
                 val tint by animateColorAsState(if (on) palette.accent else palette.textMuted, Motion.change(), label = "tint")
                 val label by animateColorAsState(if (on) palette.text else palette.textMuted, Motion.change(), label = "label")
@@ -360,20 +368,32 @@ fun DaySeparator(text: String) {
 /**
  * The runtime about itself (gateway online, shutting down), not the agent
  * speaking: a quiet centred line, small and faint, with its time, as a day
- * separator is, never a bubble.
+ * separator is, never a bubble. Its kind and text come from the sandbox, so
+ * it is [statusText]: one line, nothing hidden, and the runtime's name
+ * before it, never to be read as the app's or the bridge's own word.
  */
 @Composable
-fun StatusLine(text: String, time: String) {
+fun StatusLine(source: String, text: String, time: String) {
     Box(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 2.dp), contentAlignment = Alignment.Center) {
         Text(
-            "$text · $time",
+            "${statusText(source, text)} · $time",
             style = Type.meta,
             color = palette.textFaint,
             textAlign = TextAlign.Center,
-            maxLines = 2,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+/**
+ * A status line as shown: [source] (the runtime that sent it), then its
+ * [text] on one line, without the characters that would reorder or hide
+ * part of it.
+ */
+fun statusText(source: String, text: String): String {
+    val line = Visible.stripped(text.replace(Regex("\\s+"), " ")).trim()
+    return "${Visible.stripped(source).trim()}: $line"
 }
 
 /**
@@ -392,7 +412,7 @@ fun Bubble(
     header: String? = null,
     files: (@Composable () -> Unit)? = null,
     speaker: String? = null,
-    speakerAddress: String? = null,
+    speakerPhoto: PhotoKey? = null,
 ) {
     val p = palette
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (outgoing) Alignment.End else Alignment.Start) {
@@ -403,7 +423,7 @@ fun Bubble(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                AgentInitial(speaker, side = 20.dp, address = speakerAddress)
+                AgentInitial(speaker, side = 20.dp, photo = speakerPhoto)
                 Text(speaker, style = Type.meta.copy(fontWeight = FontWeight.SemiBold), color = p.textMuted)
             }
         }
@@ -636,7 +656,8 @@ fun FormField(
 @Composable
 fun ActionButton(text: String, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
     Box(
-        modifier.height(44.dp).clip(Shapes.control).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+        // 48dp: the platform's minimum touch target.
+        modifier.defaultMinSize(minHeight = 48.dp).clip(Shapes.control).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center,
     ) { Text(text, style = Type.label, color = if (enabled) palette.accent else palette.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis) }
