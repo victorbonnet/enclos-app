@@ -30,10 +30,11 @@ class Saved(
  * Read off the main thread, in two passes: [recent], what the first screens
  * show, then [lines], every message.
  */
-class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", null, 1) {
+class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
-            "CREATE TABLE conversations (id TEXT PRIMARY KEY, host TEXT NOT NULL, agent TEXT NOT NULL, title TEXT, titled_by TEXT)",
+            "CREATE TABLE conversations (id TEXT PRIMARY KEY, host TEXT NOT NULL, agent TEXT NOT NULL, title TEXT, titled_by TEXT, " +
+                "home INTEGER NOT NULL DEFAULT 0)",
         )
         // `seq` is the bridge's, increasing per host.
         db.execSQL(
@@ -46,8 +47,11 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         )
     }
 
-    // The first version: a later one migrates here, step by step, never by dropping what was kept.
-    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) = Unit
+    // Step by step from the version on the phone, never by dropping what was kept.
+    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
+        // 2: an agent's Home conversation is marked.
+        if (old < 2) db.execSQL("ALTER TABLE conversations ADD COLUMN home INTEGER NOT NULL DEFAULT 0")
+    }
 
     /**
      * What the first screens show: the agents, every conversation with its
@@ -59,8 +63,8 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         val agents = db.rawQuery("SELECT host, name, runtime, capabilities FROM agents ORDER BY rowid", null).use { c ->
             c.rows { Agent(it.getString(0), it.getString(1), it.getString(2), strings(it.getString(3))) }
         }
-        val conversations = db.rawQuery("SELECT host, agent, id, title, titled_by FROM conversations ORDER BY rowid", null).use { c ->
-            c.rows { Conversation(it.getString(0), it.getString(1), it.getString(2), it.getStringOrNull(3), it.getStringOrNull(4)) }
+        val conversations = db.rawQuery("SELECT host, agent, id, title, titled_by, home FROM conversations ORDER BY rowid", null).use { c ->
+            c.rows { Conversation(it.getString(0), it.getString(1), it.getString(2), it.getStringOrNull(3), it.getStringOrNull(4), it.getInt(5) != 0) }
         }
         val lines = mutableMapOf<String, List<Line>>()
         // Each conversation's last message, through the (conversation, seq) index.
@@ -106,6 +110,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
             put("agent", c.agent)
             put("title", c.title)
             put("titled_by", c.titledBy)
+            put("home", if (c.home) 1 else 0)
         }
         // An update, else an insert: Android 9 and 10's SQLite has no upsert.
         // insertOrThrow, not insert, which on a failure (a full disk) logs
