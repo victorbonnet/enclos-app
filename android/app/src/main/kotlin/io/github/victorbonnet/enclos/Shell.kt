@@ -83,6 +83,7 @@ fun HomeShell(
     onView: (View) -> Unit,
     openChat: (String) -> Unit,
     openAgent: (Agent) -> Unit,
+    openRoutines: (Agent) -> Unit,
     openSandbox: (String) -> Unit,
     openApproval: (String) -> Unit,
     start: (Agent) -> Unit,
@@ -137,7 +138,7 @@ fun HomeShell(
             HorizontalPager(state = views, modifier = Modifier.fillMaxSize()) { page ->
                 Box(Modifier.fillMaxSize().background(p.bg)) {
                     when (View.entries[page]) {
-                        View.Conversations -> InboxScreen(model, query, unreadOnly, archivedOnly, openChat, start, openAgent, pair, openApproval)
+                        View.Conversations -> InboxScreen(model, query, unreadOnly, archivedOnly, openChat, start, openAgent, openRoutines, pair, openApproval)
                         View.Agents -> AgentsScreen(model, query, openAgent, openSandbox, pair)
                     }
                 }
@@ -248,7 +249,7 @@ private fun can(capability: String): String? = when (capability) {
  * connection, what it can do); its commands and shared photo controls.
  */
 @Composable
-fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (String) -> Unit, start: (Agent) -> Unit) {
+fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (String) -> Unit, start: (Agent) -> Unit, openRoutines: () -> Unit) {
     val p = palette
     val agent = model.agents.firstOrNull { it.address == address }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
@@ -303,6 +304,20 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 }
                 SettingRow {
                     Text("$others other ${if (others == 1) "conversation" else "conversations"}, in the conversations view.", style = Type.small, color = p.textMuted)
+                }
+            }
+            if (agent.offersRoutines) {
+                Section("Routines") {
+                    SettingRow(Modifier.clickable(onClickLabel = "Manage routines", onClick = openRoutines)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Glyph(Glyphs.clock, p.accent, size = 20.dp)
+                            Column(Modifier.weight(1f)) {
+                                Text("Routines", style = Type.name, color = p.text)
+                                Text("Scheduled work this agent runs on its host.", style = Type.small, color = p.textMuted)
+                            }
+                            Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+                        }
+                    }
                 }
             }
             Section("Runs on") {

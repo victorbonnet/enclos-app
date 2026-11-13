@@ -70,6 +70,7 @@ private sealed interface Route {
     data class Chat(val id: String) : Route
     /** An agent's page (`host/sandbox/agent`), opened from its sandbox's page when [inSandbox]. */
     data class AgentPage(val address: String, val inSandbox: Boolean = false) : Route
+    data class RoutinesPage(val address: String, val fromAgent: Boolean = false, val inSandbox: Boolean = false) : Route
 
     /** A sandbox's page: `host/sandbox`. */
     data class SandboxPage(val address: String) : Route
@@ -78,6 +79,7 @@ private sealed interface Route {
     /** Where back leads: an agent opened from its sandbox's page goes back to it; the rest, to the tabs. */
     val up: Route get() = when {
         this is PolicyPage -> SandboxPage(address)
+        this is RoutinesPage && fromAgent -> AgentPage(address, inSandbox)
         this is AgentPage && inSandbox -> SandboxPage(address.substringBeforeLast('/'))
         else -> Tabs
     }
@@ -97,6 +99,7 @@ private sealed interface Route {
         is ApprovalPage -> "approval:$key"
         is Chat -> "chat:$id"
         is AgentPage -> if (inSandbox) "sandbox-agent:$address" else "agent:$address"
+        is RoutinesPage -> (if (inSandbox) "sandbox-agent-routines:" else if (fromAgent) "agent-routines:" else "routines:") + address
         is SandboxPage -> "sandbox:$address"
         is PolicyPage -> "policy:$address"
     }
@@ -110,6 +113,9 @@ private sealed interface Route {
             saved.startsWith("chat:") -> Chat(saved.removePrefix("chat:"))
             saved.startsWith("agent:") -> AgentPage(saved.removePrefix("agent:"))
             saved.startsWith("sandbox-agent:") -> AgentPage(saved.removePrefix("sandbox-agent:"), inSandbox = true)
+            saved.startsWith("sandbox-agent-routines:") -> RoutinesPage(saved.removePrefix("sandbox-agent-routines:"), fromAgent = true, inSandbox = true)
+            saved.startsWith("agent-routines:") -> RoutinesPage(saved.removePrefix("agent-routines:"), fromAgent = true)
+            saved.startsWith("routines:") -> RoutinesPage(saved.removePrefix("routines:"))
             saved.startsWith("policy:") -> PolicyPage(saved.removePrefix("policy:"))
             saved.startsWith("sandbox:") -> SandboxPage(saved.removePrefix("sandbox:"))
             else -> Tabs
@@ -302,7 +308,8 @@ private fun Screens(model: AppModel, ask: Ask) {
                         SettingsScreen(model, pair = { go(Route.Pair) }, ask = ask)
                     }
                     Route.NewChat -> NewChatScreen(model, back = { go(Route.Tabs) }, opened = { go(Route.Chat(it)) })
-                    is Route.AgentPage -> AgentScreen(model, route.address, back = { go(route.up) }, openChat = { go(Route.Chat(it)) }, start = start)
+                    is Route.AgentPage -> AgentScreen(model, route.address, back = { go(route.up) }, openChat = { go(Route.Chat(it)) }, start = start, openRoutines = { go(Route.RoutinesPage(route.address, fromAgent = true, inSandbox = route.inSandbox)) })
+                    is Route.RoutinesPage -> RoutinesScreen(model, route.address, back = { go(route.up) })
                     is Route.PolicyPage -> SandboxPolicyScreen(model, route.address, back = { go(route.up) })
                     is Route.SandboxPage -> SandboxScreen(
                         model,
@@ -318,6 +325,7 @@ private fun Screens(model: AppModel, ask: Ask) {
                         onView = onView,
                         openChat = { go(Route.Chat(it)) },
                         openAgent = { go(Route.AgentPage(it.address)) },
+                        openRoutines = { go(Route.RoutinesPage(it.address)) },
                         openSandbox = { go(Route.SandboxPage(it)) },
                         openApproval = { go(Route.ApprovalPage(it)) },
                         start = start,

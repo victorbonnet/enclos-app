@@ -2,4 +2,5 @@
 <resources>
     <!-- bg, dark theme -->
     <color name="bg">#0B1A14</color>
+    <color name="accent">#A9CC7A</color>
 </resources>

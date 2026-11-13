@@ -102,12 +102,15 @@ import io.github.victorbonnet.enclos.ui.AgentAvatar
 import io.github.victorbonnet.enclos.ui.AgentInitial
 import io.github.victorbonnet.enclos.ui.SandboxMark
 import io.github.victorbonnet.enclos.ui.AppBar
+import io.github.victorbonnet.enclos.ui.ActionButton
+import io.github.victorbonnet.enclos.ui.AppSwitch
 import io.github.victorbonnet.enclos.ui.Bubble
 import io.github.victorbonnet.enclos.ui.Composer
 import io.github.victorbonnet.enclos.ui.ConnectionDot
 import io.github.victorbonnet.enclos.ui.Corners
 import io.github.victorbonnet.enclos.ui.DaySeparator
 import io.github.victorbonnet.enclos.ui.Fab
+import io.github.victorbonnet.enclos.ui.FormField
 import io.github.victorbonnet.enclos.ui.Gap
 import io.github.victorbonnet.enclos.ui.Glyph
 import io.github.victorbonnet.enclos.ui.Glyphs
@@ -238,18 +241,7 @@ private fun LockSetting(lock: LockState, ask: Ask) {
                 )
             }
             // The row is the switch: this one only shows it.
-            androidx.compose.material3.Switch(
-                checked = on,
-                onCheckedChange = null,
-                colors = androidx.compose.material3.SwitchDefaults.colors(
-                    checkedThumbColor = p.bg,
-                    checkedTrackColor = p.accent,
-                    checkedBorderColor = p.accent,
-                    uncheckedThumbColor = p.textMuted,
-                    uncheckedTrackColor = p.surface,
-                    uncheckedBorderColor = p.lineStrong,
-                ),
-            )
+            AppSwitch(checked = on, onCheckedChange = null)
         }
     }
 }
@@ -305,6 +297,7 @@ fun InboxScreen(
     open: (String) -> Unit,
     start: (Agent) -> Unit,
     openAgent: (Agent) -> Unit,
+    openRoutines: (Agent) -> Unit,
     pair: () -> Unit,
     openApproval: (String) -> Unit,
 ) {
@@ -427,6 +420,7 @@ fun InboxScreen(
                                             all = if (more) toggle else null,
                                             expanded = expanded,
                                             about = agent?.let { { openAgent(it) } },
+                                            routines = agent?.takeIf { it.offersRoutines }?.let { { openRoutines(it) } },
                                         ),
                                         onOpen = entry.home?.let { home -> { open(home.id) } } ?: if (more) toggle else null,
                                     )
@@ -540,7 +534,7 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
     val unread = home?.let { model.unread(it.id) } ?: 0
     val newest = model.lastAt(entry.address, archived)
     val line = p.lineStrong
-    val hasMenu = home != null || menu.start != null || menu.all != null || menu.about != null
+    val hasMenu = home != null || menu.start != null || menu.all != null || menu.about != null || menu.routines != null
     val showMenu: () -> Unit = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); menuOpen = true }
     val actions = when {
         onOpen != null -> Modifier.combinedClickable(
@@ -609,6 +603,7 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
                 }
                 menu.start?.let { MenuRow(Glyphs.compose, "New conversation") { pick(it) } }
                 menu.all?.let { MenuRow(Glyphs.inbox, if (menu.expanded) "Fewer conversations" else "All conversations") { pick(it) } }
+                menu.routines?.let { MenuRow(Glyphs.clock, "Routines") { pick(it) } }
                 home?.let { ArchiveMenuItem(model, it) { menuOpen = false } }
                 menu.about?.let {
                     Hairline()
@@ -624,9 +619,9 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
  * What a long press on an agent in the inbox offers: a new conversation
  * with it ([start]; none while its host does not list it), all its
  * conversations or fewer ([all], when some are folded away), and its page
- * ([about]).
+ * ([about]), and routines when the runtime supports them ([routines]).
  */
-class AgentMenu(val start: (() -> Unit)?, val all: (() -> Unit)?, val expanded: Boolean, val about: (() -> Unit)?)
+class AgentMenu(val start: (() -> Unit)?, val all: (() -> Unit)?, val expanded: Boolean, val about: (() -> Unit)?, val routines: (() -> Unit)? = null)
 
 @Composable
 private fun MenuRow(glyph: ImageVector, text: String, onClick: () -> Unit) {
@@ -831,13 +826,15 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
 
 /** A choice among a few, outlined in `accent` when chosen (filters, the theme). */
 @Composable
-internal fun Choice(label: String, on: Boolean, onClick: () -> Unit) {
+internal fun Choice(label: String, on: Boolean, enabled: Boolean = true, multiple: Boolean = false, onClick: () -> Unit) {
     val p = palette
-    val edge by animateColorAsState(if (on) p.accent else p.lineStrong, Motion.change(), label = "edge")
-    val text by animateColorAsState(if (on) p.accent else p.textMuted, Motion.change(), label = "text")
+    val edge by animateColorAsState(if (!enabled) p.line else if (on) p.accent else p.lineStrong, Motion.change(), label = "edge")
+    val text by animateColorAsState(if (!enabled) p.textFaint else if (on) p.accent else p.textMuted, Motion.change(), label = "text")
+    val select = if (multiple) Modifier.toggleable(value = on, enabled = enabled, role = Role.Checkbox, onValueChange = { onClick() })
+        else Modifier.selectable(selected = on, enabled = enabled, role = Role.RadioButton, onClick = onClick)
     Box(
         Modifier.height(44.dp).clip(Shapes.control).border(1.dp, edge, Shapes.control)
-            .selectable(selected = on, role = Role.RadioButton, onClick = onClick)
+            .then(select)
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
     ) { Text(label, style = Type.label, color = text, maxLines = 1) }
@@ -1638,23 +1635,11 @@ private fun RenameDialog(current: String?, live: Boolean, host: String, onDismis
         title = { Text("Name the conversation", style = Type.heading, color = p.text) },
         text = {
             Column {
-                BasicTextField(
+                FormField(
                     value = name,
                     onValueChange = { name = it.take(100) },
-                    singleLine = true,
-                    textStyle = Type.message.copy(color = p.text),
-                    cursorBrush = SolidColor(p.accent),
                     modifier = Modifier.fillMaxWidth().focusRequester(focus),
-                    decorationBox = { field ->
-                        Box(
-                            Modifier.fillMaxWidth().height(44.dp).clip(Shapes.control).background(p.bg)
-                                .border(1.dp, p.lineStrong, Shapes.control).padding(horizontal = 12.dp),
-                            contentAlignment = Alignment.CenterStart,
-                        ) {
-                            if (name.isEmpty()) Text("Weather in Lyon", style = Type.message, color = p.textFaint)
-                            field()
-                        }
-                    },
+                    placeholder = "Weather in Lyon",
                 )
                 Gap(8.dp)
                 Text(
@@ -1676,7 +1661,7 @@ private fun RenameDialog(current: String?, live: Boolean, host: String, onDismis
 
 /** A question before something that cannot be undone: [confirm] does it, Cancel does not. */
 @Composable
-private fun ConfirmDialog(title: String, text: String, confirm: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+internal fun ConfirmDialog(title: String, text: String, confirm: String, onDismiss: () -> Unit, enabled: Boolean = true, dismissLabel: String = "Cancel", onConfirm: () -> Unit) {
     val p = palette
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1684,18 +1669,14 @@ private fun ConfirmDialog(title: String, text: String, confirm: String, onDismis
         shape = Shapes.bubble,
         title = { Text(title, style = Type.heading, color = p.text) },
         text = { Text(text, style = Type.small, color = p.textMuted) },
-        confirmButton = { DialogButton(confirm, onClick = onConfirm) },
-        dismissButton = { DialogButton("Cancel", onClick = onDismiss) },
+        confirmButton = { DialogButton(confirm, enabled = enabled, onClick = onConfirm) },
+        dismissButton = { DialogButton(dismissLabel, onClick = onDismiss) },
     )
 }
 
 @Composable
 private fun DialogButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
-    Box(
-        Modifier.height(44.dp).clip(Shapes.control).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-            .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) { Text(text, style = Type.label, color = if (enabled) palette.accent else palette.textFaint) }
+    ActionButton(text, enabled = enabled, onClick = onClick)
 }
 
 /**

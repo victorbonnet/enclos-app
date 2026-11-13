@@ -42,6 +42,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.Composable
@@ -68,6 +70,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
@@ -594,6 +597,85 @@ fun TextLink(text: String, onClick: () -> Unit) {
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.defaultMinSize(minHeight = 44.dp).clickable(role = Role.Button, onClick = onClick)
             .padding(vertical = 12.dp),
+    )
+}
+
+/** A form field with the same outline, cursor and type as the conversation name. */
+@Composable
+fun FormField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    placeholder: String = "",
+    enabled: Boolean = true,
+    singleLine: Boolean = true,
+    minLines: Int = 1,
+    textStyle: TextStyle = Type.message,
+) {
+    val p = palette
+    Column(Modifier.fillMaxWidth()) {
+        if (label != null) {
+            Text(label, style = Type.small, color = p.textMuted)
+            Gap(8.dp)
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            enabled = enabled,
+            singleLine = singleLine,
+            minLines = if (singleLine) 1 else minLines,
+            textStyle = textStyle.copy(color = if (enabled) p.text else p.textFaint),
+            cursorBrush = SolidColor(p.accent),
+            modifier = modifier.fillMaxWidth().then(if (label == null) Modifier else Modifier.semantics { contentDescription = label }),
+            decorationBox = { field ->
+                Box(
+                    Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp).clip(Shapes.control).background(p.bg)
+                        .border(1.dp, if (enabled) p.lineStrong else p.line, Shapes.control).padding(horizontal = 12.dp, vertical = 10.dp),
+                    contentAlignment = if (singleLine) Alignment.CenterStart else Alignment.TopStart,
+                ) {
+                    if (value.isEmpty() && placeholder.isNotEmpty()) Text(placeholder, style = textStyle, color = p.textFaint)
+                    field()
+                }
+            },
+        )
+    }
+}
+
+/** A secondary action with the app's 44dp target and accent type. */
+@Composable
+fun ActionButton(text: String, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        // 48dp: the platform's minimum touch target.
+        modifier.defaultMinSize(minHeight = 48.dp).clip(Shapes.control).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(text, style = Type.label, color = if (enabled) palette.accent else palette.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+}
+
+/** A switch in the same palette as the app lock, including disabled states. */
+@Composable
+fun AppSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val p = palette
+    Switch(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        enabled = enabled,
+        modifier = modifier,
+        colors = SwitchDefaults.colors(
+            checkedThumbColor = p.bg,
+            checkedTrackColor = p.accent,
+            checkedBorderColor = p.accent,
+            uncheckedThumbColor = p.textMuted,
+            uncheckedTrackColor = p.surface,
+            uncheckedBorderColor = p.lineStrong,
+            disabledCheckedThumbColor = p.surface,
+            disabledCheckedTrackColor = p.accent.copy(alpha = 0.38f),
+            disabledCheckedBorderColor = p.accent.copy(alpha = 0.38f),
+            disabledUncheckedThumbColor = p.textFaint.copy(alpha = 0.38f),
+            disabledUncheckedTrackColor = p.surface,
+            disabledUncheckedBorderColor = p.line,
+        ),
     )
 }
 
