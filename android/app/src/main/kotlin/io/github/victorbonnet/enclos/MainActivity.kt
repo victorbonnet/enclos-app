@@ -25,6 +25,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -211,16 +212,20 @@ class MainActivity : ComponentActivity() {
  * The screens and the moves between them. A full screen arrives from the
  * right over the tabs, which drift left; going back reverses it, and with
  * the back gesture the move follows the finger (predictive back) until it
- * is let go. Tabs fade through each other. Each screen draws its own
- * ground, so two never show through each other mid-move.
+ * is let go. The two home views slide with a horizontal swipe. Each screen
+ * draws its own ground, so two never show through each other mid-move.
  */
 @Composable
 private fun Screens(model: AppModel, ask: Ask) {
     var saved by rememberSaveable { mutableStateOf("tabs") }
-    var view by rememberSaveable { mutableStateOf(View.Conversations) }
+    val views = rememberPagerState(pageCount = { View.entries.size })
     val routes = remember { SeekableTransitionState(Route.restore(saved)) }
     val transition = rememberTransition(routes, label = "route")
     val scope = rememberCoroutineScope()
+    val onView = { to: View ->
+        scope.launch { views.animateScrollToPage(to.ordinal, animationSpec = Motion.change(Motion.MEDIUM)) }
+        Unit
+    }
     val go = { to: Route ->
         val leaving = (routes.targetState as? Route.Chat)?.takeIf { it != to }
         saved = to.save()
@@ -260,8 +265,9 @@ private fun Screens(model: AppModel, ask: Ask) {
     val opened = model.openedLink.value
     LaunchedEffect(opened) { if (opened != null) go(Route.Pair) }
 
-    // Back from the agents: to the conversations.
-    BackHandler(enabled = !onFullScreen && view != View.Conversations) { view = View.Conversations }
+    // Back from the agents: to the conversations. The settled page, so a
+    // swipe half way does not change what Back does.
+    BackHandler(enabled = !onFullScreen && views.settledPage != View.Conversations.ordinal) { onView(View.Conversations) }
 
     Box(Modifier.fillMaxSize().background(palette.bg).windowInsetsPadding(WindowInsets.statusBars)) {
         transition.AnimatedContent(transitionSpec = { routeMove(forward = targetState.depth > initialState.depth) }) { route ->
@@ -275,7 +281,10 @@ private fun Screens(model: AppModel, ask: Ask) {
                 val start = { agent: Agent -> go(Route.Chat(model.newConversation(agent))) }
                 when (route) {
                     Route.Pair -> PairScreen(model, back = { go(Route.Tabs) }, done = {
-                        view = View.Agents
+                        // The pager is not laid out while pairing shows: set
+                        // its page at once, which its next layout applies,
+                        // rather than animate a pager that is not there.
+                        views.requestScrollToPage(View.Agents.ordinal)
                         go(Route.Tabs)
                     })
                     is Route.ApprovalPage -> PolicyRequestScreen(model, route.key, back = { go(Route.Tabs) }, openChat = { go(Route.Chat(it)) })
@@ -295,8 +304,8 @@ private fun Screens(model: AppModel, ask: Ask) {
                     )
                     Route.Tabs -> HomeShell(
                         model,
-                        view,
-                        onView = { view = it },
+                        views,
+                        onView = onView,
                         openChat = { go(Route.Chat(it)) },
                         openAgent = { go(Route.AgentPage(it.address)) },
                         openSandbox = { go(Route.SandboxPage(it)) },

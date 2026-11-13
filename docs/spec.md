@@ -43,7 +43,7 @@ A message from the bridge that the app cannot read (a field missing, as from ano
 
 ## 4. Screens
 
-**The first screen** has two views, the conversations (the [inbox](#inbox)) and the [agents](#agents). Its top line holds the switch between them (a pill with the conversations' bubble and the agents' glyph, the one shown on `surface`), then, on the conversations, unread only, and Settings' gear. Over the end of the view, on a fade to the ground, sit the search for that view (a pill on `surface`: "Search conversations", "Search agents") and the compose button, which opens a [new conversation](#new-conversation); both show once a host is paired. Back from the agents view leads to the conversations.
+**The first screen** has two views, the conversations (the [inbox](#inbox)) and the [agents](#agents). Its top line holds the switch between them (a pill with the conversations' bubble and the agents' glyph, the one shown on `surface`), then, on the conversations, unread only, and Settings' gear. Swiping left on the main content opens the agents; swiping right returns to the conversations. The content follows the finger and settles on a view when released; there is no wrapping at either end. The switch shows the view a swipe would settle on and can still be tapped; the actions on the top line and the search field's label change once the swipe has settled. Vertical swipes scroll the current list. Over the end of the view, on a fade to the ground, sit the search for that view (a pill on `surface`: "Search conversations", "Search agents") and the compose button, which opens a [new conversation](#new-conversation); both show once a host is paired, and stay in place while the views slide, with the same search text across both. Back from the agents view leads to the conversations. Pairing a host lands on the agents.
 
 **Full screens** arrive over it from the right: a conversation, an [agent's page](#an-agents-page), a [sandbox's page](#agents), a new conversation, [Settings](#settings), pairing and a policy request. Back from each leads to the first screen, except an agent's page opened from its sandbox's page, which goes back to that page. The app is in portrait only, for now, the QR scanner included.
 
@@ -176,7 +176,7 @@ The runtime's plugin tells the agent what the app draws, so that it formats when
 Short and functional, never decorative: something moves to show where it came from or went. Durations: 150 ms for a change in place, 250 ms for a screen or a message arriving, 150 ms for what leaves. Arriving decelerates, leaving accelerates.
 
 - A full screen arrives over the tabs: it slides in from the right edge, opaque, while the tabs drift a tenth of the width to the left under it. Going back is the same move reversed: the screen slides off to the right, uncovering the tabs drifting back. Both take 250 ms at an even pace, so a finger can drag the move: with the back gesture the screen follows the finger and goes or returns where it is let go.
-- Tabs fade through each other (200 ms); the corners close in on the tab chosen.
+- The Inbox and Agents views slide side by side with a horizontal swipe; tapping their switch slides to the chosen view in 250 ms.
 - A message fades in while the others slide up; an agent that moves to the top of the inbox slides there with its conversations, and those it unfolds fade in.
 - Badges, chips, pairing steps, the send button and the theme change smoothly.
 - An agent at work: its avatar's corners swell out of it and fade, every 1.4 s; the working wave beside it.
@@ -205,7 +205,7 @@ It is off until the person turns it on in Settings, Security, which needs a scre
 | --- | --- | --- |
 | UI | Jetpack Compose, Material 3 structure in enclos's tokens | SwiftUI, the platform's structure in the same tokens |
 | Core | `core-ffi` through UniFFI's Kotlin bindings (JNA) | the same crate through UniFFI's Swift bindings |
-| Destinations | bottom navigation bar; the active tab inside the logo's corners | `TabView`, the same framed active tab |
+| Home views | `HorizontalPager` below the top switch, which follows the active page; search and compose stay fixed | a native paging view below the switch, with fixed search and compose controls (not built) |
 | Destination title | title at the top, no bar above (28 sp); its action on the same line | large navigation title (34 pt), its action in the navigation bar |
 | Portrait only | `screenOrientation="portrait"` (Android 16+ ignores it on large screens) | supported orientations: portrait (`Info.plist`) |
 | New conversation | extended FAB | compose button in the navigation bar |
