@@ -106,13 +106,34 @@ fun Corners(color: Color, modifier: Modifier = Modifier, stroke: Dp = 2.dp, arm:
 
 /**
  * An agent: the first letter of its name inside the mark's corners, in
- * `accent` while its host is connected, `line-strong` otherwise.
+ * `accent` while its host is connected, `line-strong` otherwise. While it
+ * is [working], a copy of the corners swells out of them and fades, every
+ * 1.4 s; with animations off, only the corners' `accent` says so.
  */
 @Composable
-fun AgentAvatar(name: String, live: Boolean, small: Boolean = false) {
+fun AgentAvatar(name: String, live: Boolean, small: Boolean = false, working: Boolean = false) {
     val side = if (small) 32.dp else 44.dp
-    Box(Modifier.size(side), contentAlignment = Alignment.Center) {
-        Corners(if (live) palette.accent else palette.lineStrong, Modifier.size(side), stroke = if (small) 2.dp else 2.5.dp)
+    val stroke = if (small) 2.dp else 2.5.dp
+    Box(
+        Modifier.size(side).then(if (working) Modifier.semantics { contentDescription = "$name is working" } else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (working && !animationsOff()) {
+            val pulse = rememberInfiniteTransition(label = "active")
+            val t by pulse.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "pulse")
+            Corners(
+                palette.accent,
+                Modifier.size(side).graphicsLayer {
+                    // Read here, the pulse redraws the corners without recomposing them.
+                    val grow = (t / 0.7f).coerceAtMost(1f)
+                    scaleX = 1f + 0.4f * grow
+                    scaleY = 1f + 0.4f * grow
+                    alpha = 0.7f * (1f - grow)
+                },
+                stroke = stroke,
+            )
+        }
+        Corners(if (live || working) palette.accent else palette.lineStrong, Modifier.size(side), stroke = stroke)
         Text(
             name.take(1).lowercase(),
             style = Type.code.copy(fontSize = if (small) 12.sp else 15.sp, fontWeight = FontWeight.SemiBold),
@@ -335,6 +356,19 @@ fun Bubble(
  */
 @Composable
 fun WorkingBubble(agent: String) {
+    Box(
+        Modifier.clip(Shapes.bubbleIn).background(palette.surface).border(BorderStroke(1.dp, palette.line), Shapes.bubbleIn)
+            .padding(horizontal = 12.dp, vertical = 14.dp).semantics { contentDescription = "$agent is working" },
+    ) { WorkingWave() }
+}
+
+/**
+ * The working wave on its own: three [square]s in `accent`, rising by
+ * [lift] and brightening one after the other every 900 ms; still with
+ * animations off.
+ */
+@Composable
+fun WorkingWave(square: Dp = 6.dp, lift: Dp = 4.dp) {
     val still = animationsOff()
     val wave = rememberInfiniteTransition(label = "working")
     val phase by wave.animateFloat(
@@ -343,19 +377,14 @@ fun WorkingBubble(agent: String) {
         animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing)),
         label = "phase",
     )
-    val lift = with(LocalDensity.current) { 4.dp.toPx() }
-    Row(
-        Modifier.clip(Shapes.bubbleIn).background(palette.surface).border(BorderStroke(1.dp, palette.line), Shapes.bubbleIn)
-            .padding(horizontal = 12.dp, vertical = 14.dp).semantics { contentDescription = "$agent is working" },
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    val up = with(LocalDensity.current) { lift.toPx() }
+    Row(horizontalArrangement = Arrangement.spacedBy(square * 5 / 6), verticalAlignment = Alignment.CenterVertically) {
         repeat(3) { i ->
             Box(
-                Modifier.size(6.dp).graphicsLayer {
+                Modifier.size(square).graphicsLayer {
                     // Read here, the phase redraws the squares without recomposing them.
                     val bump = if (still) 0f else bump((phase - i * 0.18f + 1f) % 1f)
-                    translationY = -lift * bump
+                    translationY = -up * bump
                     alpha = 0.4f + 0.6f * bump
                 }.background(palette.accent),
             )

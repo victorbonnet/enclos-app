@@ -57,6 +57,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -107,6 +108,7 @@ import io.github.victorbonnet.enclos.ui.UnreadBadge
 import io.github.victorbonnet.enclos.ui.Files
 import io.github.victorbonnet.enclos.ui.ToolSteps
 import io.github.victorbonnet.enclos.ui.WorkingBubble
+import io.github.victorbonnet.enclos.ui.WorkingWave
 import io.github.victorbonnet.enclos.ui.palette
 import kotlinx.coroutines.delay
 
@@ -477,10 +479,23 @@ private fun AgentHeader(model: AppModel, group: Group, shut: Boolean, onToggle: 
 
 // ---------- Agents ----------
 
-/** Hosts, their sandboxes and their agents, whatever the runtime; tap an agent to start a conversation. */
+/**
+ * The agents at work first, each with what it does and where (tap one to
+ * open that conversation); then hosts, their sandboxes and their agents,
+ * whatever the runtime, each working or with when it was last active; tap
+ * an agent to start a conversation.
+ */
 @Composable
-fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, pair: () -> Unit) {
+fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, open: (String) -> Unit, pair: () -> Unit) {
     val p = palette
+    // "5 min ago" stays true while the screen shows.
+    val now by produceState(System.currentTimeMillis() / 1000) {
+        while (true) {
+            delay(30_000)
+            value = System.currentTimeMillis() / 1000
+        }
+    }
+    val busy = model.agents.mapNotNull { a -> model.workingOn(a).takeIf { it.isNotEmpty() }?.let { a to it } }
     Column(Modifier.fillMaxSize()) {
         // Pairing another host sits on the title's line: no bar above it.
         LargeTitle("Agents") { IconButton(Glyphs.qr, "Pair a host", pair) }
@@ -489,6 +504,25 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, pair: () -> Unit) {
             return
         }
         LazyColumn(Modifier.weight(1f)) {
+            if (busy.isNotEmpty()) {
+                item(key = "working") {
+                    Arriving {
+                        Column {
+                            Hairline()
+                            Text(
+                                "Working now · ${busy.size}",
+                                style = Type.label,
+                                color = p.text,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp).semantics { heading() },
+                            )
+                        }
+                    }
+                }
+                items(busy, key = { "working-${it.first.address}" }) { (agent, on) ->
+                    Arriving { WorkingRow(model, agent, on) { open(on.first().id) } }
+                }
+                item(key = "working-end") { Arriving { Gap(8.dp) } }
+            }
             model.paired.forEach { host ->
                 val live = model.connected(host.name)
                 item(key = "host-${host.name}") {
@@ -530,16 +564,32 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, pair: () -> Unit) {
                         }
                     }
                     items(agents, key = { "agent-${it.address}" }) { agent ->
+                        val working = busy.any { it.first == agent }
                         Row(
                             Modifier.fillMaxWidth().clickable(onClickLabel = "New conversation", onClick = { start(agent) })
                                 .padding(start = 34.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            AgentAvatar(agent.agent, live, small = true)
+                            AgentAvatar(agent.agent, live, small = true, working = working)
                             Column(Modifier.weight(1f)) {
                                 Text(agent.agent, style = Type.name.copy(fontSize = 15.sp), color = p.text)
-                                Text(agent.address, style = Type.code, color = p.textFaint)
+                                // Working, or when it last sent a message; its address before its first.
+                                Crossfade(working, animationSpec = Motion.change(), label = "activity") { on ->
+                                    if (on) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Text("working", style = Type.small, color = p.accent)
+                                            WorkingWave(square = 4.dp, lift = 3.dp)
+                                        }
+                                    } else {
+                                        val last = model.lastActive(agent)
+                                        if (last != null) {
+                                            Text("active ${Times.ago(last, now)}", style = Type.small, color = p.textMuted)
+                                        } else {
+                                            Text(agent.address, style = Type.code, color = p.textFaint)
+                                        }
+                                    }
+                                }
                             }
                             Glyph(Glyphs.plus, p.accent, size = 20.dp)
                         }
@@ -548,6 +598,58 @@ fun AgentsScreen(model: AppModel, start: (Agent) -> Unit, pair: () -> Unit) {
             }
             item { Gap(16.dp) }
         }
+    }
+}
+
+/**
+ * An agent at work, in Agents: its avatar pulsing, its name and where it
+ * works (the conversation, or how many), the wave and the tool it runs.
+ * Tapping it opens the conversation with the newest message.
+ */
+@Composable
+private fun WorkingRow(model: AppModel, agent: Agent, on: List<Conversation>, onClick: () -> Unit) {
+    val p = palette
+    val first = on.first()
+    val where = if (on.size > 1) {
+        "in ${on.size} conversations"
+    } else {
+        "in ${first.title ?: if (first.home) "Home" else "a new conversation"}"
+    }
+    Row(
+        Modifier.fillMaxWidth().clickable(onClickLabel = "Open the conversation", onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        AgentAvatar(agent.agent, model.connected(agent.host), working = true)
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(agent.agent, style = Type.name, color = p.text, maxLines = 1)
+                Text(
+                    where,
+                    style = Type.small,
+                    color = p.textMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false).padding(bottom = 1.dp),
+                )
+            }
+            Row(
+                Modifier.padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                WorkingWave(square = 4.dp, lift = 3.dp)
+                Text(
+                    model.doing(first.id) ?: "working",
+                    style = Type.small,
+                    color = p.accent,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Glyph(Glyphs.chevron, p.textMuted, size = 20.dp)
     }
 }
 
@@ -1146,6 +1248,27 @@ object Times {
             d == today -> clock(seconds)
             d.isAfter(today.minusDays(7)) -> date(seconds).format(weekday)
             else -> date(seconds).format(dayMonth)
+        }
+    }
+
+    /**
+     * How long ago [seconds] was at [now], in the largest whole unit:
+     * `just now`, `5 min ago`, `3 hours ago`, `yesterday`, `2 days ago`,
+     * `3 weeks ago`, `4 months ago`, `2 years ago`.
+     */
+    fun ago(seconds: Long, now: Long): String {
+        val s = (now - seconds).coerceAtLeast(0)
+        fun n(count: Long, unit: String) = "$count $unit${if (count == 1L) "" else "s"} ago"
+        val day = 86_400L
+        return when {
+            s < 60 -> "just now"
+            s < 3_600 -> "${s / 60} min ago"
+            s < day -> n(s / 3_600, "hour")
+            s < 2 * day -> "yesterday"
+            s < 7 * day -> n(s / day, "day")
+            s < 30 * day -> n(s / (7 * day), "week")
+            s < 365 * day -> n(s / (30 * day), "month")
+            else -> n(s / (365 * day), "year")
         }
     }
 
