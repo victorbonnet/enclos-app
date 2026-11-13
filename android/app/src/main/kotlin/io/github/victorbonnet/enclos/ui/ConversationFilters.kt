@@ -31,6 +31,14 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.tooling.preview.Preview
 
+/** What the filters button says it holds, naming each filter that is on, for a screen reader. */
+internal fun filtersState(unreadOnly: Boolean, archivedOnly: Boolean): String = when {
+    unreadOnly && archivedOnly -> "Unread only and Archived conversations"
+    unreadOnly -> "Unread only"
+    archivedOnly -> "Archived conversations"
+    else -> "No filters active"
+}
+
 /** The Inbox's independent filters, kept together so both can be changed at once. */
 @Composable
 fun ConversationFilters(
@@ -41,8 +49,7 @@ fun ConversationFilters(
 ) {
     val p = palette
     var expanded by remember { mutableStateOf(false) }
-    val count = (if (unreadOnly) 1 else 0) + (if (archivedOnly) 1 else 0)
-    val active = count > 0
+    val active = unreadOnly || archivedOnly
     Box {
         Box(
             Modifier.size(48.dp).clip(Shapes.control)
@@ -51,11 +58,7 @@ fun ConversationFilters(
                 .clickable(onClickLabel = "Show conversation filters", role = Role.Button) { expanded = true }
                 .semantics {
                     contentDescription = "Conversation filters"
-                    stateDescription = when (count) {
-                        0 -> "No filters active"
-                        1 -> "1 filter active"
-                        else -> "$count filters active"
-                    }
+                    stateDescription = filtersState(unreadOnly, archivedOnly)
                 },
             contentAlignment = Alignment.Center,
         ) { Glyph(Glyphs.filter, if (active) p.accent else p.textMuted) }
