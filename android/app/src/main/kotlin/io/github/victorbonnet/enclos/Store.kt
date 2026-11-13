@@ -19,6 +19,7 @@ class Saved(
     /** By host: the newest `seq` kept, which `sync` starts after. */
     val kept: Map<String, Long>,
     val questions: List<QuestionInfo> = emptyList(),
+    val deleted: List<ConversationKey> = emptyList(),
 )
 
 /**
@@ -80,7 +81,8 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
             val write = writableDatabase
             stale.forEach { write.delete("questions", "host = ? AND id = ?", arrayOf(it.host, it.id)) }
         }
-        return Saved(agents, conversations, lines, kept, questions)
+        val deleted = db.rawQuery("SELECT host,id FROM conversation_deletions", null).use { c -> c.rows { ConversationKey(it.getString(0), it.getString(1)) } }
+        return Saved(agents, conversations, lines, kept, questions, deleted)
     }
 
     /** Every message kept, by conversation, in `seq` order. */
@@ -105,8 +107,30 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         question = c.getStringOrNull(9),
     )
 
+    private fun wasDeleted(host: String, id: String): Boolean = readableDatabase.rawQuery(
+        "SELECT 1 FROM conversation_deletions WHERE host=? AND id=?", arrayOf(host, id),
+    ).use { it.moveToFirst() }
+
+    /** The deletion record and cached content removal commit together. */
+    fun deleteConversation(key: ConversationKey) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val values = ContentValues().apply { put("host", key.host); put("id", key.id) }
+            db.insertWithOnConflict("conversation_deletions", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+            val questions = db.rawQuery("SELECT id,info FROM questions WHERE host=?", arrayOf(key.host)).use { c ->
+                c.rows { it.getString(0) to it.getString(1) }.filter { (_, info) -> runCatching { JSONObject(info).optString("conversation") }.getOrNull() == key.id }.map { it.first }
+            }
+            questions.forEach { db.delete("questions", "host=? AND id=?", arrayOf(key.host, it)) }
+            db.delete("messages", "host=? AND conversation=?", arrayOf(key.host, key.id))
+            db.delete("conversations", "host=? AND id=?", arrayOf(key.host, key.id))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
     /** A conversation the bridge sent, new or renamed. */
     fun conversation(c: Conversation) {
+        if (wasDeleted(c.host, c.id)) return
         val values = ContentValues().apply {
             put("host", c.host)
             put("agent", c.agent)
@@ -129,6 +153,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
 
     /** A message of [conversation] on [host]; one already kept stays as it was. */
     fun message(host: String, conversation: String, line: Line) {
+        if (wasDeleted(host, conversation)) return
         val values = ContentValues().apply {
             put("host", host)
             put("seq", line.seq)
@@ -224,7 +249,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         val db = writableDatabase
         db.beginTransaction()
         try {
-            listOf("messages", "questions", "conversations", "agents").forEach { db.delete(it, "host = ?", arrayOf(host)) }
+            listOf("messages", "questions", "conversations", "agents", "conversation_deletions").forEach { db.delete(it, "host = ?", arrayOf(host)) }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -262,8 +287,8 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
     ).toString()
 
     /** The ids of the files of every message kept from [host], to delete them when it is forgotten. */
-    fun attachmentIds(host: String): List<String> =
-        readableDatabase.rawQuery("SELECT attachments FROM messages WHERE host = ? AND attachments IS NOT NULL", arrayOf(host)).use { c ->
+    fun attachmentIds(host: String, conversation: String? = null): List<String> =
+        readableDatabase.rawQuery("SELECT attachments FROM messages WHERE host = ? AND (? IS NULL OR conversation = ?) AND attachments IS NOT NULL", arrayOf(host, conversation, conversation)).use { c ->
             val ids = mutableListOf<String>()
             while (c.moveToNext()) {
                 try {
@@ -306,7 +331,7 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
 }
 
 /** The database's version: [upgrades] brings an older one to it. */
-internal const val STORE_VERSION = 6
+internal const val STORE_VERSION = 7
 
 /** A new database, at [STORE_VERSION]. */
 internal val CREATE = listOf(
@@ -319,7 +344,10 @@ internal val CREATE = listOf(
     "CREATE TABLE agents (host TEXT NOT NULL, name TEXT NOT NULL, runtime TEXT NOT NULL, capabilities TEXT NOT NULL, " +
         "display_name TEXT, name_revision INTEGER NOT NULL DEFAULT 0 CHECK(name_revision>=0), PRIMARY KEY (host, name))",
     QUESTIONS,
+    DELETIONS,
 )
+
+private const val DELETIONS = "CREATE TABLE conversation_deletions (host TEXT NOT NULL, id TEXT NOT NULL, PRIMARY KEY(host,id))"
 
 /** The questions agents ask, each with its revision, by host. */
 private const val QUESTIONS =
@@ -350,4 +378,6 @@ internal fun upgrades(old: Int): List<String> = buildList {
         add("ALTER TABLE messages ADD COLUMN question TEXT")
         add(QUESTIONS)
     }
+    // 7: deletion records prevent delayed frames from restoring removed chats.
+    if (old < 7) add(DELETIONS)
 }

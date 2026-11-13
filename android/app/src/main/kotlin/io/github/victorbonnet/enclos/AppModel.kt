@@ -307,6 +307,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         resync = { host -> connections[host]?.send(message("sync", "since" to since(host))) == true },
         dropped = { why -> android.util.Log.d("enclos", "question not shown: $why") },
     )
+    val deletion = ConversationDeletion(
+        connected = ::connected,
+        send = { host, command -> connections[host]?.send(command) == true },
+        removed = ::removeConversation,
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+    )
     private data class ArchiveKey(val host: String, val conversation: String)
     private val archiveRequests = mutableMapOf<String, ArchiveKey>()
     private val archivePending = mutableStateMapOf<ArchiveKey, Boolean>()
@@ -351,7 +357,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 cachedPolicies.forEach { sandboxPolicies[it.address] = it }
                 if (recent != null) {
                     agents.addAll(recent.agents.map(agentNames::listed))
-                    conversations.addAll(recent.conversations)
+                    deletion.deleted.putAll(recent.deleted.associateWith { true })
+                    conversations.addAll(recent.conversations.filter { ConversationKey(it.host, it.id) !in deletion.deleted })
                     recent.questions.forEach { questions.merge(it, cached = true) }
                     lines.putAll(recent.lines)
                     kept.putAll(recent.kept)
@@ -788,6 +795,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
+        deletion.ended(host.name)
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         routines.ended(host.name)
         questions.ended(host.name)
@@ -837,6 +845,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun received(host: Host, m: JSONObject) {
+        if (deletion.received(host.name, m)) return
+        val conversationId = m.optString("conversation")
+        if (m.optString("type") in conversationScoped && ConversationKey(host.name, conversationId) in deletion.deleted) return
         // Once for every message about a conversation: another host's with the same id keeps it.
         val about = m.optString("conversation").ifBlank { null }
         if (about != null && leftOutForClash(conversations, host.name, m.optString("type"), about)) {
@@ -1272,6 +1283,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** By attachment id: the file being fetched. */
     private val fetching = mutableMapOf<String, Fetch>()
+    private val retiredFiles = mutableSetOf<Pair<String, String>>()
     /** By the id of the `attachment.get` sent for a file, the one part asked for at a time: its attachment. */
     private val asked = mutableMapOf<String, String>()
     /** Files are written here, one part after another, never on the main thread. */
@@ -1289,6 +1301,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Fetches [a] from [host]'s bridge, or finds it on the phone; again after a failure. */
     fun fetch(host: String, a: Attachment) {
+        if ((host to a.id) in retiredFiles) return
         if (a.id in fetching) return
         files[a.id] = FileState.Loading(0, a.size)
         // What a broken fetch left is kept: it goes on from there.
@@ -1301,6 +1314,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             val have = partOf(host, a).length()
             ui {
+                if ((host to a.id) in retiredFiles) return@ui
                 when {
                     found != null -> files[a.id] = FileState.Ready(found)
                     a.id in fetching -> {}
@@ -1408,6 +1422,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * field ([Outgoing]).
      */
     fun send(conversation: Conversation, text: String): String? {
+        if (ConversationKey(conversation.host, conversation.id) in deletion.pending) return "This conversation is being deleted."
+        if (ConversationKey(conversation.host, conversation.id) in deletion.deleted) return "This conversation was deleted."
         said.remove(conversation.host)
         // A draft becomes a conversation on the bridge with its first message
         // ([firstSent]); it stays a draft until the bridge sends it back, so a
@@ -1437,8 +1453,49 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         return null
     }
 
+    /** Removes the confirmed conversation everywhere this phone keeps it. */
+    private fun removeConversation(key: ConversationKey) {
+        val c = conversations.firstOrNull { it.host == key.host && it.id == key.id }
+        val attached = if (c == null) emptyList() else lines[key.id].orEmpty().flatMap { it.attachments }
+        questions.forgetConversation(key.host, key.id)
+        if (c != null) {
+            conversations.removeAll { it.host == key.host && it.id == key.id }
+            outgoing.forget(setOf(key.id))
+            drafts.remove(key.id)
+            groups.remove(key.id)
+            lines.remove(key.id)
+            typing.remove(key.id)
+            answered(key.id)
+            steps.remove(key.id)
+            lastRead.remove(key.id)
+            unsettledRead.remove(key.id)
+            reads.edit { remove(key.id) }
+        }
+        archivePending.remove(ArchiveKey(key.host, key.id))
+        archiveProblems.remove(ArchiveKey(key.host, key.id))
+        archiveRequests.entries.removeAll { it.value == ArchiveKey(key.host, key.id) }
+        retireFiles(key.host, attached.map { it.id })
+        save {
+            val ids = (attached.map { it.id } + attachmentIds(key.host, key.id)).toSet()
+            deleteConversation(key)
+            ui {
+                retireFiles(key.host, ids)
+                // Run after queued attachment writes on their own executor.
+                disk.execute { ids.forEach { attachmentFolder(key.host, it)?.deleteRecursively() } }
+            }
+        }
+    }
+
+    private fun retireFiles(host: String, ids: Collection<String>) {
+        ids.forEach { id ->
+            retiredFiles += host to id
+            fetching.remove(id); files.remove(id); asked.values.removeAll { it == id }
+        }
+    }
+
     /** What prevents a server-confirmed archive change; nothing is queued offline. */
     fun archiveUnavailable(conversation: Conversation): String? = when {
+        ConversationKey(conversation.host, conversation.id) in deletion.pending -> "Deleting conversation…"
         archivePending.containsKey(ArchiveKey(conversation.host, conversation.id)) -> "Saving archive state…"
         conversation.id in drafts -> "Send the first message before archiving."
         !connected(conversation.host) -> "Connect to ${conversation.host} to change archive state."
@@ -1585,6 +1642,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
+        paired.forEach { deletion.ended(it.name) }
         paired.forEach { questions.forget(it.name) }
         paired.forEach { agentNames.forget(it.name) }
         paired.forEach { routines.forget(it.name) }
@@ -1634,6 +1692,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         clashes.remove(host)
         clashAgents.remove(host)
         questions.forget(host)
+        deletion.forget(host)
         clearArchiveRequests(host)
         archiveProblems.keys.filter { it.host == host }.forEach { archiveProblems.remove(it) }
         agentImages.forget(host)
