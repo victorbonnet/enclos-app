@@ -99,8 +99,51 @@ data class Conversation(
      * conversation with one agent. A group's [agent] is its sandbox.
      */
     val members: List<String> = emptyList(),
+    /** Kept out of the active inbox until its owner explicitly unarchives it. */
+    val archived: Boolean = false,
+    /** The bridge's order for metadata, independent of message sequence numbers. */
+    val revision: Long = 0,
 ) {
     val group: Boolean get() = members.isNotEmpty()
+}
+
+/**
+ * A delayed broadcast or sync must not overwrite newer metadata from the same host, and one
+ * host's conversation never replaces another's that has the same id: [current] is the row the
+ * phone keeps for [incoming]'s id, whatever its host.
+ */
+fun acceptsConversationMetadata(current: Conversation?, incoming: Conversation): Boolean =
+    incoming.revision >= 0 && (current == null || (current.host == incoming.host && current.id == incoming.id && incoming.revision >= current.revision))
+
+/**
+ * Whether conversation [id] is kept for a host other than [host]. The phone keys conversations,
+ * their messages and its cache by id alone, and a Home's id (`home.<sandbox>.<agent>`) is the
+ * same on two hosts with the same sandbox and agent names: the second host's is refused rather
+ * than mixed into the first's.
+ */
+fun heldByAnotherHost(conversations: List<Conversation>, host: String, id: String): Boolean =
+    conversations.any { it.id == id && it.host != host }
+
+/** The messages whose `conversation` names what this phone keeps by that id: the conversation, its lines, typing, steps, a group's state. */
+val conversationScoped = setOf("conversation", "message", "group.state", "typing", "tool")
+
+/**
+ * Whether a message of [type] from [host] about conversation [id] is left out: it names
+ * a conversation another host's has the id of, so it would land on that one. A policy
+ * request that names a conversation is not about the conversation's own state, and stays.
+ */
+fun leftOutForClash(conversations: List<Conversation>, host: String, type: String, id: String?): Boolean =
+    type in conversationScoped && id != null && heldByAnotherHost(conversations, host, id)
+
+/** A dialog may hold an older row: naming changes only the current row's title fields. */
+internal fun renameConversationLocally(conversations: MutableList<Conversation>, id: String, title: String) {
+    val at = conversations.indexOfFirst { it.id == id }
+    if (at >= 0) {
+        conversations[at] = conversations[at].copy(
+            title = title.ifEmpty { null },
+            titledBy = if (title.isEmpty()) null else "person",
+        )
+    }
 }
 
 /**
@@ -207,6 +250,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     )
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
+    private data class ArchiveKey(val host: String, val conversation: String)
+    private val archiveRequests = mutableMapOf<String, ArchiveKey>()
+    private val archivePending = mutableStateMapOf<ArchiveKey, Boolean>()
+    private val archiveProblems = mutableStateMapOf<ArchiveKey, String>()
 
     /**
      * Whether what the phone kept for the first screens is read. Until then
@@ -411,8 +458,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         conversationsOf(address).filter { working(it.id) }.sortedByDescending { lines[it.id]?.lastOrNull()?.time ?: 0L }
 
     /** The time of the newest message in any conversation of the agent at [address]; null before the first. */
-    fun lastAt(address: String): Long? =
-        conversationsOf(address).mapNotNull { c -> lines[c.id]?.lastOrNull()?.time?.takeIf { it > 0 } }.maxOrNull()
+    fun lastAt(address: String, archived: Boolean? = null): Long? =
+        conversationsOf(address).filter { archived == null || it.archived == archived }
+            .mapNotNull { c -> lines[c.id]?.lastOrNull()?.time?.takeIf { it > 0 } }.maxOrNull()
 
     /** What the agent is doing in [conversation] now: the tool it runs, if it said which. */
     fun doing(conversation: String): String? =
@@ -667,6 +715,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     private fun ended(host: Host, why: String) {
         connections.remove(host.name)
+        clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         agentImages.ended(host.name)
         approvalsFresh[host.name] = false
         policyConnectionEnded(host.name)
@@ -711,11 +760,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun received(host: Host, m: JSONObject) {
-        // A conversation is known by its id alone: one another host already
-        // has stays that host's, whatever this host's bridge sends about it.
-        if (ownedByAnother(conversations, host.name, m.optString("conversation"))) {
-            android.util.Log.w("enclos", "${m.optString("type")} for another host's conversation: ignored")
-            return
+        // Once for every message about a conversation: another host's with the same id keeps it.
+        val about = m.optString("conversation").ifBlank { null }
+        if (about != null && leftOutForClash(conversations, host.name, m.optString("type"), about)) {
+            return refusedClash(host.name, about, m.optString("agent").ifBlank { null })
         }
         when (m.optString("type")) {
             "sandbox.policy", "sandbox.policy.preview" -> {
@@ -779,10 +827,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 // A group started here: the bridge made it.
                 startingGroups.values.remove(id)
                 val at = conversations.indexOfFirst { it.id == id }
+                if (!acceptsConversationMetadata(conversations.getOrNull(at), known)) return
                 if (at < 0 || conversations[at] != known) {
                     if (at < 0) conversations.add(known) else conversations[at] = known
                     save { conversation(known) }
                 }
+                val key = ArchiveKey(host.name, id)
+                archiveProblems.remove(key)
                 // How far the person read it, on any of their devices: what
                 // is before is not unread here. Read further here (offline,
                 // say): the bridge is told. Past the newest message here (a
@@ -896,7 +947,26 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     durationMs = if (m.has("duration_ms")) m.getLong("duration_ms") else null,
                 )
             }
+            "ack" -> {
+                val request = m.optString("of")
+                val archive = archiveRequests[request]?.takeIf { it.host == host.name }
+                if (archive != null) {
+                    // The bridge sends canonical metadata directly before this ack.
+                    // It was applied, or ignored because a newer revision already won.
+                    // The receipt finishes saving; it never supplies the archive flag.
+                    archiveRequests.remove(request)
+                    archivePending.remove(archive)
+                }
+            }
             "error" -> {
+                val request = m.optString("of")
+                val archive = archiveRequests[request]?.takeIf { it.host == host.name }
+                if (archive != null) {
+                    archiveRequests.remove(request)
+                    archivePending.remove(archive)
+                    archiveProblems[archive] = m.optString("message").ifBlank { "The archive state could not be changed." }
+                    return
+                }
                 if (agentImages.failure(m.optString("of"), m.optString("message"))) return
                 val policyAddress = policyRequests.remove(m.optString("of"))
                 if (policyAddress != null) {
@@ -1269,6 +1339,74 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         return null
     }
 
+    /** What prevents a server-confirmed archive change; nothing is queued offline. */
+    fun archiveUnavailable(conversation: Conversation): String? = when {
+        archivePending.containsKey(ArchiveKey(conversation.host, conversation.id)) -> "Saving archive state…"
+        conversation.id in drafts -> "Send the first message before archiving."
+        !connected(conversation.host) -> "Connect to ${conversation.host} to change archive state."
+        else -> null
+    }
+
+    fun archiving(conversation: Conversation) = archivePending.containsKey(ArchiveKey(conversation.host, conversation.id))
+    fun archiveError(conversation: Conversation) = archiveProblems[ArchiveKey(conversation.host, conversation.id)]
+
+    /** The bridge owns archive state; only its conversation echo updates the phone. */
+    fun archive(conversation: Conversation, archived: Boolean): Boolean {
+        val key = ArchiveKey(conversation.host, conversation.id)
+        if (archiveUnavailable(conversation) != null) return false
+        val connection = connections[conversation.host] ?: return false
+        val command = message("conversation.archive", "conversation" to conversation.id, "archived" to archived)
+        archiveProblems.remove(key)
+        if (!connection.send(command)) {
+            archiveProblems[key] = "Not saved: the connection ended. Reconnect to check the archive state."
+            return false
+        }
+        val id = command.getString("id")
+        archiveRequests[id] = key
+        archivePending[key] = archived
+        // As for policy and photo requests: no answer in a minute, and the person may try again.
+        main.postDelayed({
+            if (archiveRequests[id] == key) {
+                archiveRequests.remove(id)
+                archivePending.remove(key)
+                archiveProblems[key] = "The host has not confirmed the archive state. Reconnect and check it before trying again."
+            }
+        }, 60_000)
+        return true
+    }
+
+    /**
+     * Conversations of a host left out because another host's has the same id, by host:
+     * the person's other host keeps them, this phone shows the first one it was given.
+     */
+    val clashes = mutableStateMapOf<String, Set<String>>()
+
+    /** By host: the agents (`sandbox/agent`) whose conversation was left out for that reason. */
+    private val clashAgents = mutableStateMapOf<String, Set<String>>()
+
+    /** How many of [host]'s conversations are left out because another host's has the same id. */
+    fun leftOut(host: String): Int = clashes[host]?.size ?: 0
+
+    /** Whether a conversation of [agent] (its Home, most often) is left out because another host's has the same id. */
+    fun leftOut(agent: Agent): Boolean = agent.name in clashAgents[agent.host].orEmpty()
+
+    private fun refusedClash(host: String, id: String, agent: String?) {
+        if (agent != null && agent !in clashAgents[host].orEmpty()) clashAgents[host] = clashAgents[host].orEmpty() + agent
+        if (id in clashes[host].orEmpty()) return
+        clashes[host] = clashes[host].orEmpty() + id
+        // No host name in the log: the screens say which.
+        android.util.Log.w("enclos", "a conversation has the id of another host's and is left out")
+    }
+
+    private fun clearArchiveRequests(host: String, problem: String? = null) {
+        val keys = archivePending.keys.filter { it.host == host }
+        keys.forEach { key ->
+            archivePending.remove(key)
+            if (problem != null) archiveProblems[key] = problem
+        }
+        archiveRequests.entries.removeAll { it.value.host == host }
+    }
+
     /** Stops showing the agent at work on [conversation] once no message of it waits. */
     private fun stillAwaiting(conversation: String) {
         if (!unanswered.waiting(conversation, SystemClock.elapsedRealtime())) awaiting.remove(conversation)
@@ -1348,6 +1486,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
+        archiveRequests.clear(); archivePending.clear(); archiveProblems.clear(); clashes.clear(); clashAgents.clear()
         agentImages.clear(paired.map { it.name })
         sandboxPolicies.clear(); policyBusy.clear(); policyFresh.clear(); policyErrors.clear(); policyReviews.clear(); policyRequests.clear(); notPolicyOwner.clear()
         saving.execute { policyCache.edit { clear() } }
@@ -1389,6 +1528,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
+        clashes.remove(host)
+        clashAgents.remove(host)
+        clearArchiveRequests(host)
+        archiveProblems.keys.filter { it.host == host }.forEach { archiveProblems.remove(it) }
         agentImages.forget(host)
         forgetPolicy(host)
         val ids = conversations.filter { it.host == host }.map { it.id }.toSet()

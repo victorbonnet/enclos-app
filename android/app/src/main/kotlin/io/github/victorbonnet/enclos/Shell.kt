@@ -96,6 +96,8 @@ fun HomeShell(
     val view = View.entries[views.settledPage]
     var query by rememberSaveable { mutableStateOf("") }
     var unreadOnly by rememberSaveable { mutableStateOf(false) }
+    var archivedOnly by rememberSaveable { mutableStateOf(false) }
+    var archiveFilter by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
@@ -105,6 +107,23 @@ fun HomeShell(
             ViewSwitch(View.entries[views.targetPage], onView)
             Spacer(Modifier.weight(1f))
             if (view == View.Conversations && model.paired.isNotEmpty()) {
+                Box {
+                    IconButton(
+                        Glyphs.archive,
+                        if (archivedOnly) "Archived conversations" else "Conversation archive filter",
+                        { archiveFilter = true },
+                        tint = if (archivedOnly) p.accent else p.textMuted,
+                    )
+                    DropdownMenu(archiveFilter, { archiveFilter = false }, modifier = Modifier.background(p.bg)) {
+                        listOf(false to "Active conversations", true to "Archived conversations").forEach { (archived, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label, color = p.text) },
+                                leadingIcon = { if (archivedOnly == archived) Glyph(Glyphs.check, p.accent, size = 18.dp) },
+                                onClick = { archivedOnly = archived; archiveFilter = false },
+                            )
+                        }
+                    }
+                }
                 IconButton(
                     if (unreadOnly) Glyphs.unreadOn else Glyphs.unreadOff,
                     if (unreadOnly) "Show all conversations" else "Show unread only",
@@ -118,7 +137,7 @@ fun HomeShell(
             HorizontalPager(state = views, modifier = Modifier.fillMaxSize()) { page ->
                 Box(Modifier.fillMaxSize().background(p.bg)) {
                     when (View.entries[page]) {
-                        View.Conversations -> InboxScreen(model, query, unreadOnly, openChat, start, openAgent, pair, openApproval)
+                        View.Conversations -> InboxScreen(model, query, unreadOnly, archivedOnly, openChat, start, openAgent, pair, openApproval)
                         View.Agents -> AgentsScreen(model, query, openAgent, openSandbox, pair)
                     }
                 }
@@ -127,7 +146,9 @@ fun HomeShell(
                 BottomBar(
                     query,
                     { query = it },
-                    if (view == View.Conversations) "Search conversations" else "Search agents",
+                    if (view == View.Conversations) {
+                        if (archivedOnly) "Search archived conversations" else "Search conversations"
+                    } else "Search agents",
                     compose,
                     Modifier.align(Alignment.BottomCenter),
                 )
@@ -243,7 +264,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
         val working = model.workingOn(agent).isNotEmpty()
         val conversations = model.conversations.filter { it.host == agent.host && it.agent == agent.name }
         val home = conversations.firstOrNull { it.home }
-        val others = conversations.count { !it.home && model.listed(it) }
+        val others = conversations.count { !it.home && !it.archived && model.listed(it) }
         val commands = model.commands[agent.address].orEmpty()
         var allCommands by remember { mutableStateOf(false) }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
@@ -255,11 +276,19 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
             }
             AgentPhotoControls(model, agent)
             Section("Conversations") {
+                if (model.leftOut(agent)) {
+                    SettingRow {
+                        Text(
+                            "This agent's Home is not shown here: another paired host has an agent named ${agent.name} too, and this phone keeps the first one's.",
+                            style = Type.small, color = p.textMuted,
+                        )
+                    }
+                }
                 if (home != null) {
                     SettingRow(Modifier.clickable(onClickLabel = "Open Home") { openChat(home.id) }) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text("Home", style = Type.name, color = p.text)
+                                Text(if (home.archived) "Home · Archived" else "Home", style = Type.name, color = p.text)
                                 Text("Cron jobs and the agent's notices come here.", style = Type.small, color = p.textMuted)
                             }
                             Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
@@ -341,7 +370,7 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
         val live = model.connected(host)
         val runtime = agents.first().runtime.replaceFirstChar { it.uppercase() }
         val groups = model.conversations
-            .filter { it.group && it.host == host && it.members.first().substringBefore('/') == sandbox }
+            .filter { it.group && !it.archived && it.host == host && it.members.first().substringBefore('/') == sandbox }
             .sortedByDescending { model.lines[it.id]?.lastOrNull()?.time ?: 0L }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             Column(Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {

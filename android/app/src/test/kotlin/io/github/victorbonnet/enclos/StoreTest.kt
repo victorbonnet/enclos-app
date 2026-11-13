@@ -8,8 +8,19 @@ class StoreTest {
     @Test
     fun version_2_gets_a_groups_members_and_each_messages_speaker() {
         assertEquals(
-            listOf("ALTER TABLE conversations ADD COLUMN members TEXT", "ALTER TABLE messages ADD COLUMN speaker TEXT"),
+            listOf("ALTER TABLE conversations ADD COLUMN members TEXT", "ALTER TABLE messages ADD COLUMN speaker TEXT") + upgrades(3),
             upgrades(2),
+        )
+    }
+
+    @Test
+    fun version_3_gets_a_conversations_archived_state_and_revision() {
+        assertEquals(
+            listOf(
+                "ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE conversations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0",
+            ),
+            upgrades(3),
         )
     }
 

@@ -15,6 +15,8 @@ fun conversationOf(host: String, m: JSONObject): Conversation = Conversation(
     m.optString("titled_by").ifBlank { null },
     home = m.optBoolean("home"),
     members = strings(m.optJSONArray("members")),
+    archived = m.optBoolean("archived", false),
+    revision = m.optLong("revision", 0),
 )
 
 /**

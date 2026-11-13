@@ -122,4 +122,47 @@ class SearchTest {
         assertEquals(said, agents[0].homeMatch)
         assertEquals(listOf("c-1"), agents[0].under.map { it.conversation.id })
     }
+
+    @Test
+    fun archive_partitions_direct_group_and_home_without_dropping_history() {
+        val keptHome = home.copy(archived = true)
+        val keptDirect = weather.copy(archived = true)
+        val keptGroup = Conversation("mac", "lab", "g-1", title = "Research", members = listOf("lab/main", "lab/coder"), archived = true)
+        val conversations = listOf(keptHome, code, keptGroup, keptDirect)
+        assertEquals(listOf(code), inboxConversations(conversations))
+        assertEquals(listOf(keptHome, keptGroup, keptDirect), inboxConversations(conversations, archived = true))
+        // A later answer stays searchable in Archived and never puts the conversation back in Active.
+        val incoming = lines + (keptDirect.id to (lines[keptDirect.id].orEmpty() + Line(9, "agent", "Snow tomorrow", "notify", 99)))
+        val active = search(conversations, { incoming[it].orEmpty() }, { unread[it] ?: 0 }, "snow", InboxFilter.All)
+        val archived = search(conversations, { incoming[it].orEmpty() }, { unread[it] ?: 0 }, "snow", InboxFilter.All, archived = true)
+        assertEquals(emptyList<Found>(), active)
+        assertEquals(listOf(keptDirect.id), archived.map { it.conversation.id })
+        assertEquals(9L, archived.single().match?.seq)
+        // Unarchive restores the original identity and the same messages, without a new conversation.
+        val restored = conversations.map { if (it.id == keptDirect.id) it.copy(archived = false) else it }
+        assertEquals(listOf(keptDirect.id), search(restored, { incoming[it].orEmpty() }, { 0 }, "snow", InboxFilter.All).map { it.conversation.id })
+    }
+
+    @Test
+    fun archived_unread_is_kept_but_does_not_enter_the_active_inbox_totals() {
+        val archived = code.copy(archived = true)
+        val conversations = listOf(weather, archived)
+        assertEquals(0, inboxConversations(conversations).sumOf { unread[it.id] ?: 0 })
+        assertEquals(1, inboxConversations(conversations, archived = true).sumOf { unread[it.id] ?: 0 })
+        assertEquals(emptyList<Found>(), search(conversations, { lines[it].orEmpty() }, { unread[it] ?: 0 }, "", InboxFilter.Unread))
+        assertEquals(listOf(archived.id), search(conversations, { lines[it].orEmpty() }, { unread[it] ?: 0 }, "", InboxFilter.Unread, archived = true).map { it.conversation.id })
+    }
+
+    @Test
+    fun archived_children_never_open_an_active_home_and_all_remain_reachable() {
+        val children = (1..8).map { Conversation("mac", "lab/main", "saved-$it", archived = true) }
+        val stored = listOf(home) + children
+        val archived = inboxConversations(stored, archived = true)
+        val entries = byAgent(archived, archived.map { Found(it, null) }, emptySet(), { 0 }, narrowed = true)
+        assertNull(entries.single().home)
+        assertEquals(children.map { it.id }, entries.single().under.map { it.conversation.id })
+        val savedHome = home.copy(archived = true)
+        val withHome = listOf(savedHome) + archived
+        assertEquals(savedHome, byAgent(withHome, withHome.map { Found(it, null) }, emptySet(), { 0 }, narrowed = true).single().home)
+    }
 }

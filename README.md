@@ -6,6 +6,8 @@ Status: a proposal being built, Android only. The app pairs with a host's bridge
 
 Agents can send [static HTML artefacts](docs/spec.md#5-messages): a self-contained page opens directly in the app, with Back and Share. Pages use inline CSS and embedded images or fonts; scripts, external resources and automatic navigation are unavailable. Tapping a web link shows its host and address, then opens it in the browser's Custom Tab where supported; the private page stays in its viewer. The channel tells the agent to write a UTF-8 `.html` file and send `MEDIA:/absolute/path/page.html`. HTML in a conversation's text still shows literally.
 
+Conversations can be [archived and restored](docs/spec.md#archived-conversations) across paired devices. Archived conversations stay searchable with their history intact; new activity leaves them archived. The bridge owns the flag, so Hermes and a future OpenClaw channel use the same behaviour without a runtime-specific archive command.
+
 ## Build
 
 Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK, the NDK version named in `android/gradle/libs.versions.toml` (`sdkmanager "ndk;<version>"`), JDK 17 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).

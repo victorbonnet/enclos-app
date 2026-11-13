@@ -45,11 +45,13 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
         val agents = db.rawQuery("SELECT host, name, runtime, capabilities FROM agents ORDER BY rowid", null).use { c ->
             c.rows { Agent(it.getString(0), it.getString(1), it.getString(2), strings(it.getString(3))) }
         }
-        val conversations = db.rawQuery("SELECT host, agent, id, title, titled_by, home, members FROM conversations ORDER BY rowid", null).use { c ->
+        val conversations = db.rawQuery("SELECT host, agent, id, title, titled_by, home, members, archived, revision FROM conversations ORDER BY rowid", null).use { c ->
             c.rows {
                 Conversation(
                     it.getString(0), it.getString(1), it.getString(2), it.getStringOrNull(3), it.getStringOrNull(4), it.getInt(5) != 0,
                     members = it.getStringOrNull(6)?.let(::strings).orEmpty(),
+                    archived = it.getInt(7) != 0,
+                    revision = it.getLong(8),
                 )
             }
         }
@@ -100,6 +102,8 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
             put("titled_by", c.titledBy)
             put("home", if (c.home) 1 else 0)
             put("members", if (c.members.isEmpty()) null else JSONArray(c.members).toString())
+            put("archived", if (c.archived) 1 else 0)
+            put("revision", c.revision)
         }
         // An update, else an insert: Android 9 and 10's SQLite has no upsert.
         // insertOrThrow, not insert, which on a failure (a full disk) logs
@@ -252,12 +256,12 @@ class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", nu
 }
 
 /** The database's version: [upgrades] brings an older one to it. */
-internal const val STORE_VERSION = 3
+internal const val STORE_VERSION = 4
 
 /** A new database, at [STORE_VERSION]. */
 internal val CREATE = listOf(
     "CREATE TABLE conversations (id TEXT PRIMARY KEY, host TEXT NOT NULL, agent TEXT NOT NULL, title TEXT, titled_by TEXT, " +
-        "home INTEGER NOT NULL DEFAULT 0, members TEXT)",
+        "home INTEGER NOT NULL DEFAULT 0, members TEXT, archived INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0)",
     // `seq` is the bridge's, increasing per host.
     "CREATE TABLE messages (host TEXT NOT NULL, seq INTEGER NOT NULL, conversation TEXT NOT NULL, sender TEXT NOT NULL, " +
         "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, speaker TEXT, PRIMARY KEY (host, seq))",
@@ -273,5 +277,10 @@ internal fun upgrades(old: Int): List<String> = buildList {
     if (old < 3) {
         add("ALTER TABLE conversations ADD COLUMN members TEXT")
         add("ALTER TABLE messages ADD COLUMN speaker TEXT")
+    }
+    // 4: a conversation's archived state, and the revision it came with.
+    if (old < 4) {
+        add("ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+        add("ALTER TABLE conversations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
     }
 }

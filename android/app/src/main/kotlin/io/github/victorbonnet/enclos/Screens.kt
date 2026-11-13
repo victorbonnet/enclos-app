@@ -24,12 +24,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -298,6 +301,7 @@ fun InboxScreen(
     model: AppModel,
     query: String,
     unreadOnly: Boolean,
+    archivedOnly: Boolean,
     open: (String) -> Unit,
     start: (Agent) -> Unit,
     openAgent: (Agent) -> Unit,
@@ -311,29 +315,31 @@ fun InboxScreen(
             value = System.currentTimeMillis() / 1000
         }
     }
-    val sorted = model.conversations.filter(model::listed)
+    val sorted = inboxConversations(model.conversations.filter(model::listed), archivedOnly)
         .sortedByDescending { c -> model.lines[c.id]?.lastOrNull()?.time ?: 0L }
     val filter = if (unreadOnly) InboxFilter.Unread else InboxFilter.All
     // What search reads, taken here on the main thread: lists that are
     // replaced, never changed, when a message arrives.
     val said = sorted.associate { it.id to model.lines[it.id].orEmpty() }
     val unread = sorted.associate { it.id to model.unread(it.id) }
-    val listed = remember(sorted, said, unread, filter) { search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, "", filter) }
+    val listed = remember(sorted, said, unread, filter, archivedOnly) {
+        search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, "", filter, archived = archivedOnly)
+    }
     // A query reads every message: searched off the main thread, each
     // message folded once (model.folds); the last result stays meanwhile.
     var searched by remember { mutableStateOf<List<Found>?>(null) }
-    LaunchedEffect(sorted, said, unread, query, filter) {
+    LaunchedEffect(sorted, said, unread, query, filter, archivedOnly) {
         searched = if (query.isBlank()) {
             null
         } else {
             withContext(Dispatchers.Default) {
-                search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, query, filter, model.folds::of)
+                search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, query, filter, model.folds::of, archived = archivedOnly)
             }
         }
     }
     val found = if (query.isBlank()) listed else searched ?: listed
-    val requests = model.approvals.values.filter { a -> a.attention && (query.isBlank() || "${a.title} ${a.sandbox} ${a.host}".contains(query, ignoreCase = true)) }.sortedByDescending { it.time }
-    val narrowed = query.isNotBlank() || filter != InboxFilter.All
+    val requests = model.approvals.values.filter { a -> !archivedOnly && a.attention && (query.isBlank() || "${a.title} ${a.sandbox} ${a.host}".contains(query, ignoreCase = true)) }.sortedByDescending { it.time }
+    val narrowed = archivedOnly || query.isNotBlank() || filter != InboxFilter.All
     // Groups have their own section; the agents' trees hold one-to-one conversations.
     val groupsFound = found.filter { it.conversation.group }
     val agents = byAgent(sorted.filter { !it.group }, found.filter { !it.conversation.group }, model.unfolded.toSet(), model::unread, narrowed)
@@ -349,9 +355,15 @@ fun InboxScreen(
                     "Pair a host →",
                     pair,
                 )
-                sorted.isEmpty() && requests.isEmpty() -> Empty("No conversation yet.", "Start one with the compose button below.", "Pair another host →", pair)
+                sorted.isEmpty() && requests.isEmpty() -> Empty(
+                    if (archivedOnly) "No archived conversation." else "No active conversation yet.",
+                    if (archivedOnly) "Archived conversations stay here until you unarchive them." else "Start one below, or find archived conversations with the archive filter above.",
+                )
                 else -> {
                     LazyColumn(Modifier.weight(1f)) {
+                        if (archivedOnly) item(key = "archive-view") {
+                            Text("Archived conversations", style = Type.meta, color = palette.accent, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
+                        }
                         if (requests.isNotEmpty()) {
                             val requestsShown = shown(InboxSection.Requests)
                             item(key = "policy-requests") {
@@ -408,6 +420,7 @@ fun InboxScreen(
                                         entry,
                                         query,
                                         now,
+                                        archivedOnly,
                                         branches = rows.isNotEmpty() || more,
                                         menu = AgentMenu(
                                             start = agent?.let { { start(it) } },
@@ -415,10 +428,8 @@ fun InboxScreen(
                                             expanded = expanded,
                                             about = agent?.let { { openAgent(it) } },
                                         ),
-                                    ) {
-                                        // Its Home; with none (an older bridge), its conversations.
-                                        entry.home?.let { open(it.id) } ?: toggle()
-                                    }
+                                        onOpen = entry.home?.let { home -> { open(home.id) } } ?: if (more) toggle else null,
+                                    )
                                 }
                             }
                             items(rows.size, key = { rows[it].conversation.id }) { i ->
@@ -459,35 +470,37 @@ private fun GroupRow(model: AppModel, c: Conversation, match: Line?, query: Stri
     val last = match ?: (all.lastOrNull { !it.status } ?: all.lastOrNull())
     val unread = model.unread(c.id)
     val working = model.groups[c.id]?.state == "working"
-    Row(
-        Modifier.fillMaxWidth().clickable(onClickLabel = "Open the group", onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        MemberStack(handles, side = 32.dp) { PhotoKey(c.host, "${c.agent}/$it") }
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(c.title ?: handles.joinToString(", "), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                when {
-                    working -> WorkingWave(square = 4.dp, lift = 3.dp)
-                    last != null -> Text(Times.ago(last.time, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint)
+    ConversationActions(model, c, onClick) { action ->
+        Row(
+            Modifier.fillMaxWidth().then(action).padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            MemberStack(handles, side = 32.dp) { PhotoKey(c.host, "${c.agent}/$it") }
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(c.title ?: handles.joinToString(", "), style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    when {
+                        working -> WorkingWave(square = 4.dp, lift = 3.dp)
+                        last != null -> Text(Times.ago(last.time, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint)
+                    }
+                    Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
                 }
-                Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
-            }
-            Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val text = when {
-                    last == null -> "${handles.size} agents: ${handles.joinToString(" ") { "@$it" }}"
-                    last.from != "agent" -> "You: ${last.text}"
-                    else -> (last.agent?.substringAfterLast('/')?.let { "$it: " } ?: "") + remember(last.text) { words(last) }
+                Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val text = when {
+                        last == null -> "${handles.size} agents: ${handles.joinToString(" ") { "@$it" }}"
+                        last.from != "agent" -> "You: ${last.text}"
+                        else -> (last.agent?.substringAfterLast('/')?.let { "$it: " } ?: "") + remember(last.text) { words(last) }
+                    }
+                    Text(
+                        if (match != null) highlighted(text, query, p.accent) else AnnotatedString(text),
+                        style = Type.small,
+                        color = if (unread > 0) p.text else p.textMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (unread > 0) UnreadBadge(unread)
                 }
-                Text(
-                    if (match != null) highlighted(text, query, p.accent) else AnnotatedString(text),
-                    style = Type.small,
-                    color = if (unread > 0) p.text else p.textMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                if (unread > 0) UnreadBadge(unread)
             }
         }
     }
@@ -515,29 +528,34 @@ private fun Modifier.branch(color: Color, last: Boolean) = drawBehind {
  * tree's trunk starts below the initial.
  */
 @Composable
-private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Long, branches: Boolean, menu: AgentMenu, onOpen: () -> Unit) {
+private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Long, archived: Boolean, branches: Boolean, menu: AgentMenu, onOpen: (() -> Unit)?) {
     val p = palette
     val name = entry.address.substringAfterLast('/')
     val haptics = LocalHapticFeedback.current
     var menuOpen by remember { mutableStateOf(false) }
-    val working = model.workingOn(entry.address)
+    val working = model.workingOn(entry.address).filter { it.archived == archived }
     val home = entry.home
     val homeLines = home?.let { model.lines[it.id] }.orEmpty()
     val last = homeLines.lastOrNull { !it.status } ?: homeLines.lastOrNull()
     val unread = home?.let { model.unread(it.id) } ?: 0
-    val newest = model.lastAt(entry.address)
+    val newest = model.lastAt(entry.address, archived)
     val line = p.lineStrong
+    val hasMenu = home != null || menu.start != null || menu.all != null || menu.about != null
+    val showMenu: () -> Unit = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); menuOpen = true }
+    val actions = when {
+        onOpen != null -> Modifier.combinedClickable(
+            onClickLabel = if (home != null) "Open $name's Home" else "Show more or fewer conversations",
+            onLongClickLabel = if (hasMenu) "More for $name" else null,
+            onLongClick = if (hasMenu) showMenu else null,
+            onClick = onOpen,
+        )
+        hasMenu -> Modifier.pointerInput(entry.address) { detectTapGestures(onLongPress = { showMenu() }) }
+            .semantics { heading(); onLongClick("More for $name") { showMenu(); true } }
+        else -> Modifier.semantics { heading() }
+    }
     Row(
         Modifier.fillMaxWidth()
-            .combinedClickable(
-                onClickLabel = if (home != null) "Open $name's Home" else null,
-                onLongClickLabel = "More for $name",
-                onLongClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    menuOpen = true
-                },
-                onClick = onOpen,
-            )
+            .then(actions)
             .then(
                 if (branches) {
                     Modifier.drawBehind {
@@ -562,7 +580,7 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
                 } else if (newest != null) {
                     Text(Times.ago(newest, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint)
                 }
-                Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+                if (onOpen != null) Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
             }
             Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val at = working.firstOrNull()
@@ -591,11 +609,13 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
                 }
                 menu.start?.let { MenuRow(Glyphs.compose, "New conversation") { pick(it) } }
                 menu.all?.let { MenuRow(Glyphs.inbox, if (menu.expanded) "Fewer conversations" else "All conversations") { pick(it) } }
+                home?.let { ArchiveMenuItem(model, it) { menuOpen = false } }
                 menu.about?.let {
                     Hairline()
                     MenuRow(Glyphs.agents, "About $name") { pick(it) }
                 }
             }
+            home?.let { ArchiveFeedback(model, it, Modifier.padding(top = 4.dp)) }
         }
     }
 }
@@ -620,6 +640,51 @@ private fun MenuRow(glyph: ImageVector, text: String, onClick: () -> Unit) {
         },
         onClick = onClick,
     )
+}
+
+/** Every conversation kind uses the bridge's same archive operation. */
+@Composable
+private fun ArchiveMenuItem(model: AppModel, c: Conversation, dismiss: () -> Unit) {
+    val p = palette
+    val unavailable = model.archiveUnavailable(c)
+    DropdownMenuItem(
+        enabled = unavailable == null,
+        leadingIcon = { Glyph(Glyphs.archive, if (unavailable == null) p.text else p.textFaint, size = 20.dp) },
+        text = {
+            Column {
+                Text(if (c.archived) "Unarchive" else "Archive", style = Type.name, color = if (unavailable == null) p.text else p.textFaint)
+                unavailable?.let { Text(it, style = Type.small, color = p.textFaint) }
+                model.archiveError(c)?.let { Text(it, style = Type.small, color = p.textMuted) }
+            }
+        },
+        onClick = { if (model.archive(c, !c.archived)) dismiss() },
+    )
+}
+
+@Composable
+private fun ArchiveFeedback(model: AppModel, c: Conversation, modifier: Modifier = Modifier) {
+    val text = if (model.archiving(c)) "Saving archive state…" else model.archiveError(c)
+    text?.let { Text(it, style = Type.small, color = palette.textMuted, modifier = modifier) }
+}
+
+/** A long press offers archive without changing what a normal tap opens. */
+@Composable
+private fun ConversationActions(model: AppModel, c: Conversation, open: () -> Unit, content: @Composable (Modifier) -> Unit) {
+    val haptics = LocalHapticFeedback.current
+    var menu by remember { mutableStateOf(false) }
+    Column {
+        Box {
+            content(Modifier.combinedClickable(
+                onClick = open,
+                onLongClickLabel = "Conversation actions",
+                onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); menu = true },
+            ))
+            DropdownMenu(menu, { menu = false }, modifier = Modifier.background(palette.bg)) {
+                ArchiveMenuItem(model, c) { menu = false }
+            }
+        }
+        ArchiveFeedback(model, c, Modifier.padding(start = 60.dp, end = 16.dp, bottom = 8.dp))
+    }
 }
 
 /**
@@ -679,27 +744,29 @@ private fun TreeRow(model: AppModel, c: Conversation, match: Line?, query: Strin
     val p = palette
     val unread = model.unread(c.id)
     val latest = model.lines[c.id]?.lastOrNull()
-    Column(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).branch(p.lineStrong, last)
-            .padding(start = 60.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (unread > 0) Box(Modifier.size(7.dp).background(p.accent).semantics { contentDescription = "$unread unread" })
-            Text(
-                c.title?.let { highlighted(it, query, p.accent) } ?: AnnotatedString("No name yet"),
-                style = Type.name.copy(fontSize = 15.sp, fontWeight = if (unread > 0) FontWeight.SemiBold else FontWeight.Normal),
-                color = if (c.title != null) p.text else p.textMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            when {
-                model.working(c.id) -> WorkingWave(square = 4.dp, lift = 3.dp)
-                latest != null -> Text(Times.ago(latest.time, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint, maxLines = 1)
+    ConversationActions(model, c, onClick) { action ->
+        Column(
+            Modifier.fillMaxWidth().then(action).branch(p.lineStrong, last)
+                .padding(start = 60.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (unread > 0) Box(Modifier.size(7.dp).background(p.accent).semantics { contentDescription = "$unread unread" })
+                Text(
+                    c.title?.let { highlighted(it, query, p.accent) } ?: AnnotatedString("No name yet"),
+                    style = Type.name.copy(fontSize = 15.sp, fontWeight = if (unread > 0) FontWeight.SemiBold else FontWeight.Normal),
+                    color = if (c.title != null) p.text else p.textMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                when {
+                    model.working(c.id) -> WorkingWave(square = 4.dp, lift = 3.dp)
+                    latest != null -> Text(Times.ago(latest.time, now), style = Type.small, color = if (unread > 0) p.accent else p.textFaint, maxLines = 1)
+                }
+                Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
             }
-            Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+            if (match != null) Preview(match, true, query, false, "", model.statusSource(c), Modifier.padding(top = 2.dp))
         }
-        if (match != null) Preview(match, true, query, false, "", model.statusSource(c), Modifier.padding(top = 2.dp))
     }
 }
 
@@ -719,14 +786,14 @@ private fun MoreBranch(text: String, expanded: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ColumnScope.Empty(title: String, text: String, action: String, onAction: () -> Unit) {
+private fun ColumnScope.Empty(title: String, text: String, action: String? = null, onAction: () -> Unit = {}) {
     Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
         Hairline()
         Gap(24.dp)
         Text(title, style = Type.name, color = palette.text)
         Gap(4.dp)
         Text(text, style = Type.small, color = palette.textMuted)
-        TextLink(action, onAction)
+        if (action != null) TextLink(action, onAction)
     }
 }
 
@@ -1008,6 +1075,15 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
                 FoldHeading(host.name, open, 0, query.isBlank(), lead = { ConnectionDot(live) }) { model.fold(key) }
             }
             if (!open) return@forEach
+            val leftOut = model.leftOut(host.name)
+            if (leftOut > 0) {
+                item(key = "$key-clash") {
+                    Text(
+                        "$leftOut ${if (leftOut == 1) "conversation" else "conversations"} of this host not shown: another paired host has an agent with the same sandbox and name, whose conversations use the same ids.",
+                        style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            }
             if (its.isEmpty()) {
                 item(key = "$key-none") {
                     Text("No agent yet: the host lists them once connected.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
@@ -1274,6 +1350,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         if (atNewest) list.animateScrollToItem(0)
     }
     var renaming by remember { mutableStateOf(false) }
+    var options by remember { mutableStateOf(false) }
     // Which answers' steps are open.
     val opened = remember { mutableStateMapOf<Long, Boolean>() }
     if (renaming) {
@@ -1306,8 +1383,18 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            Box {
+                IconButton(Glyphs.more, "Conversation actions", { options = true })
+                DropdownMenu(options, { options = false }, modifier = Modifier.background(p.bg)) {
+                    MenuRow(Glyphs.compose, "Rename") { options = false; renaming = true }
+                    ArchiveMenuItem(model, conversation) { options = false }
+                }
+            }
         }
         Hairline()
+        if (conversation.archived) SystemLine("Archived · kept out of Active conversations.")
+        if (model.archiving(conversation)) SystemLine("Saving archive state…")
+        model.archiveError(conversation)?.let { SystemLine(it) }
         // Newest first, drawn from the bottom up: the conversation stays
         // anchored at its last message when the keyboard opens or a message
         // arrives. What arrives fades in while the rest slides up.
