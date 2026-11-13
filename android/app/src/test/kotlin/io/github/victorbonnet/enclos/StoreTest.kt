@@ -40,7 +40,7 @@ class StoreTest {
         val steps = upgrades(5)
         assertEquals("ALTER TABLE messages ADD COLUMN question TEXT", steps.first())
         assertTrue(steps[1].startsWith("CREATE TABLE questions ("))
-        assertEquals(2, steps.size)
+        assertEquals(2 + upgrades(6).size, steps.size)
     }
 
     @Test

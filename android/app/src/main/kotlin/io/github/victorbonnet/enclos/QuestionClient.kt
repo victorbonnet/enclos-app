@@ -174,6 +174,15 @@ class QuestionClient(
         }
     }
 
+    fun forgetConversation(host: String, conversation: String) {
+        val keys = questions.values.filter { it.host == host && it.conversation == conversation }.map { it.key }
+        keys.forEach { key ->
+            pending[key]?.let(::finish)
+            questions.remove(key); errors.remove(key); uncertain.remove(key); receipts.remove(key)
+            syncing[host]?.remove(key)
+        }
+    }
+
     fun forget(host: String) {
         ended(host)
         questions.keys.filter { it.host == host }.forEach { key -> questions.remove(key); errors.remove(key); uncertain.remove(key); receipts.remove(key) }
