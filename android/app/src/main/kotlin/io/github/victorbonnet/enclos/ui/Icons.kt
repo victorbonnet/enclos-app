@@ -52,6 +52,4 @@ object Glyphs {
     val chevron = glyph("chevron", strokes = listOf("M9 6l6 6-6 6"))
     /** Clear a field: an addition to the design's set. */
     val clear = glyph("clear", strokes = listOf("M6 6l12 12M18 6L6 18"))
-    /** Two headings, each with its lines under it, indented: grouped by agent. An addition to the design's set. */
-    val group = glyph("group", strokes = listOf("M4 4h16M8 8h12M8 12h12M4 16h16M8 20h12"))
 }
