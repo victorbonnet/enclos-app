@@ -9,7 +9,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
-import org.json.JSONException
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -40,7 +39,8 @@ fun message(type: String, vararg fields: Pair<String, Any?>): JSONObject {
  * `pair.request`, built from the session's handshake hash), then JSON
  * messages, each sealed in a Noise transport message. [onClosed] is called
  * once, with why the connection ended, whichever side ended it: a frame
- * that does not decrypt ends it, a message that is not JSON does not.
+ * that does not decrypt or a `v` the app does not speak ends it, a message
+ * that is not JSON or of an unknown `type` does not ([inbound]).
  */
 class BridgeConnection(
     private val url: String,
@@ -49,8 +49,8 @@ class BridgeConnection(
     private val noisePrivate: () -> ByteArray,
     private val first: (DeviceSession) -> JSONObject,
     private val onMessage: (JSONObject) -> Unit,
-    /** A message that decrypted but is not JSON, answered `bad_message`; the connection goes on. */
-    private val onUnreadable: (String?) -> Unit,
+    /** A message that decrypted but that the app cannot read (not JSON, no `v` or `type`), answered `bad_message`; the connection goes on. */
+    private val onUnreadable: (Unreadable) -> Unit,
     private val onClosed: (String) -> Unit,
 ) {
     @Volatile private var socket: WebSocket? = null
@@ -97,17 +97,20 @@ class BridgeConnection(
                             session = opened
                         }
                     } else {
-                        val plain = String(s.decrypt(bytes.toByteArray()), Charsets.UTF_8)
-                        // Not JSON is one bad message: answered, and the
-                        // connection goes on (docs/protocol.md, Messages).
-                        val parsed = try {
-                            JSONObject(plain)
-                        } catch (e: JSONException) {
-                            answerTo(null, "bad_message")?.let { this@BridgeConnection.send(it) }
-                            onUnreadable(e.message)
-                            return
+                        // A bad or unknown message is answered, and the
+                        // connection goes on; another `v` ends it
+                        // (docs/protocol.md, Messages).
+                        when (val next = inbound(String(s.decrypt(bytes.toByteArray()), Charsets.UTF_8))) {
+                            is Inbound.Use -> onMessage(next.message)
+                            is Inbound.Skip -> {
+                                next.answer?.let { this@BridgeConnection.send(it) }
+                                next.unreadable?.let(onUnreadable)
+                            }
+                            is Inbound.End -> {
+                                next.answer?.let { this@BridgeConnection.send(it) }
+                                fail(webSocket, next.why)
+                            }
                         }
-                        onMessage(parsed)
                     }
                 } catch (e: Exception) {
                     // A handshake or a frame that does not decrypt ends the connection.
