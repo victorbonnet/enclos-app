@@ -143,7 +143,7 @@ private fun PolicyDecisionButtons(model: AppModel, request: PolicyRequest, onClo
         Text("Closing only removes this request from the Inbox. It does not approve or deny access, undo earlier changes, or resume work.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(top = 8.dp))
         val unavailable = when {
             !live -> "Reconnect to ${request.host} and sync to respond."
-            !model.hostSupports(request.host, "approval.close") -> "Update this host to close requests."
+            !model.hostSupports(request.host, "approval.close") -> "This host cannot close requests yet."
             else -> null
         }
         unavailable?.let { Text(it, style = Type.small, color = p.textFaint, modifier = Modifier.padding(top = 8.dp)) }
