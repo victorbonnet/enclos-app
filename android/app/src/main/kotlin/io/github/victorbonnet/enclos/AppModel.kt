@@ -258,14 +258,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private val connections = mutableMapOf<String, BridgeConnection>()
     /** By host: failed attempts since it was last authenticated, for the backoff. */
     private val failures = mutableMapOf<String, Int>()
-    /** Hosts whose connection ended on a message the app cannot read: Reconnect or the next foreground retries them. */
-    private val unreadable = mutableSetOf<String>()
+    /** By host: why the last message it sent that the app could not read was skipped, while the app runs. */
+    val unreadable = mutableStateMapOf<String, String>()
     /** Whether a screen of the app is visible: only then are ended connections retried. */
     private var foreground = false
 
     val paired = mutableStateListOf<Host>().apply { addAll(hosts.all()) }
-    /** By host: connected, the reason it is not, or connecting. */
-    val status = mutableStateMapOf<String, String>()
+    /** By host: where its connection stands; none before the first attempt. */
+    val links = mutableStateMapOf<String, HostLink>()
     val audit = mutableStateMapOf<String, HostAudit>()
     private val hostCapabilities = mutableStateMapOf<String, Set<String>>()
     /** By host: the last error its bridge sent, such as an agent it could not reach. */
@@ -541,7 +541,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Whether [host] is connected and authenticated. */
-    fun connected(host: String) = status[host]?.startsWith("connected") == true
+    fun connected(host: String) = links[host].connected
 
     fun canManageSandboxes(host: String) = provisioningClient.canManageSandboxes(host)
     fun sandboxesOf(host: String) = provisioningClient.sandboxesOf(host)
@@ -703,7 +703,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     )
                 },
                 // A field missing here ends the connection (BridgeConnection),
-                // and with it the attempt.
+                // and with it the attempt; so does an answer that is not JSON.
+                onUnreadable = { why -> connection.close("the bridge sent what the app cannot read: ${unreadableShown(why)}") },
                 onMessage = { m ->
                     when (m.optString("type")) {
                         "pair.accepted" -> {
@@ -744,7 +745,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         paired.add(host)
         // Another bridge under the same name: nothing of the old one stays.
         if (old != null && !old.bridgeKey.contentEquals(host.bridgeKey)) {
-            status.remove(host.name)
+            links.remove(host.name)
             said.remove(host.name)
         }
         failures.remove(host.name)
@@ -801,7 +802,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             outgoing.ended(host.name, "the connection was opened again")
         }
         // While retrying, why the last attempt ended stays on screen.
-        if (status[host.name]?.startsWith("connected") != false) status[host.name] = "connecting"
+        links[host.name] = links[host.name].reopening()
         lateinit var connection: BridgeConnection
         connection = BridgeConnection(
             url = host.url,
@@ -814,23 +815,24 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     "sig" to encodeBytes(Keys.sign(host.keyAlias, authSignatureMessage(session.handshakeHash()))),
                 )
             },
-            // A message the app cannot read ends this connection, not the app:
-            // the two repositories release separately. A connection [connect]
-            // replaced, or that Forget or Clear cache closed, says nothing
-            // more: closing is asynchronous, and a late message would refill
-            // what was just deleted, or a forgotten host.
+            // A message the app cannot read is answered `bad_message` and
+            // skipped; the connection goes on (enclos docs/protocol.md,
+            // Messages): the two repositories release separately. A
+            // connection [connect] replaced, or that Forget or Clear cache
+            // closed, says nothing more: closing is asynchronous, and a late
+            // message would refill what was just deleted, or a forgotten host.
             onMessage = { m ->
                 ui {
                     if (connections[host.name] !== connection) return@ui
                     try {
                         received(host, m)
                     } catch (e: JSONException) {
-                        // Not retried on its own: the next connection would get the same.
-                        unreadable += host.name
-                        connection.fail("the bridge sent what the app cannot read: ${e.message}")
+                        answerTo(m, "bad_message")?.let(connection::send)
+                        unreadable[host.name] = unreadableShown(e.message)
                     }
                 }
             },
+            onUnreadable = { why -> ui { if (connections[host.name] === connection) unreadable[host.name] = unreadableShown(why) } },
             // A connection [connect] replaced says nothing of the new one.
             onClosed = { why -> ui { if (connections[host.name] === connection) ended(host, why) } },
         )
@@ -856,7 +858,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         approvalsFresh[host.name] = false
         policyConnectionEnded(host.name)
         pendingApprovalActions.keys.filter { it.startsWith("${host.name}/") }.forEach { pendingApprovalActions.remove(it) }
-        status[host.name] = why
+        links[host.name] = HostLink.Ended(why)
         // What the bridge did not show back may not have reached it: back in its field.
         outgoing.ended(host.name, "the connection ended")
         // Nothing will come over a closed connection: stop showing the agent at work.
@@ -871,7 +873,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             fetching.remove(it)
             files[it] = FileState.Failed("the connection ended")
         }
-        if (unreadable.remove(host.name) || !foreground) return
+        if (!foreground) return
         val n = failures.getOrDefault(host.name, 0)
         failures[host.name] = n + 1
         main.postDelayed({ if (foreground && host.name !in connections) reopen(host.name) }, backoff(n))
@@ -951,7 +953,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 approvals.keys.filter { approvals[it]?.host == host.name }.forEach { approvals.remove(it) }
                 saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("${host.name}/") }.forEach { remove(it) } } }
                 failures.remove(host.name)
-                status[host.name] = "connected as ${m.optString("person")}"
+                links[host.name] = HostLink.Connected(m.optString("person"))
                 provisioningClient.authenticated(host.name, hostCapabilitiesIn(m))
                 connections[host.name]?.send(message("agents"))
                 // What is on the phone is kept: only what is newer comes.
@@ -1175,6 +1177,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }
+            // Types the clients above read: nothing more to do here.
+            "conversation.deleted", "question", "question.result", "agent.name", "routine.response",
+            "sandboxes.list", "runtimes.list", "operation.progress", "sandbox.created", "runtime.installed" -> {}
+            // A type the app does not know is answered and otherwise ignored, so
+            // a newer bridge can send it optional messages (enclos docs/protocol.md, Messages).
+            else -> answerTo(m, if (m.optString("type").isEmpty()) "bad_message" else "unknown_type")
+                ?.let { connections[host.name]?.send(it) }
         }
     }
 
@@ -1670,7 +1679,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
         }
         paired.removeAll { it.name == name }
-        status.remove(name)
+        links.remove(name)
         said.remove(name)
         unfolded.removeAll { it.startsWith("$name/") }
         commands.keys.filter { it.startsWith("$name/") }.forEach { commands.remove(it) }
@@ -1716,6 +1725,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     fun clearCache() {
         audit.clear()
+        // Every host syncs again from the start: what was skipped comes again.
+        unreadable.clear()
         paired.forEach { deletion.ended(it.name) }
         paired.forEach { questions.forget(it.name) }
         paired.forEach { agentNames.forget(it.name) }
@@ -1765,6 +1776,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
         provisioningEnded(host)
+        unreadable.remove(host)
         sandboxes.remove(host)
         provisioning.keys.filter { it == host || it.startsWith("$host/") }.forEach { provisioning.remove(it) }
         audit.remove(host)

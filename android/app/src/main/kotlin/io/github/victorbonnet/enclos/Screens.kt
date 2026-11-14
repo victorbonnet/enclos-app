@@ -1320,8 +1320,9 @@ fun SettingsScreen(model: AppModel, pair: () -> Unit, ask: Ask, openHost: (Strin
                             IconButton(Glyphs.chevron, "Open ${host.name}", { openHost(host.name) })
                         }
                         Gap(6.dp)
-                        Text(model.status[host.name] ?: "not connected", style = Type.small, color = p.textMuted)
+                        Text(model.links[host.name].shown(), style = Type.small, color = p.textMuted)
                         model.said[host.name]?.let { Text("The bridge said: $it", style = Type.small, color = p.textMuted) }
+                        model.unreadable[host.name]?.let { Text(unreadableNotice(it), style = Type.small, color = p.textMuted) }
                         Text(host.url.removePrefix("https://"), style = Type.code, color = p.textFaint)
                         Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                             if (!live) TextLink("Reconnect") { model.reconnect(host.name) }
@@ -1478,7 +1479,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Bottom),
         ) {
             model.said[conversation.host]?.let { item(key = "said") { Arriving { SystemLine("The bridge said: $it") } } }
-            if (!live) item(key = "status") { Arriving { SystemLine(model.status[conversation.host] ?: "not connected") } }
+            model.unreadable[conversation.host]?.let { item(key = "unreadable") { Arriving { SystemLine(unreadableNotice(it)) } } }
+            if (!live) item(key = "status") { Arriving { SystemLine(model.links[conversation.host].shown()) } }
             if (working) item(key = "working") { Arriving { WorkingBubble(turnOf ?: agent) } }
             // The tools it runs now, above the working bubble; a turn that
             // ended with no answer shows none.

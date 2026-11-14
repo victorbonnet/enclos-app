@@ -309,7 +309,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
             Section("Runs on") {
                 Info("Runtime", agent.runtime.replaceFirstChar { it.uppercase() })
                 Info("Sandbox", agent.sandbox)
-                Info("Host", "${agent.host} · ${if (model.connected(agent.host)) "connected" else model.status[agent.host] ?: "not connected"}")
+                Info("Host", "${agent.host} · ${if (model.connected(agent.host)) "connected" else model.links[agent.host].shown()}")
                 val does = agent.capabilities.mapNotNull(::can)
                 Info("Can", if (does.isEmpty()) "known once its host reaches it" else does.joinToString(", "))
             }
@@ -421,7 +421,7 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
             }
             ListHeading("Runs on")
             Info("Runtime", runtime ?: "Not installed")
-            Info("Host", "$host · ${if (live) "connected" else model.status[host] ?: "not connected"}")
+            Info("Host", "$host · ${if (live) "connected" else model.links[host].shown()}")
             listed?.state?.let { Info("State", it) }
             Text(
                 "Its sessions show on the host: enclos sandbox show $sandbox.",

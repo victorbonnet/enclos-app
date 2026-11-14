@@ -9,6 +9,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
+import org.json.JSONException
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -38,7 +39,8 @@ fun message(type: String, vararg fields: Pair<String, Any?>): JSONObject {
  * WebSocket over the tailnet, the Noise handshake, then [first] (`auth` or
  * `pair.request`, built from the session's handshake hash), then JSON
  * messages, each sealed in a Noise transport message. [onClosed] is called
- * once, with why the connection ended, whichever side ended it.
+ * once, with why the connection ended, whichever side ended it: a frame
+ * that does not decrypt ends it, a message that is not JSON does not.
  */
 class BridgeConnection(
     private val url: String,
@@ -47,6 +49,8 @@ class BridgeConnection(
     private val noisePrivate: () -> ByteArray,
     private val first: (DeviceSession) -> JSONObject,
     private val onMessage: (JSONObject) -> Unit,
+    /** A message that decrypted but is not JSON, answered `bad_message`; the connection goes on. */
+    private val onUnreadable: (String?) -> Unit,
     private val onClosed: (String) -> Unit,
 ) {
     @Volatile private var socket: WebSocket? = null
@@ -93,9 +97,20 @@ class BridgeConnection(
                             session = opened
                         }
                     } else {
-                        onMessage(JSONObject(String(s.decrypt(bytes.toByteArray()), Charsets.UTF_8)))
+                        val plain = String(s.decrypt(bytes.toByteArray()), Charsets.UTF_8)
+                        // Not JSON is one bad message: answered, and the
+                        // connection goes on (docs/protocol.md, Messages).
+                        val parsed = try {
+                            JSONObject(plain)
+                        } catch (e: JSONException) {
+                            answerTo(null, "bad_message")?.let { this@BridgeConnection.send(it) }
+                            onUnreadable(e.message)
+                            return
+                        }
+                        onMessage(parsed)
                     }
                 } catch (e: Exception) {
+                    // A handshake or a frame that does not decrypt ends the connection.
                     fail(webSocket, "the bridge sent what the app cannot read: ${e.message}")
                 }
             }
@@ -122,12 +137,6 @@ class BridgeConnection(
         end(why)
     }
 
-    /** Ends the connection because of what the app could not handle, saying [why]. */
-    fun fail(why: String) {
-        socket?.close(1002, null)
-        end(why)
-    }
-
     /**
      * Sends [message], sealed; nothing before the handshake is done, nor a
      * message larger than one Noise message ([fits]). Whether it went.
@@ -146,10 +155,10 @@ class BridgeConnection(
         return socket?.send(sealed.toByteString()) ?: false
     }
 
-    /** Ends the connection from the app's side. */
-    fun close() {
+    /** Ends the connection from the app's side, saying [why]. */
+    fun close(why: String = "closed") {
         socket?.close(1000, null)
-        end("closed")
+        end(why)
     }
 
     companion object {
