@@ -194,6 +194,22 @@ impl DeviceSession {
 mod tests {
     use super::*;
 
+    /// The app answers `unknown_type` to a type outside its list, which a
+    /// JVM test checks against this copy: the copy must hold every type the
+    /// pinned protocol sends a device, so moving the pin to a crate with a
+    /// new type fails here until the copy and the app's list have it.
+    #[test]
+    fn the_apps_copy_of_the_bridge_types_holds_the_pinned_crates() {
+        let copy: Vec<&str> =
+            include_str!("../../android/app/src/test/resources/to-device-types.txt")
+                .lines()
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .collect();
+        for kind in enclos_protocol::device::TO_DEVICE_TYPES {
+            assert!(copy.contains(kind), "to-device-types.txt lacks {kind}");
+        }
+    }
+
     #[test]
     fn reports_the_crate_version() {
         assert_eq!(core_version(), env!("CARGO_PKG_VERSION"));

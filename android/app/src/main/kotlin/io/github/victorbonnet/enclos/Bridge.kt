@@ -38,7 +38,9 @@ fun message(type: String, vararg fields: Pair<String, Any?>): JSONObject {
  * WebSocket over the tailnet, the Noise handshake, then [first] (`auth` or
  * `pair.request`, built from the session's handshake hash), then JSON
  * messages, each sealed in a Noise transport message. [onClosed] is called
- * once, with why the connection ended, whichever side ended it.
+ * once, with why the connection ended, whichever side ended it: a frame
+ * that does not decrypt or a `v` the app does not speak ends it, a message
+ * that is not JSON or of an unknown `type` does not ([inbound]).
  */
 class BridgeConnection(
     private val url: String,
@@ -47,6 +49,8 @@ class BridgeConnection(
     private val noisePrivate: () -> ByteArray,
     private val first: (DeviceSession) -> JSONObject,
     private val onMessage: (JSONObject) -> Unit,
+    /** A message that decrypted but that the app cannot read (not JSON, no `v` or `type`), answered `bad_message`; the connection goes on. */
+    private val onUnreadable: (Unreadable) -> Unit,
     private val onClosed: (String) -> Unit,
 ) {
     @Volatile private var socket: WebSocket? = null
@@ -93,9 +97,23 @@ class BridgeConnection(
                             session = opened
                         }
                     } else {
-                        onMessage(JSONObject(String(s.decrypt(bytes.toByteArray()), Charsets.UTF_8)))
+                        // A bad or unknown message is answered, and the
+                        // connection goes on; another `v` ends it
+                        // (docs/protocol.md, Messages).
+                        when (val next = inbound(String(s.decrypt(bytes.toByteArray()), Charsets.UTF_8))) {
+                            is Inbound.Use -> onMessage(next.message)
+                            is Inbound.Skip -> {
+                                next.answer?.let { this@BridgeConnection.send(it) }
+                                next.unreadable?.let(onUnreadable)
+                            }
+                            is Inbound.End -> {
+                                next.answer?.let { this@BridgeConnection.send(it) }
+                                fail(webSocket, next.why)
+                            }
+                        }
                     }
                 } catch (e: Exception) {
+                    // A handshake or a frame that does not decrypt ends the connection.
                     fail(webSocket, "the bridge sent what the app cannot read: ${e.message}")
                 }
             }
@@ -122,12 +140,6 @@ class BridgeConnection(
         end(why)
     }
 
-    /** Ends the connection because of what the app could not handle, saying [why]. */
-    fun fail(why: String) {
-        socket?.close(1002, null)
-        end(why)
-    }
-
     /**
      * Sends [message], sealed; nothing before the handshake is done, nor a
      * message larger than one Noise message ([fits]). Whether it went.
@@ -146,10 +158,10 @@ class BridgeConnection(
         return socket?.send(sealed.toByteString()) ?: false
     }
 
-    /** Ends the connection from the app's side. */
-    fun close() {
+    /** Ends the connection from the app's side, saying [why]. */
+    fun close(why: String = "closed") {
         socket?.close(1000, null)
-        end("closed")
+        end(why)
     }
 
     companion object {

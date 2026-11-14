@@ -56,7 +56,7 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         ConnectionDot(live)
-                        Text(model.status[name] ?: "not connected", style = Type.small, color = p.textMuted)
+                        Text(model.links[name].shown(), style = Type.small, color = p.textMuted)
                     }
                     host?.let { Text(it.url.removePrefix("https://"), style = Type.code, color = p.textFaint) }
                     if (!live && host != null) AuditAction("Reconnect") { model.reconnect(name) }
