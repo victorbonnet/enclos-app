@@ -41,7 +41,7 @@ projectId=your-project
 senderId=000000000000
 ```
 
-Without the file the app builds with push off. Each host then needs that project's service-account key: `enclos app push key <file>`.
+Without the file the app builds with push off. Each host then needs that project's service-account key: `enclos app push key <file>`. enclos's [push setup guide](https://github.com/victorbonnet/enclos/blob/main/docs/push-setup.md) goes through every step: the project, where each value is in `google-services.json`, a key that can only send, and what each failure means.
 
 ## License
 
