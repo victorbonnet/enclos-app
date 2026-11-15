@@ -21,6 +21,7 @@ android {
         minSdk = 28
         targetSdk = 37
         versionCode = 2
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionName = "0.1.1"
     }
 
@@ -74,4 +75,6 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.json)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }

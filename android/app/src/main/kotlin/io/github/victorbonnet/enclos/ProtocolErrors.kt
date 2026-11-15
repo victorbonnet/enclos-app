@@ -15,7 +15,7 @@ internal const val PROTOCOL_VERSION = 1L
  */
 internal val BRIDGE_TYPES: Set<String> = setOf(
     "ack", "agent.activity", "agent.avatar", "agent.name", "agents.list", "agents.removed.list", "approval", "attachment.data", "audit.list",
-    "authenticated", "commands", "conversation", "conversation.deleted", "error", "group.state", "message",
+    "authenticated", "commands", "conversation", "conversation.deleted", "error", "group.state", "held_task", "held_task.result", "message",
     "operation.progress", "pair.accepted", "pair.refused", "question", "question.result", "routine.response",
     "runtime.installed", "runtimes.list", "sandbox.created", "sandbox.policy", "sandbox.policy.preview",
     "sandboxes.list", "synced", "task", "task.removed", "tool", "typing",

@@ -1394,6 +1394,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         return
     }
     val lines = model.lines[id].orEmpty()
+    // Where each held task's card is drawn: the newest message that introduced it.
+    val introductions = remember(lines) { heldTaskIntroductions(lines) }
     val scope = "${conversation.host}/${conversation.agent}"
     val agent = if (conversation.group) conversation.members.joinToString(", ") { model.agentLabel("${conversation.host}/$it") } else model.agentLabel(scope)
     val live = model.connected(conversation.host)
@@ -1520,6 +1522,15 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             // ended with no answer shows none.
             val running = model.steps[id].orEmpty()
             if (working && running.isNotEmpty()) item(key = "steps-live") { Arriving { ToolSteps(running, live = true, expanded = true) {} } }
+            // Held tasks no loaded message introduces (one held before this phone kept the
+            // link, say), below the history; newest lowest, as the list is drawn bottom-up.
+            model.heldTasks.unlinked(conversation, introductions.keys).asReversed().forEach { card ->
+                item(key = "held-${card.agent}/${card.task}") {
+                    Arriving {
+                        Bubble(text = "", time = Times.clock(card.since), outgoing = false, content = { HeldTaskCard(model.heldTasks, card) })
+                    }
+                }
+            }
             val runtime = model.statusSource(conversation)
             // A task card after the message it follows in time, newest lowest, as the list is drawn bottom-up.
             fun cardsAt(index: Int) = cardsAfter[index].orEmpty().reversed().forEach { task ->
@@ -1539,6 +1550,9 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                     }
                     Arriving {
                         val question = if (line.from == "agent") model.questions.current(conversation, line.question)?.takeIf { it.matchesMessageKind(line.kind) } else null
+                        // A held task's card, at the newest message that introduced it, in its current state.
+                        val held = line.heldTask?.takeIf { question == null && introductions[it] == line.seq }
+                            ?.let { model.heldTasks.current(conversation, it) }
                         Bubble(
                             text = line.text,
                             time = Times.clock(line.time),
@@ -1552,7 +1566,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             },
                             content = question?.let { known -> {
                                 if (known.approval != null) RuntimeApprovalCard(model.questions, known) else QuestionCard(model.questions, known)
-                            } },
+                            } } ?: held?.let { card -> { HeldTaskCard(model.heldTasks, card) } },
                         )
                     }
                 }

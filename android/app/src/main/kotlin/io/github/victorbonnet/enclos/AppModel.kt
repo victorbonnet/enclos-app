@@ -67,6 +67,8 @@ data class Line(
     val agent: String? = null,
     /** Typed native question metadata is delivered separately, before this message. */
     val question: String? = null,
+    /** The held task this message is about (a card of the same agent), whose card comes before it. */
+    val heldTask: String? = null,
 )
 
 /** A file of a message, fetched from the bridge when it is shown. */
@@ -322,6 +324,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         resync = { host -> connections[host]?.send(message("sync", "since" to since(host))) == true },
         dropped = { why -> android.util.Log.d("enclos", "question not shown: $why") },
     )
+    val heldTasks = HeldTaskClient(
+        send = { request -> connections[request.card.host]?.send(request.command()) == true },
+        connected = ::connected,
+        // Kept even before its Home is known: a sync sends a held card, never its first message again.
+        accepts = { card -> paired.any { it.name == card.host } && ConversationKey(card.host, card.conversation) !in deletion.deleted },
+        changed = { card -> save { heldTask(card) } },
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+        resync = { host -> connections[host]?.send(message("sync", "since" to since(host))) == true },
+        dropped = { why -> android.util.Log.d("enclos", "held task not shown: $why") },
+    )
     val deletion = ConversationDeletion(
         connected = ::connected,
         send = { host, command -> connections[host]?.send(command) == true },
@@ -385,6 +397,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     deletion.deleted.putAll(recent.deleted.associateWith { true })
                     conversations.addAll(recent.conversations.filter { ConversationKey(it.host, it.id) !in deletion.deleted })
                     recent.questions.forEach { questions.merge(it, cached = true) }
+                    recent.heldTasks.forEach { heldTasks.merge(it, cached = true) }
                     lines.putAll(recent.lines)
                     kept.putAll(recent.kept)
                 }
@@ -844,6 +857,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         agentNames.ended(host.name)
         routines.ended(host.name)
         questions.ended(host.name)
+        heldTasks.ended(host.name)
         // What the agents were doing comes again after `agents.list`; a sync the old connection began drops nothing.
         activities.ended(host.name)
         tasks.ended(host.name)
@@ -903,6 +917,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         routines.ended(host.name)
         questions.ended(host.name)
+        heldTasks.ended(host.name)
         agentNames.ended(host.name)
         agentImages.ended(host.name)
         approvalsFresh[host.name] = false
@@ -962,6 +977,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             return refusedClash(host.name, about, m.optString("agent").ifBlank { null })
         }
         if (m.optString("type") in setOf("question", "question.result", "error") && questions.received(host.name, m)) return
+        if (m.optString("type") in setOf("held_task", "held_task.result", "error") && heldTasks.received(host.name, m)) return
         if (m.optString("type") in setOf("agent.name", "error") && agentNames.received(host.name, m)) return
         if (m.optString("type") in setOf("routine.response", "error") && routines.received(host.name, m)) return
         when (m.optString("type")) {
@@ -998,6 +1014,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "authenticated" -> {
                 questions.authenticated(host.name)
+                heldTasks.authenticated(host.name)
                 approvalsFresh[host.name] = false
                 // A connection that replaced another without ending it: what the old one said is not fresh.
                 policyConnectionEnded(host.name)
@@ -1087,6 +1104,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 approvalsFresh[host.name] = true
                 dropTasks(tasks.synced(host.name))
                 questions.synced(host.name)
+                heldTasks.synced(host.name)
                 conversations.filter { it.host == host.name && it.id in unsettledRead }.forEach { c ->
                     val newest = lines[c.id]?.lastOrNull()?.seq ?: 0L
                     val seq = settledRead(lastRead[c.id] ?: 0L, unsettledRead.remove(c.id) ?: 0L, newest)
@@ -1604,6 +1622,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val c = conversations.firstOrNull { it.host == key.host && it.id == key.id }
         val attached = if (c == null) emptyList() else lines[key.id].orEmpty().flatMap { it.attachments }
         questions.forgetConversation(key.host, key.id)
+        heldTasks.forgetConversation(key.host, key.id)
         if (c != null) {
             conversations.removeAll { it.host == key.host && it.id == key.id }
             outgoing.forget(setOf(key.id))
@@ -1793,6 +1812,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         unreadable.clear()
         paired.forEach { deletion.ended(it.name) }
         paired.forEach { questions.forget(it.name) }
+        paired.forEach { heldTasks.forget(it.name) }
         paired.forEach { agentNames.forget(it.name) }
         paired.forEach { routines.forget(it.name) }
         archiveRequests.clear(); archivePending.clear(); archiveProblems.clear(); clashes.clear(); clashAgents.clear()
@@ -1852,6 +1872,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         clashes.remove(host)
         clashAgents.remove(host)
         questions.forget(host)
+        heldTasks.forget(host)
         deletion.forget(host)
         forgetting.clear(host)
         clearArchiveRequests(host)
@@ -1964,6 +1985,8 @@ fun lineIn(m: JSONObject): Line {
         m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached,
         // Typed native question metadata is delivered separately, before this message.
         question = (m.opt("question") as? String)?.takeIf { it.isNotBlank() },
+        // A held task's id, without a hidden character, as the protocol carries one; anything else links no card.
+        heldTask = protocolId(m.opt("held_task"))?.takeUnless { Visible.hasHidden(it) },
     )
 }
 
