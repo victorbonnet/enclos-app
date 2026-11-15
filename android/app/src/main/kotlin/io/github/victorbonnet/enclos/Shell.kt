@@ -33,6 +33,7 @@ import io.github.victorbonnet.enclos.ui.SandboxMark
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -83,7 +84,7 @@ fun HomeShell(
     views: PagerState,
     onView: (View) -> Unit,
     openChat: (String) -> Unit,
-    openAgent: (Agent) -> Unit,
+    openAgent: (String) -> Unit,
     openRoutines: (Agent) -> Unit,
     openSandbox: (String) -> Unit,
     openApproval: (String) -> Unit,
@@ -243,8 +244,21 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
             Text(agent?.label ?: address, style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         }
         Hairline()
+        val key = AgentKey.of(address)
+        // Closes once this phone forgot it: nothing of it is left to show.
+        val forgotten = model.forgetting.forgotten[key] == true
+        LaunchedEffect(forgotten) { if (forgotten) back() }
         if (agent == null) {
-            Text("This agent is no longer listed by its host.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
+            // Whether it was removed, as the host says now.
+            LaunchedEffect(key) { model.forgetting.refresh(key.host) }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                Text(
+                    if (model.forgetting.isRemoved(key)) "This agent was removed from its host: nothing of it is left there."
+                    else "This agent is no longer listed by its host.",
+                    style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp),
+                )
+                ForgetAgentSection(model, key, address.substringAfterLast('/'))
+            }
             return@Column
         }
         val working = model.workingOn(agent).isNotEmpty()
@@ -331,6 +345,8 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                     }
                 }
             }
+            // Still listed by a bridge started before the agent's removal.
+            ForgetAgentSection(model, key, agent.label)
             Text(
                 "The shared photo is stored on this agent's host. Other agent settings are managed there.",
                 style = Type.small,
@@ -676,5 +692,48 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
             val started = model.conversations.firstOrNull { it.id == id } ?: return@Composer
             if (model.send(started, text.trim()) == null) opened(id)
         }
+    }
+}
+
+/**
+ * Forget, for an agent its host confirmed removed (enclos ADR 0067,
+ * proposed): its Home and the person's direct conversations with it are
+ * deleted, from the host and every paired phone. Nothing while the host
+ * does not list it in `agents.removed.list`, which only a host that can
+ * forget sends, to its own person.
+ */
+@Composable
+internal fun ForgetAgentSection(model: AppModel, key: AgentKey, label: String) {
+    if (!model.forgetting.isRemoved(key) && key !in model.forgetting.pending && key !in model.forgetting.errors) return
+    val p = palette
+    var asking by remember { mutableStateOf(false) }
+    val unavailable = model.forgetting.unavailable(key)
+    Section("Removed agent") {
+        SettingRow {
+            Text(
+                "Its Home and your conversations with it stay until you forget it. Group conversations it was in stay; delete each on its own.",
+                style = Type.small, color = p.textMuted,
+            )
+        }
+        SettingRow(Modifier.clickable(enabled = unavailable == null, onClickLabel = "Forget $label") { asking = true }) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Glyph(Glyphs.delete, if (unavailable == null) p.text else p.textFaint, size = 20.dp)
+                Column {
+                    Text("Forget $label", style = Type.label, color = if (unavailable == null) p.text else p.textFaint)
+                    (if (key in model.forgetting.pending) "Forgetting agent…" else model.forgetting.errors[key] ?: unavailable)
+                        ?.let { Text(it, style = Type.small, color = p.textMuted) }
+                }
+            }
+        }
+    }
+    if (asking) {
+        ConfirmDialog(
+            title = "Forget $label?",
+            text = "This permanently deletes its Home and your conversations with it, their history and files, from the host and your paired phones. Group conversations it was in stay. An agent made again under this name starts with a new Home." +
+                (unavailable ?: model.forgetting.errors[key])?.let { "\n\n$it" }.orEmpty(),
+            confirm = "Forget",
+            enabled = unavailable == null,
+            onDismiss = { asking = false },
+        ) { if (model.forgetting.forget(key)) asking = false }
     }
 }
