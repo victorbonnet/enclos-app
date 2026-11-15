@@ -54,7 +54,8 @@ class ConversationDeletion(
         when (message.optString("type")) {
             "conversation.deleted" -> {
                 val id = message.getString("conversation")
-                if (id.isEmpty() || id.startsWith("home.") || id.toByteArray(Charsets.UTF_8).size > 128 || id.any { it.isISOControl() }) {
+                // A Home goes too when its removed agent is forgotten (enclos ADR 0067).
+                if (id.isEmpty() || id.toByteArray(Charsets.UTF_8).size > 128 || id.any { it.isISOControl() }) {
                     throw JSONException("Invalid deleted conversation")
                 }
                 val key = ConversationKey(host, id)

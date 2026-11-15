@@ -280,6 +280,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val approvalsFresh = mutableStateMapOf<String, Boolean>()
     val pendingApprovalActions = mutableStateMapOf<String, PendingPolicyRequestAction>()
     val approvalErrors = mutableStateMapOf<String, String>()
+    /** By agent (`host/sandbox/agent`): what it is doing now, live from its bridge; never kept on the phone. */
+    val activities = Activities(mutableStateMapOf())
+    /** The tasks the bridges report to their host's person, kept on the phone by host ([taskCache]). */
+    val tasks = TaskCache(mutableStateMapOf())
+    /** The phone's copy of [tasks], by `host/sandbox/id`, in the app's private preferences (never backed up). */
+    private val taskCache = application.getSharedPreferences("tasks", Context.MODE_PRIVATE)
     val agents = mutableStateListOf<Agent>()
     private val provisioningClient = ProvisioningClient(
         connected = ::connected,
@@ -327,6 +333,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         later = { wait, action -> main.postDelayed({ action() }, wait) },
         isDraft = { it.id in drafts },
     )
+    val forgetting = AgentForgetting(
+        connected = ::connected,
+        supported = { host -> hostSupports(host, AGENT_FORGET) },
+        send = { host, command -> connections[host]?.send(command) == true },
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+    )
     private data class ArchiveKey(val host: String, val conversation: String)
     private val archiveRequests = mutableMapOf<String, ArchiveKey>()
     private val archivePending = mutableStateMapOf<ArchiveKey, Boolean>()
@@ -363,12 +375,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             val cachedPolicies = policyCache.all.mapNotNull { (_, value) ->
                 runCatching { val m = JSONObject(value as String); SandboxPolicy.from(m.getString("host"), m) }.getOrNull()
             }.filter { p -> paired.any { it.name == p.address.substringBefore('/') } }
+            val cachedTasks = taskCache.all.values.mapNotNull { (it as? String)?.let { json -> AgentTask.kept(json) } }
+                .filter { t -> paired.any { it.name == t.host } }
             val recent = read { recent() }
             // The connections open next: their HTTP client is built here, not on the main thread.
             BridgeConnection.prepare()
             ui {
                 cachedRequests.forEach { approvals[it.key] = it }
                 cachedPolicies.forEach { sandboxPolicies[it.address] = it }
+                tasks.load(cachedTasks)
                 if (recent != null) {
                     agents.addAll(recent.agents.map(agentNames::listed))
                     deletion.deleted.putAll(recent.deleted.associateWith { true })
@@ -601,7 +616,38 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * writing, so there is something to see before the first `typing`.
      */
     fun working(conversation: String) =
-        typing[conversation] == true || awaiting[conversation] == true || steps[conversation].orEmpty().any { !it.done }
+        typing[conversation] == true || awaiting[conversation] == true || steps[conversation].orEmpty().any { !it.done } ||
+            conversations.firstOrNull { it.id == conversation }?.let { activities.answering(it.host, conversation) } == true
+
+    /** What the agent at [address] (`host/sandbox/agent`) is doing, as its runtime reports it; none while it is idle. */
+    fun activityOf(address: String): AgentActivity? = activities.of(address)
+
+    /** Whether the agent at [address] (`host/sandbox/agent`) reports its tasks: its runtime has the `tasks` capability. */
+    fun offersTasks(address: String) = agents.any { it.address == address && "tasks" in it.capabilities }
+
+    /** The tasks of the agent at [address] (`host/sandbox/agent`), those still going first; none when it does not report them. */
+    fun tasksOf(address: String): List<AgentTask> = if (offersTasks(address)) tasks.of(address) else emptyList()
+
+    /** The tasks asked for in [conversation], each a card in it, in the order they were placed. */
+    fun taskCards(conversation: Conversation): List<AgentTask> =
+        tasks.askedIn(conversation.host, conversation.id).filter { offersTasks(it.assigneeAddress) }
+
+    /** The key a task is kept under on the phone. */
+    private fun taskKey(key: TaskKey) = "${key.host}/${key.sandbox}/${key.id}"
+
+    /** Keeps [task] on the phone, off the main thread. */
+    private fun keepTask(task: AgentTask) {
+        val json = task.json().toString()
+        val key = taskKey(task.key)
+        saving.execute { taskCache.edit { putString(key, json) } }
+    }
+
+    /** Deletes the phone's copy of the tasks of [keys], off the main thread. */
+    private fun dropTasks(keys: Collection<TaskKey>) {
+        if (keys.isEmpty()) return
+        val names = keys.map(::taskKey)
+        saving.execute { taskCache.edit { names.forEach { remove(it) } } }
+    }
 
     /** The conversations of the agent at [address] (`host/sandbox/agent`). */
     private fun conversationsOf(address: String) = conversations.filter { "${it.host}/${it.agent}" == address }
@@ -833,6 +879,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         agentNames.ended(host.name)
         routines.ended(host.name)
         questions.ended(host.name)
+        // What the agents were doing comes again after `agents.list`; a sync the old connection began drops nothing.
+        activities.ended(host.name)
+        tasks.ended(host.name)
         // A connection replaced says nothing more ([ended] is not called): what went over it may be lost.
         connections.remove(host.name)?.let {
             it.close()
@@ -886,6 +935,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections.remove(host.name)
         provisioningEnded(host.name)
         deletion.ended(host.name)
+        forgetting.ended(host.name)
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         routines.ended(host.name)
         questions.ended(host.name)
@@ -905,6 +955,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         turnUsage.keys.filter { it in ids }.forEach { turnUsage.remove(it) }
         // Its agents' commands come again with the next connection.
         commands.keys.filter { it.startsWith("${host.name}/") }.forEach { commands.remove(it) }
+        // What its agents were doing is live state: unknown until the next connection says it.
+        activities.ended(host.name)
+        tasks.ended(host.name)
         // Files being fetched from it stop; asked again, they go on from where they were.
         fetching.filterValues { it.host == host.name }.keys.forEach {
             fetching.remove(it)
@@ -937,6 +990,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun received(host: Host, m: JSONObject) {
         if (provisioningClient.received(host.name, m)) return
         if (deletion.received(host.name, m)) return
+        if (forgetting.received(host.name, m)) return
         val conversationId = m.optString("conversation")
         if (m.optString("type") in conversationScoped && ConversationKey(host.name, conversationId) in deletion.deleted) return
         // Once for every message about a conversation: another host's with the same id keeps it.
@@ -994,6 +1048,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 links[host.name] = HostLink.Connected(m.optString("person"))
                 provisioningClient.authenticated(host.name, hostCapabilitiesIn(m))
                 connections[host.name]?.send(message("agents"))
+                // The sync sends every task the bridge keeps for this person: those it does not are dropped at `synced`.
+                tasks.syncing(host.name)
+                forgetting.authenticated(host.name)
                 // What is on the phone is kept: only what is newer comes.
                 connections[host.name]?.send(message("sync", "since" to since(host.name)))
             }
@@ -1032,7 +1089,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val listed = agents.filter { it.host == host.name }
                 agentImages.listed(host.name, listed)
                 save { agents(host.name, listed) }
+                // The bridge sends what each agent not idle is doing right after its list.
+                activities.listed(host.name)
             }
+            "agent.activity" -> activities.received(host.name, m)
+            // A task, new or changed: at each sync and whenever it changes, to the host's person only.
+            "task" -> keepTask(tasks.received(AgentTask.from(host.name, m)))
+            "task.removed" -> tasks.removed(host.name, m.getString("agent"), m.getString("task"))?.let { dropTasks(listOf(it)) }
             // A conversation and its name: at each sync (so an empty one is
             // known too), when one starts, and when its name changes.
             "conversation" -> {
@@ -1075,6 +1138,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             // taken up to the newest, as the bridge itself never goes further.
             "synced" -> {
                 approvalsFresh[host.name] = true
+                dropTasks(tasks.synced(host.name))
                 questions.synced(host.name)
                 conversations.filter { it.host == host.name && it.id in unsettledRead }.forEach { c ->
                     val newest = lines[c.id]?.lastOrNull()?.seq ?: 0L
@@ -1805,8 +1869,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         approvalsFresh.clear()
         pendingApprovalActions.clear()
         hostCapabilities.clear()
+        forgetting.clear()
         approvalErrors.clear()
         saving.execute { approvalCache.edit { clear() } }
+        activities.clear()
+        tasks.clear()
+        saving.execute { taskCache.edit { clear() } }
         conversations.clear()
         // What was written goes too: its conversations are gone, and drafts do not come back.
         outgoing.clear()
@@ -1855,12 +1923,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         clashAgents.remove(host)
         questions.forget(host)
         deletion.forget(host)
+        forgetting.clear(host)
         clearArchiveRequests(host)
         archiveProblems.keys.filter { it.host == host }.forEach { archiveProblems.remove(it) }
         agentImages.forget(host)
         agentNames.forget(host)
         routines.forget(host)
         forgetPolicy(host)
+        activities.ended(host)
+        tasks.forget(host)
+        saving.execute { taskCache.edit { taskCache.all.keys.filter { it.startsWith("$host/") }.forEach { remove(it) } } }
         val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
         conversations.removeAll { it.host == host }
         ids.forEach { lines.remove(it) }

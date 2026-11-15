@@ -33,8 +33,10 @@ import io.github.victorbonnet.enclos.ui.SandboxMark
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -65,7 +67,10 @@ import io.github.victorbonnet.enclos.ui.Hairline
 import io.github.victorbonnet.enclos.ui.IconButton
 import io.github.victorbonnet.enclos.ui.Motion
 import io.github.victorbonnet.enclos.ui.Shapes
+import io.github.victorbonnet.enclos.ui.TaskMark
 import io.github.victorbonnet.enclos.ui.Type
+import io.github.victorbonnet.enclos.ui.WorkingWave
+import kotlinx.coroutines.delay
 import io.github.victorbonnet.enclos.ui.palette
 
 /** The two views of the app's first screen. */
@@ -83,7 +88,7 @@ fun HomeShell(
     views: PagerState,
     onView: (View) -> Unit,
     openChat: (String) -> Unit,
-    openAgent: (Agent) -> Unit,
+    openAgent: (String) -> Unit,
     openRoutines: (Agent) -> Unit,
     openSandbox: (String) -> Unit,
     openApproval: (String) -> Unit,
@@ -225,13 +230,17 @@ private fun can(capability: String): String? = when (capability) {
     "titles" -> "names conversations"
     "commands" -> "lists its commands"
     "attachments" -> "sends files"
+    "activity" -> "says what it is doing"
+    "tasks" -> "reports its tasks"
     else -> null
 }
 
 /**
- * An agent's page: its initial, name and address; its conversations (Home,
- * a new one, how many); what runs it (runtime, sandbox, host and
- * connection, what it can do); its commands and shared photo controls.
+ * An agent's page: its initial, name and address, and what its runtime
+ * says it is doing; its conversations (Home, a new one, how many); its
+ * tasks, when its runtime reports them; what runs it (runtime, sandbox,
+ * host and connection, what it can do); its commands and shared photo
+ * controls.
  */
 @Composable
 fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (String) -> Unit, start: (Agent) -> Unit, openRoutines: () -> Unit) {
@@ -243,11 +252,33 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
             Text(agent?.label ?: address, style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         }
         Hairline()
+        val key = AgentKey.of(address)
+        // Closes once this phone forgot it: nothing of it is left to show.
+        val forgotten = model.forgetting.forgotten[key] == true
+        LaunchedEffect(forgotten) {
+            if (forgotten) {
+                model.forgetting.closed(key)
+                back()
+            }
+        }
         if (agent == null) {
-            Text("This agent is no longer listed by its host.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
+            // Whether it was removed, as the host says now.
+            LaunchedEffect(key) { model.forgetting.refresh(key.host) }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                Text(
+                    if (model.forgetting.isRemoved(key)) "This agent was removed from its host: nothing of it is left there."
+                    else "This agent is no longer listed by its host.",
+                    style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp),
+                )
+                model.forgetting.status(key)?.let {
+                    Text(it, style = Type.small, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp))
+                }
+                ForgetAgentSection(model, key, address.substringAfterLast('/'))
+            }
             return@Column
         }
-        val working = model.workingOn(agent).isNotEmpty()
+        val activity = model.activityOf(agent.address)
+        val working = model.workingOn(agent).isNotEmpty() || activity != null
         val conversations = model.conversations.filter { it.host == agent.host && it.agent == agent.name }
         val home = conversations.firstOrNull { it.home }
         val others = conversations.count { !it.home && !it.archived && model.listed(it) }
@@ -259,6 +290,12 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 Gap(14.dp)
                 Text(agent.label, style = Type.heading, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(agent.address, style = Type.code, color = p.textFaint)
+                activity?.label?.let { doing ->
+                    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        WorkingWave(square = 4.dp, lift = 3.dp)
+                        Text(doing, style = Type.small, color = p.accent)
+                    }
+                }
             }
             AgentNameControls(model, agent)
             AgentPhotoControls(model, agent)
@@ -292,6 +329,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                     Text("$others other ${if (others == 1) "conversation" else "conversations"}, in the conversations view.", style = Type.small, color = p.textMuted)
                 }
             }
+            if (model.offersTasks(agent.address)) AgentTasks(model, agent, openChat)
             if (agent.offersRoutines) {
                 Section("Routines") {
                     SettingRow(Modifier.clickable(onClickLabel = "Manage routines", onClick = openRoutines)) {
@@ -331,6 +369,8 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                     }
                 }
             }
+            // Still listed by a bridge started before the agent's removal.
+            ForgetAgentSection(model, key, agent.label)
             Text(
                 "The shared photo is stored on this agent's host. Other agent settings are managed there.",
                 style = Type.small,
@@ -338,6 +378,61 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(24.dp),
             )
+        }
+    }
+}
+
+/** How many ended tasks an agent's page lists before Show all. */
+private const val ENDED_SHOWN = 5
+
+/**
+ * An agent's tasks, on its page: those still going (queued, running,
+ * blocked) first, then those that ended, the five most recent before Show
+ * all. Each its mark, its title on one line, where it is and who asked for
+ * it, and its summary once ended; one asked for in a conversation this
+ * phone holds opens it. Every text is the sandbox's, drawn as plain text.
+ */
+@Composable
+private fun AgentTasks(model: AppModel, agent: Agent, openChat: (String) -> Unit) {
+    val p = palette
+    val tasks = model.tasksOf(agent.address)
+    val current = tasks.filter { !it.state.ended }
+    val ended = tasks.filter { it.state.ended }
+    var allEnded by remember { mutableStateOf(false) }
+    // "running 12 min" stays true while the page shows.
+    val now by produceState(System.currentTimeMillis() / 1000) {
+        while (true) {
+            delay(30_000)
+            value = System.currentTimeMillis() / 1000
+        }
+    }
+    Section(if (current.isEmpty()) "Tasks" else "Tasks · ${current.size} going") {
+        if (tasks.isEmpty()) {
+            SettingRow {
+                Text("No tasks. A task is work its runtime tracks outside a conversation; only the host's person sees them.", style = Type.small, color = p.textMuted)
+            }
+        }
+        (current + if (allEnded) ended else ended.take(ENDED_SHOWN)).forEach { task ->
+            val asked = task.conversation?.takeIf { id -> model.conversations.any { it.host == task.host && it.id == id } }
+            SettingRow(if (asked != null) Modifier.clickable(onClickLabel = "Open the conversation it was asked in") { openChat(asked) } else Modifier) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) { TaskMark(task.state) }
+                    Column(Modifier.weight(1f)) {
+                        Text(task.title, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val by = task.askedBy?.let { " · asked by ${model.agentLabel("${task.host}/$it")}" }.orEmpty()
+                        Text(taskStatus(task, now) + by, style = Type.small, color = if (task.state.ended) p.textMuted else p.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        task.summary?.takeIf { task.state.ended }?.let {
+                            Text(it, style = Type.small, color = p.textMuted, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                    if (asked != null) Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+                }
+            }
+        }
+        if (ended.size > ENDED_SHOWN) {
+            SettingRow(Modifier.clickable { allEnded = !allEnded }) {
+                Text(if (allEnded) "Show fewer" else "Show all ${ended.size} ended", style = Type.label, color = p.accent)
+            }
         }
     }
 }
@@ -631,7 +726,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                 Text("No agent yet: pair a host, or wait for it to list its agents.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(24.dp))
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    AgentInitial(agent.label, model.workingOn(agent).isNotEmpty(), side = 64.dp, photo = agent.photoKey)
+                    AgentInitial(agent.label, model.workingOn(agent).isNotEmpty() || model.activityOf(agent.address) != null, side = 64.dp, photo = agent.photoKey)
                     Gap(14.dp)
                     Text(agent.label, style = Type.heading, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Gap(4.dp)
@@ -676,5 +771,48 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
             val started = model.conversations.firstOrNull { it.id == id } ?: return@Composer
             if (model.send(started, text.trim()) == null) opened(id)
         }
+    }
+}
+
+/**
+ * Forget, for an agent its host confirmed removed (enclos ADR 0067,
+ * proposed): its Home and the person's direct conversations with it are
+ * deleted, from the host and the person's paired phones. Nothing unless
+ * the host lists it in `agents.removed.list`, which only a host that can
+ * forget sends, to its own person, or a forget of it is pending or failed.
+ */
+@Composable
+internal fun ForgetAgentSection(model: AppModel, key: AgentKey, label: String) {
+    if (!model.forgetting.offers(key)) return
+    val p = palette
+    var asking by remember { mutableStateOf(false) }
+    val unavailable = model.forgetting.unavailable(key)
+    Section("Removed agent") {
+        SettingRow {
+            Text(
+                "Its Home and your conversations with it stay until you forget it. Group conversations it was in stay; delete each on its own.",
+                style = Type.small, color = p.textMuted,
+            )
+        }
+        SettingRow(Modifier.clickable(enabled = unavailable == null, onClickLabel = "Forget $label") { asking = true }) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Glyph(Glyphs.delete, if (unavailable == null) p.text else p.textFaint, size = 20.dp)
+                Column {
+                    Text("Forget $label", style = Type.label, color = if (unavailable == null) p.text else p.textFaint)
+                    (if (key in model.forgetting.pending) "Forgetting agent…" else model.forgetting.errors[key] ?: unavailable)
+                        ?.let { Text(it, style = Type.small, color = p.textMuted) }
+                }
+            }
+        }
+    }
+    if (asking) {
+        ConfirmDialog(
+            title = "Forget $label?",
+            text = "This permanently deletes its Home and your conversations with it, their history and files, from the host and your paired phones. Group conversations it was in stay. An agent made again under this name starts with a new Home." +
+                (unavailable ?: model.forgetting.errors[key])?.let { "\n\n$it" }.orEmpty(),
+            confirm = "Forget",
+            enabled = unavailable == null,
+            onDismiss = { asking = false },
+        ) { if (model.forgetting.forget(key)) asking = false }
     }
 }
