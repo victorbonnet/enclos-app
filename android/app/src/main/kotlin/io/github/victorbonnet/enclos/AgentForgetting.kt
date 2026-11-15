@@ -40,20 +40,52 @@ class AgentForgetting(
     /** By agent: the id of its `agent.forget` until the host answers. */
     val pending = mutableStateMapOf<AgentKey, String>()
     val errors = mutableStateMapOf<AgentKey, String>()
-    /** Agents forgotten from this phone since it connected, so their page can close. */
+    /**
+     * Agents whose forget the host confirmed: their open page closes and
+     * takes the flag ([closed]), and a new session drops it, so an agent
+     * made again under the name has a page.
+     */
     val forgotten = mutableStateMapOf<AgentKey, Boolean>()
+    /** Requests the phone stopped waiting for: an answer that still comes settles them. */
+    private val late = mutableMapOf<String, AgentKey>()
+    /** By host: the id of its `agents.removed` until its list or a refusal comes. */
+    val listing = mutableStateMapOf<String, String>()
+    /** By host: why its list could not be had. */
+    val listErrors = mutableStateMapOf<String, String>()
 
     fun isRemoved(key: AgentKey) = key.name in removed[key.host].orEmpty()
 
     /** Asks [host] which agents it confirmed removed, when its bridge can say. */
     fun refresh(host: String) {
-        if (connected(host) && supported(host)) send(host, message("agents.removed"))
+        if (!connected(host) || !supported(host) || host in listing) return
+        val command = message("agents.removed")
+        val id = command.getString("id")
+        listErrors.remove(host)
+        listing[host] = id
+        if (!send(host, command)) {
+            listing.remove(host)
+            listErrors[host] = "The host could not be asked which agents were removed. Reconnect and try again."
+            return
+        }
+        later(30_000) {
+            if (listing[host] == id) {
+                listing.remove(host)
+                listErrors[host] = "The host did not say which agents were removed. Reconnect and try again."
+            }
+        }
     }
 
     /** A new session: what an earlier one listed may be stale. */
     fun authenticated(host: String) {
         removed.remove(host)
+        listing.remove(host)
+        forgotten.keys.filter { it.host == host }.forEach { forgotten.remove(it) }
         refresh(host)
+    }
+
+    /** The page of [key] closed after its forget. */
+    fun closed(key: AgentKey) {
+        forgotten.remove(key)
     }
 
     /** Why Forget cannot be used now, or `null`. */
@@ -64,6 +96,22 @@ class AgentForgetting(
         !isRemoved(key) -> "Its host does not confirm this agent was removed."
         else -> null
     }
+
+    /**
+     * What the page of [key], an agent its host no longer lists, says of
+     * whether it can be forgotten, before the host confirms it removed;
+     * `null` once it does, or while a forget of it is pending or failed.
+     */
+    fun status(key: AgentKey): String? = when {
+        isRemoved(key) || key in pending || key in errors -> null
+        !connected(key.host) -> "Connect to ${key.host} to check whether it was removed."
+        !supported(key.host) -> "This host's enclos bridge cannot forget removed agents. Update it to forget this one."
+        key.host in listing -> "Asking the host whether it was removed…"
+        else -> listErrors[key.host]
+    }
+
+    /** Whether the page of [key] shows Forget: removed, or a forget of it pending or failed. */
+    fun offers(key: AgentKey) = isRemoved(key) || key in pending || key in errors
 
     fun forget(key: AgentKey): Boolean {
         if (unavailable(key) != null) return false
@@ -76,9 +124,11 @@ class AgentForgetting(
             errors[key] = "Forget was not sent. Reconnect and try again."
             return false
         }
-        later(60_000) {
+        // Every conversation's deletion record comes before the ack, as for a group's deletion.
+        later(180_000) {
             if (pending[key] == id) {
                 pending.remove(key)
+                late[id] = key
                 errors[key] = "The host has not confirmed. Reconnect and check, or retry Forget."
             }
         }
@@ -89,7 +139,7 @@ class AgentForgetting(
         when (message.optString("type")) {
             "agents.removed.list" -> {
                 val list = message.getJSONArray("agents")
-                removed[host] = (0 until list.length()).map { i ->
+                val names = (0 until list.length()).map { i ->
                     list.getString(i).also { name ->
                         val parts = name.split('/')
                         if (parts.size != 2 || parts.any { it.isEmpty() } || name.toByteArray(Charsets.UTF_8).size > 128 || name.any { it.isISOControl() }) {
@@ -97,19 +147,29 @@ class AgentForgetting(
                         }
                     }
                 }.toSet()
+                removed[host] = names
+                listing.remove(host)
+                listErrors.remove(host)
+                // A forget whose answer was lost: no longer listed, it was most likely done,
+                // and its conversations go at sync. Not a retry to offer.
+                errors.keys.filter { it.host == host && it.name !in names }.forEach { errors.remove(it) }
                 return true
             }
             "ack" -> {
-                val key = pendingFor(host, message) ?: return false
-                pending.remove(key)
+                val key = answered(host, message) ?: return false
                 errors.remove(key)
                 removed[host] = removed[host].orEmpty() - key.name
                 forgotten[key] = true
                 return true
             }
             "error" -> {
-                val key = pendingFor(host, message) ?: return false
-                pending.remove(key)
+                val of = message.optString("of")
+                if (of.isNotEmpty() && listing[host] == of) {
+                    listing.remove(host)
+                    listErrors[host] = message.optString("message").ifBlank { "The host could not say which agents were removed." }
+                    return true
+                }
+                val key = answered(host, message) ?: return false
                 errors[key] = if (message.optString("code") == "unknown_type") "Update this host's enclos bridge to forget removed agents."
                     else message.optString("message").ifBlank { "Forget failed. Retry Forget." }
                 return true
@@ -118,15 +178,23 @@ class AgentForgetting(
         return false
     }
 
-    private fun pendingFor(host: String, message: JSONObject): AgentKey? {
+    /** The agent whose `agent.forget` on [host] this answers, pending or given up on. */
+    private fun answered(host: String, message: JSONObject): AgentKey? {
         val of = message.optString("of").ifEmpty { return null }
-        return pending.entries.firstOrNull { it.key.host == host && it.value == of }?.key
+        pending.entries.firstOrNull { it.key.host == host && it.value == of }?.key?.let {
+            pending.remove(it)
+            return it
+        }
+        // A later request of the same agent decides, not this answer.
+        return late.remove(of)?.takeIf { it.host == host && it !in pending }
     }
 
     fun ended(host: String) {
-        pending.keys.filter { it.host == host }.forEach {
-            pending.remove(it)
-            errors[it] = "The connection ended before the host confirmed. Reconnect and check, or retry Forget."
+        listing.remove(host)
+        pending.entries.filter { it.key.host == host }.forEach { (key, id) ->
+            pending.remove(key)
+            late[id] = key
+            errors[key] = "The connection ended before the host confirmed. Reconnect and check, or retry Forget."
         }
     }
 
@@ -134,8 +202,11 @@ class AgentForgetting(
     fun clear(host: String? = null) {
         val mine = { h: String -> host == null || h == host }
         removed.keys.filter(mine).forEach { removed.remove(it) }
+        listing.keys.filter(mine).forEach { listing.remove(it) }
+        listErrors.keys.filter(mine).forEach { listErrors.remove(it) }
         pending.keys.filter { mine(it.host) }.forEach { pending.remove(it) }
         errors.keys.filter { mine(it.host) }.forEach { errors.remove(it) }
         forgotten.keys.filter { mine(it.host) }.forEach { forgotten.remove(it) }
+        late.entries.removeAll { mine(it.value.host) }
     }
 }

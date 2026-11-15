@@ -247,7 +247,12 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
         val key = AgentKey.of(address)
         // Closes once this phone forgot it: nothing of it is left to show.
         val forgotten = model.forgetting.forgotten[key] == true
-        LaunchedEffect(forgotten) { if (forgotten) back() }
+        LaunchedEffect(forgotten) {
+            if (forgotten) {
+                model.forgetting.closed(key)
+                back()
+            }
+        }
         if (agent == null) {
             // Whether it was removed, as the host says now.
             LaunchedEffect(key) { model.forgetting.refresh(key.host) }
@@ -257,6 +262,9 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                     else "This agent is no longer listed by its host.",
                     style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp),
                 )
+                model.forgetting.status(key)?.let {
+                    Text(it, style = Type.small, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp))
+                }
                 ForgetAgentSection(model, key, address.substringAfterLast('/'))
             }
             return@Column
@@ -698,13 +706,13 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
 /**
  * Forget, for an agent its host confirmed removed (enclos ADR 0067,
  * proposed): its Home and the person's direct conversations with it are
- * deleted, from the host and every paired phone. Nothing while the host
- * does not list it in `agents.removed.list`, which only a host that can
- * forget sends, to its own person.
+ * deleted, from the host and the person's paired phones. Nothing unless
+ * the host lists it in `agents.removed.list`, which only a host that can
+ * forget sends, to its own person, or a forget of it is pending or failed.
  */
 @Composable
 internal fun ForgetAgentSection(model: AppModel, key: AgentKey, label: String) {
-    if (!model.forgetting.isRemoved(key) && key !in model.forgetting.pending && key !in model.forgetting.errors) return
+    if (!model.forgetting.offers(key)) return
     val p = palette
     var asking by remember { mutableStateOf(false) }
     val unavailable = model.forgetting.unavailable(key)

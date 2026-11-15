@@ -101,4 +101,116 @@ class AgentForgettingTest {
         f.client.clear()
         assertFalse(f.client.isRemoved(f.coder))
     }
+
+    @Test fun an_answer_after_a_timeout_or_a_disconnect_still_settles_the_forget() {
+        val f = Fixture()
+        f.listed("mac", "gone/coder")
+        f.client.forget(f.coder)
+        f.timers.last()()
+        assertTrue(f.client.errors.getValue(f.coder).contains("not confirmed"))
+        assertTrue(f.receipt("ack"))
+        assertFalse(f.coder in f.client.errors)
+        assertTrue(f.client.forgotten[f.coder] == true)
+        assertFalse(f.client.isRemoved(f.coder))
+        // After a disconnect, a refusal that still comes is shown.
+        val main = AgentKey("mac", "gone/main")
+        f.listed("mac", "gone/main")
+        f.client.forget(main)
+        f.client.ended("mac")
+        assertTrue(f.receipt("error"))
+        assertEquals("Refused", f.client.errors[main])
+        // A newer request decides, not the answer to one given up on.
+        f.client.forget(main)
+        val given = f.sent.last().second.getString("id")
+        f.client.ended("mac")
+        f.client.forget(main)
+        assertFalse(f.receipt("ack", of = given))
+        assertTrue(main in f.client.pending)
+    }
+
+    @Test fun a_stale_timer_does_not_fail_a_retry_and_offline_sends_nothing() {
+        val f = Fixture()
+        f.listed("mac", "gone/coder")
+        f.client.forget(f.coder)
+        f.receipt("error")
+        f.client.forget(f.coder)
+        f.timers.first()()
+        assertTrue(f.coder in f.client.pending)
+        assertFalse(f.coder in f.client.errors)
+        f.receipt("ack")
+        f.listed("mac", "gone/main")
+        f.online = false
+        val before = f.sent.size
+        assertFalse(f.client.forget(AgentKey("mac", "gone/main")))
+        assertEquals(before, f.sent.size)
+    }
+
+    @Test fun a_forget_whose_answer_was_lost_is_not_offered_again_once_the_host_stops_listing_it() {
+        val f = Fixture()
+        f.listed("mac", "gone/coder", "gone/main")
+        f.client.forget(f.coder)
+        f.client.ended("mac")
+        assertTrue(f.client.offers(f.coder))
+        f.client.authenticated("mac")
+        f.listed("mac", "gone/main")
+        assertFalse(f.coder in f.client.errors)
+        assertFalse(f.client.offers(f.coder))
+        assertTrue(f.client.offers(AgentKey("mac", "gone/main")))
+    }
+
+    @Test fun the_forgotten_flag_closes_one_page_and_a_new_session_drops_it() {
+        val f = Fixture()
+        f.listed("mac", "gone/coder")
+        f.client.forget(f.coder)
+        f.receipt("ack")
+        assertTrue(f.client.forgotten[f.coder] == true)
+        f.client.closed(f.coder)
+        assertNull(f.client.forgotten[f.coder])
+        f.listed("mac", "gone/coder")
+        f.client.forget(f.coder)
+        f.receipt("ack")
+        // Made again and listed by a restarted bridge: its page opens.
+        f.client.authenticated("mac")
+        assertNull(f.client.forgotten[f.coder])
+    }
+
+    @Test fun the_page_says_why_it_offers_nothing_until_the_host_lists_the_agent() {
+        val f = Fixture()
+        f.online = false
+        assertTrue(f.client.status(f.coder)!!.contains("Connect"))
+        f.online = true
+        f.supports = false
+        assertTrue(f.client.status(f.coder)!!.contains("Update"))
+        f.supports = true
+        f.client.refresh("mac")
+        assertTrue(f.client.status(f.coder)!!.contains("Asking"))
+        // Asked once at a time.
+        f.client.refresh("mac")
+        assertEquals(1, f.sent.size)
+        assertTrue(f.receipt("error"))
+        assertEquals("Refused", f.client.status(f.coder))
+        f.client.refresh("mac")
+        f.timers.last()()
+        assertTrue(f.client.status(f.coder)!!.contains("did not say"))
+        f.client.refresh("mac")
+        f.listed("mac")
+        assertNull(f.client.status(f.coder))
+        f.listed("mac", "gone/coder")
+        assertNull(f.client.status(f.coder))
+        assertTrue(f.client.offers(f.coder))
+        f.sending = false
+        f.client.refresh("mac")
+        assertTrue(f.client.listErrors.getValue("mac").contains("could not be asked"))
+    }
+
+    @Test fun a_bad_list_keeps_the_last_one_and_names_hold_at_most_128_bytes() {
+        val f = Fixture()
+        f.listed("mac", "gone/coder")
+        assertThrows(org.json.JSONException::class.java) { f.listed("mac", "gone/coder", "bad") }
+        assertTrue(f.client.isRemoved(f.coder))
+        val longest = "s/" + "a".repeat(126)
+        assertTrue(f.listed("mac", longest))
+        assertThrows(org.json.JSONException::class.java) { f.listed("mac", longest + "a") }
+        assertTrue(f.client.isRemoved(AgentKey("mac", longest)))
+    }
 }
