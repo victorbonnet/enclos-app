@@ -179,10 +179,20 @@ fun heldTaskIntroductions(lines: List<Line>): Map<String, Long> = buildMap {
     }
 }
 
-/** What a card says of its state; [here] when this phone's own resume was confirmed. */
-internal fun heldTaskStatus(card: HeldTask, here: Boolean = false): String = when (card.state) {
+/**
+ * What a card says of its state. [here] when this phone holds the runtime's confirmation of its
+ * own resume (kept in memory only: after a restart, or a lost answer, the card cannot tell which
+ * device resumed it, so it says "from the app"). [gone] when the host answered a resume
+ * `not_found` and no newer card came since.
+ */
+internal fun heldTaskStatus(card: HeldTask, here: Boolean = false, gone: Boolean = false): String = when {
+    gone && card.state == HeldTaskState.Held -> "Not known on the host · the host (or its runtime) has no such held task"
+    else -> heldStateLine(card, here)
+}
+
+private fun heldStateLine(card: HeldTask, here: Boolean): String = when (card.state) {
     HeldTaskState.Held -> "Held · waiting for you"
-    HeldTaskState.Resumed -> if (here) "Resumed from this phone" else "Resumed from a paired device"
+    HeldTaskState.Resumed -> if (here) "Resumed from this phone" else "Resumed from the app"
     HeldTaskState.Released -> "No longer held · it runs again, finished or went away"
     HeldTaskState.Expired -> "No longer tracked · the agent's channel stopped reporting held tasks"
     HeldTaskState.Unknown -> "A state this app does not know (${Visible.stripped(card.stateWire)}) · update the app to act on it"

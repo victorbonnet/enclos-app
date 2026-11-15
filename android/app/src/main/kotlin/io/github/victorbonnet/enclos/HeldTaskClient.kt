@@ -18,13 +18,18 @@ data class HeldTaskRequest(val id: String, val card: HeldTask) {
 /**
  * Held tasks' cards and their one action, Resume (docs/spec.md, Held tasks). Keeps the newest
  * revision of each card, sends a resume only on the person's tap, tracks it by its id, and
- * never queues or sends one again on its own: an outcome it cannot be sure of (`unconfirmed`,
- * no answer, a connection that ended) asks the host for a sync, and Resume waits for it.
+ * never queues or sends one again on its own. An outcome it cannot be sure of asks the host
+ * for a sync, and Resume waits for it: `unconfirmed`, `conflict`, `internal`, an error code
+ * this app does not know, a `held_task.result` it cannot read, no answer in [ANSWER_WAIT_MS],
+ * or a connection that ended before the answer.
  */
 class HeldTaskClient(
     private val send: (HeldTaskRequest) -> Boolean,
     private val connected: (String) -> Boolean,
-    /** Whether a card may be shown: of a paired host and a Home this phone keeps. */
+    /**
+     * Whether a card may be kept: of a paired host, and not of a deleted conversation. Its Home
+     * need not be known yet: [current] and [unlinked] show it once the Home is.
+     */
     private val accepts: (HeldTask) -> Boolean,
     /** A card changed (not from the cache): saved. */
     private val changed: (HeldTask) -> Unit,
@@ -43,6 +48,11 @@ class HeldTaskClient(
     val uncertain = mutableStateMapOf<HeldTaskKey, Boolean>()
     /** Cards this phone resumed, confirmed by the runtime: the request's id. */
     val receipts = mutableStateMapOf<HeldTaskKey, String>()
+    /**
+     * Cards the host answered `not_found` for, by the revision then current: the host (or its
+     * runtime) no longer knows the task, so no Resume, until the bridge sends a newer card.
+     */
+    val gone = mutableStateMapOf<HeldTaskKey, Long>()
     private val requests = mutableMapOf<String, HeldTaskRequest>()
     /** By host: whether a sync ended since the connection authenticated, or since this client asked for one. */
     private val fresh = mutableStateMapOf<String, Boolean>()
@@ -51,12 +61,27 @@ class HeldTaskClient(
     fun current(conversation: Conversation, task: String?): HeldTask? =
         task?.let { cards[HeldTaskKey(conversation.host, conversation.agent, it)] }?.takeIf { it.belongsTo(conversation) }
 
-    /** Whether the card offers Resume at all: only while held. */
-    fun offersResume(card: HeldTask): Boolean = card.state == HeldTaskState.Held
+    /**
+     * The cards of [conversation], an agent's Home, that no message of it in [linked] (the tasks
+     * whose introduction is loaded, [heldTaskIntroductions]) draws: still held, or with a resume
+     * whose outcome is still shown. A task held before this phone kept messages' links (an
+     * older app) has no linked message, and a sync sends its card, not that message again.
+     * Oldest first.
+     */
+    fun unlinked(conversation: Conversation, linked: Set<String>): List<HeldTask> = cards.values
+        .filter { it.belongsTo(conversation) && it.task !in linked }
+        .filter { offersResume(it) || it.key in pending || it.key in uncertain || it.key in notes }
+        .sortedWith(compareBy({ it.since }, { it.task }))
+
+    /** Whether the card offers Resume at all: only while held, and not after the host said it has no such task. */
+    fun offersResume(card: HeldTask): Boolean = card.state == HeldTaskState.Held && card.key !in gone
+
+    /** What the card says of its state. */
+    fun status(card: HeldTask): String = heldTaskStatus(card, here = card.key in receipts, gone = card.key in gone)
 
     /** Why Resume cannot be tapped now, or null when it can. */
     fun unavailable(card: HeldTask): String? = when {
-        card.state != HeldTaskState.Held -> "This task is no longer held."
+        !offersResume(card) -> "This task is no longer held."
         card.key in pending -> "Waiting for the runtime to confirm…"
         uncertain[card.key] == true && !connected(card.host) -> "Reconnect to ${card.host} to check whether it resumed."
         uncertain[card.key] == true -> "Checking with ${card.host}…"
@@ -69,13 +94,15 @@ class HeldTaskClient(
 
     fun merge(incoming: HeldTask, cached: Boolean = false): Boolean {
         if (!accepts(incoming)) {
-            dropped("held task ${incoming.task} of ${incoming.agent} from ${incoming.host}: no kept Home of a paired host")
+            dropped("held task ${incoming.task} of ${incoming.agent} from ${incoming.host}: not of a paired host, or of a deleted conversation")
             return false
         }
         val current = cards[incoming.key]
         val selected = newestHeldTask(current, incoming)
         if (selected != current) {
             cards[incoming.key] = selected
+            // A newer card from the bridge replaces what `not_found` said.
+            gone.remove(selected.key)
             // A card that left `held` elsewhere: what the last attempt said no longer applies.
             if (current != null && selected.state != current.state && selected.key !in pending) {
                 notes.remove(selected.key)
@@ -134,12 +161,17 @@ class HeldTaskClient(
         val key = request.card.key
         val quoted = Visible.stripped(said.replace(Regex("\\s+"), " ")).trim().take(200)
         when (code) {
-            // Refused before anything reached the runtime: certain, and Resume stays.
+            // Refused before anything was sent to the runtime: certain, and Resume stays.
             "agent_unavailable" -> notes[key] = "The agent is not connected, so nothing was sent. Try again once it is back."
             "not_allowed" -> notes[key] = "Only the host's person can resume held tasks."
-            "not_found" -> notes[key] = "No longer tracked: $host has no such held task."
             "bad_message", "unknown_type", "unsupported" ->
                 notes[key] = "The bridge on $host cannot resume held tasks. Update enclos there."
+            // The bridge has no such card, or the runtime no such task (the plugin asked it):
+            // certain, and nothing left to resume. The card says so until a newer one comes.
+            "not_found" -> {
+                gone[key] = request.card.revision
+                notes.remove(key)
+            }
             // The card changed since it was shown: its current state comes with the sync.
             "conflict" -> doubt(host, key, "The task changed since this card was shown.")
             // The task may have resumed: sync before deciding again, never resend.
@@ -175,7 +207,7 @@ class HeldTaskClient(
 
     private fun parsed(host: String, message: JSONObject): HeldTask? =
         runCatching { HeldTask.from(host, message.getJSONObject("held_task")) }
-            .onFailure { dropped("${message.optString("type")} from $host could not be read: ${it.message}") }
+            .onFailure { dropped("${message.optString("type")} from $host could not be read: ${it.javaClass.simpleName}") }
             .getOrNull()
 
     /** A connection to [host] authenticated: its cards are not fresh until its sync ends. */
@@ -187,7 +219,8 @@ class HeldTaskClient(
         uncertain.keys.filter { it.host == host }.forEach { key ->
             uncertain.remove(key)
             val card = cards[key] ?: return@forEach
-            notes[key] = if (card.state == HeldTaskState.Held) "Checked: $host still lists it as held." else heldTaskStatus(card) + "."
+            // A card that left `held` says so in its state line.
+            if (offersResume(card)) notes[key] = "Checked: $host still lists it as held." else notes.remove(key)
         }
     }
 
@@ -216,7 +249,7 @@ class HeldTaskClient(
 
     private fun forgetCard(key: HeldTaskKey) {
         pending[key]?.let(::finish)
-        cards.remove(key); notes.remove(key); uncertain.remove(key); receipts.remove(key)
+        cards.remove(key); notes.remove(key); uncertain.remove(key); receipts.remove(key); gone.remove(key)
     }
 
     /**

@@ -327,7 +327,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val heldTasks = HeldTaskClient(
         send = { request -> connections[request.card.host]?.send(request.command()) == true },
         connected = ::connected,
-        accepts = { card -> paired.any { it.name == card.host } && conversations.any(card::belongsTo) },
+        // Kept even before its Home is known: a sync sends a held card, never its first message again.
+        accepts = { card -> paired.any { it.name == card.host } && ConversationKey(card.host, card.conversation) !in deletion.deleted },
         changed = { card -> save { heldTask(card) } },
         later = { wait, action -> main.postDelayed({ action() }, wait) },
         resync = { host -> connections[host]?.send(message("sync", "since" to since(host))) == true },

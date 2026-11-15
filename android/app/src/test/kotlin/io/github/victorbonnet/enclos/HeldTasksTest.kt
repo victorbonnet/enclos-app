@@ -152,11 +152,16 @@ class HeldTasksTest {
 
     @Test fun each_state_says_what_happened() {
         val card = HeldTask.from("mac", wire())
-        assertEquals("Held · waiting for you", heldTaskStatus(card))
-        assertEquals("Resumed from this phone", heldTaskStatus(card.copy(stateWire = "resumed"), here = true))
-        assertEquals("Resumed from a paired device", heldTaskStatus(card.copy(stateWire = "resumed")))
-        assertTrue(heldTaskStatus(card.copy(stateWire = "released")).startsWith("No longer held"))
-        assertTrue(heldTaskStatus(card.copy(stateWire = "expired")).startsWith("No longer tracked"))
+        val resumed = card.copy(stateWire = "resumed")
+        val lines = listOf("held", "resumed", "released", "expired").map { heldTaskStatus(card.copy(stateWire = it)) }
+        assertEquals("each state reads differently", lines.size, lines.toSet().size)
+        // Only this phone's confirmed resume says it was this phone; without the receipt
+        // (lost answer, a restart) the card cannot tell which device it was.
+        assertTrue(heldTaskStatus(resumed, here = true).contains("this phone"))
+        assertFalse(heldTaskStatus(resumed).contains("this phone"))
+        assertFalse(heldTaskStatus(resumed).contains("paired device"))
+        // `not_found` reads apart from every state, `expired` included.
+        assertFalse(heldTaskStatus(card, gone = true) in lines)
     }
 
     @Test fun a_long_last_error_is_folded() {

@@ -23,10 +23,11 @@ import io.github.victorbonnet.enclos.ui.*
 const val HELD_TASK_FRAME = "Held task · the runtime keeps it; resuming changes no access"
 
 /**
- * A held task's card, in its agent's Home at the message that introduced it: the runtime's
- * title, reason, last error (folded when long), assignee and what resuming does, then since
- * when it is held, its state and, while held, Resume. The runtime's words are plain text,
- * never markdown, and arrive without hidden characters ([HeldTask.from]).
+ * A held task's card, in its agent's Home at the message that introduced it (or, with no such
+ * message, below the history: [HeldTaskClient.unlinked]): the runtime's title, reason and last
+ * error (folded when long), then the assignee, since when it is held and what resuming does,
+ * then its state and, while held, Resume. The runtime's words are plain text, never markdown,
+ * and arrive without hidden characters ([HeldTask.from]).
  */
 @Composable
 fun HeldTaskCard(client: HeldTaskClient, card: HeldTask) {
@@ -57,7 +58,7 @@ fun HeldTaskCard(client: HeldTaskClient, card: HeldTask) {
         card.assignee?.let { Text("Assigned to $it", style = Type.small, color = p.textMuted) }
         Text("Held since ${Times.ago(card.since, System.currentTimeMillis() / 1000)}", style = Type.small, color = p.textMuted)
         if (card.resume.isNotBlank()) Text("Resume: ${card.resume}", style = Type.small, color = p.textMuted)
-        Text(heldTaskStatus(card, here = card.key in client.receipts), style = Type.body, color = p.text)
+        Text(client.status(card), style = Type.body, color = p.text)
         if (client.offersResume(card)) {
             PrimaryButton("Resume", enabled = unavailable == null) { client.resume(card) }
             unavailable?.let { Text(it, style = Type.small, color = p.textMuted) }

@@ -124,7 +124,7 @@ class HeldTaskClientTest {
     }
 
     @Test fun refusals_before_sending_are_certain_and_leave_resume_available() {
-        for (code in listOf("agent_unavailable", "not_allowed", "not_found", "bad_message", "unknown_type")) {
+        for (code in listOf("agent_unavailable", "not_allowed", "bad_message", "unknown_type", "unsupported")) {
             val f = Fixture(); f.ready(held)
             val id = f.client.resume(held)!!
             assertFalse(f.client.received("pi", f.error(id, code)))
@@ -147,17 +147,128 @@ class HeldTaskClientTest {
             assertEquals(true, f.client.uncertain[held.key])
             assertFalse(code, f.client.canResume(held))
             assertNull(f.client.resume(held))
-            assertTrue(f.client.notes[held.key]!!.endsWith("Refreshing…"))
             assertFalse(Visible.hasHidden(f.client.notes[held.key]!!))
             // The sync settles it: still held, Resume again, by a new tap only.
             f.client.synced("mac")
+            assertNull(f.client.uncertain[held.key])
             assertTrue(f.client.canResume(held))
             assertEquals(1, f.sent.size)
-            assertEquals("Checked: mac still lists it as held.", f.client.notes[held.key])
+            assertNotNull(f.client.notes[held.key])
         }
+    }
+
+    @Test fun an_unconfirmed_resume_that_did_resume_shows_resumed_after_the_sync() {
         val f = Fixture(); f.ready(held)
-        assertTrue(f.client.received("mac", f.error(f.client.resume(held)!!, "unconfirmed")))
-        assertTrue(f.client.notes[held.key]!!.startsWith("The task may have resumed."))
+        val id = f.client.resume(held)!!
+        f.client.received("mac", f.error(id, "unconfirmed"))
+        // The runtime did resume it: its card comes, newer, before the sync ends.
+        val resumed = held.copy(stateWire = "resumed", revision = 4)
+        f.client.received("mac", frame("held_task", resumed))
+        f.client.synced("mac")
+        assertEquals(resumed, f.client.cards[held.key])
+        assertNull(f.client.uncertain[held.key])
+        assertFalse(f.client.offersResume(resumed))
+        assertFalse(f.client.canResume(resumed))
+        assertNull(f.client.resume(resumed))
+        assertEquals(1, f.sent.size)
+        // Not this phone's confirmed receipt: the card does not claim it.
+        assertNull(f.client.receipts[held.key])
+        assertFalse(f.client.status(resumed).contains("this phone"))
+        assertNull(f.client.notes[held.key])
+    }
+
+    @Test fun not_found_hides_resume_until_a_newer_card_comes() {
+        val f = Fixture(); f.ready(held)
+        val id = f.client.resume(held)!!
+        assertTrue(f.client.received("mac", f.error(id, "not_found")))
+        assertFalse(held.key in f.client.pending)
+        assertNull(f.client.uncertain[held.key])
+        assertTrue(f.resyncs.isEmpty())
+        // Still `held` as the bridge last said, but the host has no such task: no Resume.
+        assertEquals(held, f.client.cards[held.key])
+        assertFalse(f.client.offersResume(held))
+        assertFalse(f.client.canResume(held))
+        assertNull(f.client.resume(held))
+        assertNotEquals(heldTaskStatus(held), f.client.status(held))
+        assertNotEquals(heldTaskStatus(held.copy(stateWire = "expired")), f.client.status(held))
+        // The same revision again (a sync) changes nothing; a newer card replaces it.
+        f.client.merge(held)
+        assertFalse(f.client.offersResume(held))
+        val again = held.copy(reason = "Blocked again", revision = 5)
+        f.client.merge(again)
+        assertTrue(f.client.canResume(again))
+        assertEquals(heldTaskStatus(again), f.client.status(again))
+    }
+
+    @Test fun a_task_held_again_after_this_phone_resumed_it_offers_resume_again() {
+        val f = Fixture(); f.ready(held)
+        val id = f.client.resume(held)!!
+        val resumed = held.copy(stateWire = "resumed", revision = 4)
+        f.client.result("mac", id, resumed)
+        assertTrue(f.client.status(resumed).contains("this phone"))
+        val again = held.copy(reason = "Gave up again", since = 1_763_100_000, revision = 7)
+        f.client.received("mac", frame("held_task", again))
+        assertEquals(again, f.client.cards[held.key])
+        assertNull(f.client.receipts[held.key])
+        assertTrue(f.client.canResume(again))
+        assertNotNull(f.client.resume(again))
+        assertEquals(listOf(3L, 7L), f.sent.map { it.card.revision })
+    }
+
+    @Test fun the_same_task_on_two_hosts_is_two_cards() {
+        val f = Fixture()
+        val other = held.copy(host = "pi")
+        val client = HeldTaskClient(send = { f.sent += it; true }, connected = { true }, accepts = { true },
+            changed = {}, later = { _, _ -> }, resync = { true })
+        listOf("mac", "pi").forEach(client::authenticated)
+        client.merge(held); client.merge(other.copy(stateWire = "released", revision = 9))
+        listOf("mac", "pi").forEach(client::synced)
+        assertEquals(2, client.cards.size)
+        assertTrue(client.canResume(held))
+        assertFalse(client.canResume(client.cards.getValue(other.key)))
+        val id = client.resume(held)!!
+        // An answer naming the other host's card, or from it, settles nothing.
+        assertFalse(client.failure("pi", id, "not_found"))
+        assertFalse(client.result("pi", id, other.copy(stateWire = "resumed", revision = 10)))
+        assertTrue(held.key in client.pending)
+        assertTrue(client.failure("mac", id, "agent_unavailable"))
+        assertNull(client.gone[other.key])
+        client.forget("pi")
+        assertEquals(setOf(held.key), client.cards.keys)
+    }
+
+    @Test fun a_card_that_comes_before_its_home_shows_once_the_home_does() {
+        var homes = emptyList<Conversation>()
+        val f = Fixture()
+        val client = HeldTaskClient(send = { true }, connected = { true }, accepts = { true },
+            changed = {}, later = { _, _ -> })
+        assertTrue(client.merge(held))
+        assertNull(homes.firstNotNullOfOrNull { client.current(it, "t_1") })
+        homes = listOf(f.home)
+        assertEquals(held, homes.firstNotNullOfOrNull { client.current(it, "t_1") })
+        assertEquals(listOf(held), client.unlinked(f.home, emptySet()))
+    }
+
+    @Test fun held_cards_no_loaded_message_introduces_are_drawn_below_the_history() {
+        val f = Fixture(); f.ready(held)
+        val older = held.copy(task = "t_0", since = held.since - 60)
+        val elsewhere = held.copy(task = "t_9", agent = "lab/other", conversation = "home.lab.other")
+        val released = held.copy(task = "t_5", stateWire = "released")
+        listOf(older, released).forEach { f.client.merge(it) }
+        f.client.merge(elsewhere, cached = true)
+        // Linked tasks are drawn at their message; the others, held, oldest first.
+        assertEquals(listOf(older, held), f.client.unlinked(f.home, emptySet()))
+        assertEquals(listOf(older), f.client.unlinked(f.home, setOf("t_1")))
+        assertTrue(f.client.unlinked(f.home.copy(home = false), emptySet()).isEmpty())
+        // A card whose resume is still unsettled stays until its outcome is shown.
+        f.client.received("mac", f.error(f.client.resume(older)!!, "unconfirmed"))
+        f.client.merge(older.copy(stateWire = "resumed", revision = 4))
+        assertEquals(listOf("t_0", "t_1"), f.client.unlinked(f.home, emptySet()).map { it.task })
+        f.client.synced("mac")
+        assertEquals(listOf(held), f.client.unlinked(f.home, emptySet()))
+        // From a message's link, through the timeline's own selection.
+        val lines = listOf(Line(1, "agent", "Held: report", "notify", 1, heldTask = "t_1"))
+        assertTrue(f.client.unlinked(f.home, heldTaskIntroductions(lines).keys).isEmpty())
     }
 
     @Test fun a_sync_that_cannot_be_asked_waits_for_the_next_connection() {

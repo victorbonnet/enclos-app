@@ -1522,6 +1522,15 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             // ended with no answer shows none.
             val running = model.steps[id].orEmpty()
             if (working && running.isNotEmpty()) item(key = "steps-live") { Arriving { ToolSteps(running, live = true, expanded = true) {} } }
+            // Held tasks no loaded message introduces (one held before this phone kept the
+            // link, say), below the history; newest lowest, as the list is drawn bottom-up.
+            model.heldTasks.unlinked(conversation, introductions.keys).asReversed().forEach { card ->
+                item(key = "held-${card.agent}/${card.task}") {
+                    Arriving {
+                        Bubble(text = "", time = Times.clock(card.since), outgoing = false, content = { HeldTaskCard(model.heldTasks, card) })
+                    }
+                }
+            }
             val runtime = model.statusSource(conversation)
             // A task card after the message it follows in time, newest lowest, as the list is drawn bottom-up.
             fun cardsAt(index: Int) = cardsAfter[index].orEmpty().reversed().forEach { task ->
