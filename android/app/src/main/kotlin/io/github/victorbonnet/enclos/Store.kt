@@ -32,8 +32,10 @@ class Saved(
  *
  * Read off the main thread, in two passes: [recent], what the first screens
  * show, then [lines], every message.
+ *
+ * [name] is the database's file; instrumented tests use one of their own.
  */
-class Store(context: Context) : SQLiteOpenHelper(context, "conversations.db", null, STORE_VERSION) {
+class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHelper(context, name, null, STORE_VERSION) {
     override fun onCreate(db: SQLiteDatabase) = CREATE.forEach(db::execSQL)
 
     override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) = upgrades(old).forEach(db::execSQL)

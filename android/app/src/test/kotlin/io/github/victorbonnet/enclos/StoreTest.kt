@@ -48,8 +48,8 @@ class StoreTest {
         val steps = upgrades(7)
         assertEquals("ALTER TABLE messages ADD COLUMN held_task TEXT", steps.first())
         assertTrue(steps[1].startsWith("CREATE TABLE held_tasks ("))
-        assertEquals(2, steps.size)
-        assertEquals(8, STORE_VERSION)
+        // Later versions append their own steps after these.
+        assertEquals(steps.drop(2), upgrades(8))
     }
 
     @Test
