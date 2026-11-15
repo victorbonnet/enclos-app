@@ -12,6 +12,8 @@ androidx-lifecycle = "2.11.0"
 androidx-browser = "1.10.0"
 androidx-pdf = "1.0.0-beta01"
 commonmark = "0.32.0"
+firebase-messaging = "26.0.2"
+androidx-fragment = "1.9.1"
 junit = "4.13.2"
 json = "20260814"
 
@@ -40,6 +42,13 @@ commonmark = { module = "org.commonmark:commonmark", version.ref = "commonmark" 
 commonmark-ext-gfm-tables = { module = "org.commonmark:commonmark-ext-gfm-tables", version.ref = "commonmark" }
 commonmark-ext-gfm-strikethrough = { module = "org.commonmark:commonmark-ext-gfm-strikethrough", version.ref = "commonmark" }
 commonmark-ext-autolink = { module = "org.commonmark:commonmark-ext-autolink", version.ref = "commonmark" }
+# Pushes from each host's bridge (docs/adr/0010): the token and the data
+# messages; no other Firebase product
+firebase-messaging = { module = "com.google.firebase:firebase-messaging", version.ref = "firebase-messaging" }
+# Firebase's Play services libraries ask for Fragment 1.1, older than the
+# activity result APIs the app uses (the app lock's prompt, the notification
+# permission); named here so one recent enough is used
+androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "androidx-fragment" }
 # Unit tests on the JVM, for what needs no phone
 junit = { module = "junit:junit", version.ref = "junit" }
 # org.json for those tests: android.jar's copy is a stub off the phone

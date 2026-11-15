@@ -500,9 +500,30 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     init {
         // The inbox is always by agent now: the earlier choice to group it goes.
-        if (settings.contains("inbox.grouped")) settings.edit { remove("inbox.grouped") }    }
+        if (settings.contains("inbox.grouped")) settings.edit { remove("inbox.grouped") }
+        // A new FCM token, while the app runs: given at once to each host
+        // connected; the others get it when they next connect.
+        PushTokens.changed = { token -> ui { connections.keys.toList().forEach { pushToken(it, token) } } }
+    }
 
     private fun ui(block: () -> Unit) = main.post(block)
+
+    /** Gives [host] this phone's FCM token (enclos `docs/protocol.md`, `push.token`). */
+    private fun pushToken(host: String, token: String) {
+        connections[host]?.send(message("push.token", "kind" to "fcm", "token" to token))
+    }
+
+    /**
+     * A conversation a notification was tapped for: opened once the phone
+     * holds it, which may be after the sync the connection starts.
+     */
+    val openedConversation = mutableStateOf<String?>(null)
+
+    /** A notification of [conversation], from [host], was tapped. */
+    fun openFromNotification(host: String, conversation: String) {
+        if (paired.none { it.name == host }) return
+        openedConversation.value = conversation
+    }
 
     /**
      * A link that names a host already paired with another bridge, waiting
@@ -700,6 +721,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                         "device_key" to encodeBytes(Keys.devicePublicKey(attempt.alias)),
                         "proof" to encodeBytes(pairingProof(parsed.code, session.handshakeHash())),
                         "sig" to encodeBytes(Keys.sign(attempt.alias, pairingSignatureMessage(session.handshakeHash()))),
+                        // This phone's FCM token, when push is on: the host pushes to it.
+                        "push" to PushTokens.current(getApplication())?.let(Push::token),
                     )
                 },
                 // A field missing here ends the connection (BridgeConnection),
@@ -958,6 +981,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 connections[host.name]?.send(message("agents"))
                 // What is on the phone is kept: only what is newer comes.
                 connections[host.name]?.send(message("sync", "since" to since(host.name)))
+                // The token at each connection: the host keeps the last one given.
+                PushTokens.current(getApplication())?.let { pushToken(host.name, it) }
             }
             "audit.list" -> {
                 val state = audit[host.name] ?: return
@@ -1807,6 +1832,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        PushTokens.changed = null
         agentImages.close()
         connections.values.forEach { it.close() }
         work.shutdown()
