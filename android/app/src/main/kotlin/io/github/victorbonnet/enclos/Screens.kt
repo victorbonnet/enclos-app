@@ -130,6 +130,7 @@ import io.github.victorbonnet.enclos.ui.Type
 import io.github.victorbonnet.enclos.ui.Motion
 import io.github.victorbonnet.enclos.ui.UnreadBadge
 import io.github.victorbonnet.enclos.ui.Files
+import io.github.victorbonnet.enclos.ui.TaskCard
 import io.github.victorbonnet.enclos.ui.ToolSteps
 import io.github.victorbonnet.enclos.ui.WorkingBubble
 import io.github.victorbonnet.enclos.ui.WorkingWave
@@ -534,6 +535,9 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
     val haptics = LocalHapticFeedback.current
     var menuOpen by remember { mutableStateOf(false) }
     val working = model.workingOn(entry.address).filter { it.archived == archived }
+    // What its runtime says it is doing, a task say, when no conversation shows it at work.
+    val activity = model.activityOf(entry.address)
+    val busy = working.isNotEmpty() || activity != null
     val home = entry.home
     val homeLines = home?.let { model.lines[it.id] }.orEmpty()
     val last = homeLines.lastOrNull { !it.status } ?: homeLines.lastOrNull()
@@ -570,11 +574,11 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
             .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        AgentInitial(name, working.isNotEmpty(), side = 32.dp, photo = entry.photo)
+        AgentInitial(name, busy, side = 32.dp, photo = entry.photo)
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(name, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                if (working.isNotEmpty()) {
+                if (busy) {
                     WorkingWave(square = 4.dp, lift = 3.dp)
                     Text("working", style = Type.small, color = p.accent)
                 } else if (newest != null) {
@@ -587,6 +591,7 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
                 val shown = entry.homeMatch ?: last
                 val text = when {
                     at != null && entry.homeMatch == null -> model.doing(at.id) ?: "working"
+                    activity != null && entry.homeMatch == null -> activity.label ?: "working"
                     shown == null -> if (home != null) "Cron jobs and the agent's notices come here." else ""
                     shown.from == "agent" -> remember(shown.text) { words(shown) }
                     else -> "You: ${shown.text}"
@@ -1179,19 +1184,21 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
 internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () -> Unit) {
     val p = palette
     val working = model.workingOn(agent)
+    val activity = model.activityOf(agent.address)
     Row(
         Modifier.fillMaxWidth().clickable(onClickLabel = "Open ${agent.label}", onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        AgentInitial(agent.label, working.isNotEmpty(), side = 32.dp, photo = agent.photoKey)
+        AgentInitial(agent.label, working.isNotEmpty() || activity != null, side = 32.dp, photo = agent.photoKey)
         Column(Modifier.weight(1f)) {
             Text(agent.label, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (working.isNotEmpty()) {
+            if (working.isNotEmpty() || activity != null) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     WorkingWave(square = 4.dp, lift = 3.dp)
-                    Text(model.doing(working.first().id) ?: "working", style = Type.small, color = p.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val doing = working.firstOrNull()?.let { model.doing(it.id) } ?: activity?.label ?: "working"
+                    Text(doing, style = Type.small, color = p.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             } else {
                 val last = model.lastActive(agent)
@@ -1397,6 +1404,17 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         if (name == h) "@$h" else "$name (@$h)"
     }
     val working = if (conversation.group) status?.state == "working" else model.working(id)
+    // What the agent is doing anywhere, as its runtime reports it (a task, say): shown in the bar.
+    val activity = if (conversation.group) null else model.activityOf(scope)
+    // The tasks asked for here, each a live card among the messages; "running 12 min" stays true while shown.
+    val cards = model.taskCards(conversation)
+    val now by produceState(System.currentTimeMillis() / 1000) {
+        while (true) {
+            delay(30_000)
+            value = System.currentTimeMillis() / 1000
+        }
+    }
+    val cardsAfter = remember(lines, cards) { placedAfter(lines.map { it.time }, cards) }
     // What the person writes, kept when they leave and come back.
     val draft = model.unsent[id].orEmpty()
     // Why the last message could not go (too long, say): the draft stays.
@@ -1432,7 +1450,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
-            if (conversation.group) MemberStack(handles, side = 30.dp, label = { model.agentLabel("$scope/$it") }) { PhotoKey(conversation.host, "${conversation.agent}/$it") } else AgentAvatar(agent, live, small = true, photo = PhotoKey(conversation.host, conversation.agent))
+            if (conversation.group) MemberStack(handles, side = 30.dp, label = { model.agentLabel("$scope/$it") }) { PhotoKey(conversation.host, "${conversation.agent}/$it") } else AgentAvatar(agent, live, small = true, working = activity != null, photo = PhotoKey(conversation.host, conversation.agent))
             // Its name, and the agent under it; tap to rename.
             Column(Modifier.weight(1f).clickable(onClickLabel = "Rename the conversation") { renaming = true }) {
                 Text(
@@ -1442,17 +1460,32 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    when {
-                        conversation.group -> handles.joinToString(" ") { "@$it" } + " · ${conversation.host}/${conversation.agent}"
-                        conversation.title != null -> "$agent · ${conversation.host}/${conversation.agent}"
-                        else -> "${conversation.host}/${conversation.agent}"
-                    },
-                    style = Type.code,
-                    color = p.textFaint,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                val doing = activity?.label
+                if (doing != null) {
+                    // The agent at work, wherever: the wave and what it does, in place of its address.
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        WorkingWave(square = 4.dp, lift = 3.dp)
+                        Text(
+                            if (conversation.title != null) "$agent · $doing" else doing,
+                            style = Type.small,
+                            color = p.accent,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                } else {
+                    Text(
+                        when {
+                            conversation.group -> handles.joinToString(" ") { "@$it" } + " · ${conversation.host}/${conversation.agent}"
+                            conversation.title != null -> "$agent · ${conversation.host}/${conversation.agent}"
+                            else -> "${conversation.host}/${conversation.agent}"
+                        },
+                        style = Type.code,
+                        color = p.textFaint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             Box {
                 IconButton(Glyphs.more, "Conversation actions", { options = true })
@@ -1487,8 +1520,15 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             val running = model.steps[id].orEmpty()
             if (working && running.isNotEmpty()) item(key = "steps-live") { Arriving { ToolSteps(running, live = true, expanded = true) {} } }
             val runtime = model.statusSource(conversation)
+            // A task card after the message it follows in time, newest lowest, as the list is drawn bottom-up.
+            fun cardsAt(index: Int) = cardsAfter[index].orEmpty().reversed().forEach { task ->
+                item(key = "task-${task.sandbox}/${task.id}") {
+                    Arriving { TaskCard(task, model.agentLabel(task.assigneeAddress), now) }
+                }
+            }
             for (i in lines.indices.reversed()) {
                 val line = lines[i]
+                cardsAt(i)
                 item(key = line.seq) {
                     // The runtime about itself: a quiet line, not a bubble.
                     // One with files is drawn as a message, so they show.
@@ -1528,6 +1568,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 val day = Times.day(line.time)
                 if (i == 0 || Times.day(lines[i - 1].time) != day) item(key = "day-${line.seq}") { Arriving { DaySeparator(day) } }
             }
+            cardsAt(-1)
         }
         if (conversation.group) {
             // Members to address, as the person types `@`.
