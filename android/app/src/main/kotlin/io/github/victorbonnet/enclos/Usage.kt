@@ -1,6 +1,10 @@
 package io.github.victorbonnet.enclos
 
 import org.json.JSONObject
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.util.Locale
 
 /**
@@ -62,15 +66,98 @@ data class UsageTotal(val calls: Long = 0, val tokens: Tokens = Tokens()) {
     }
 }
 
-/** The windows the app offers; the bridge sums from the start of the hour that holds the window's start. */
-enum class UsageWindow(val label: String, val seconds: Long) {
-    Day("24 hours", 24 * 3600),
-    Week("7 days", 7 * 24 * 3600),
-    Month("30 days", 30 * 24 * 3600),
+/**
+ * The windows the app offers; the bridge sums from the start of the hour that holds the
+ * window's start. Each has its bars' size: the last day by the hour, a week or a month by
+ * the day.
+ */
+enum class UsageWindow(val label: String, val seconds: Long, val bucket: Long) {
+    Day("24 hours", 24 * 3600, 3600),
+    Week("7 days", 7 * 24 * 3600, 86_400),
+    Month("30 days", 30 * 24 * 3600, 86_400),
+}
+
+/** What an agent used in one bucket of a series: its start (Unix seconds), calls and every token, null when the runtime counted none. */
+data class UsagePoint(val at: Long, val calls: Long, val tokens: Long?)
+
+/** One agent's usage over time, as its bridge answered: the buckets that saw a call. */
+data class UsageSeries(val agent: String, val points: List<UsagePoint>)
+
+/** One bar of the chart: a bucket's start, and what each agent used in it, the chart's order. */
+data class UsageBar(val at: Long, val parts: List<Pair<String, Long>>) {
+    val tokens: Long get() = parts.sumOf { it.second }
+}
+
+/**
+ * The bars of [window], one per bucket from the one holding the window's start to the one
+ * holding [now], empty buckets too so that time reads evenly; buckets start where the
+ * bridge's do, at a multiple of the bucket in the phone's time ([offset] seconds from UTC).
+ * Each bar stacks the agents of [series] in their order, those with no use in it left out.
+ */
+fun usageBars(series: List<UsageSeries>, window: UsageWindow, now: Long, offset: Long): List<UsageBar> {
+    val b = window.bucket
+    // The bridge keeps usage by the UTC hour: an hour is the hour whatever the offset.
+    val shift = if (b >= 86_400) offset else 0
+    fun start(t: Long) = Math.floorDiv(t + shift, b) * b - shift
+    val last = start(now)
+    // From the bucket that holds the window's start, which the bridge's sums include.
+    val first = start(now - window.seconds)
+    val byAt = series.associate { s -> s.agent to s.points.associateBy { it.at } }
+    return generateSequence(first) { it + b }.takeWhile { it <= last }.map { at ->
+        UsageBar(at, series.mapNotNull { s -> byAt[s.agent]?.get(at)?.tokens?.takeIf { it > 0 }?.let { s.agent to it } })
+    }.toList()
+}
+
+/**
+ * What a screen reader says of the chart: its window, the bucket that used the most and who
+ * used most in it. The rows under the chart give every value.
+ */
+fun usageSummary(bars: List<UsageBar>, window: UsageWindow, label: (String) -> String, bucketLabel: (Long) -> String): String {
+    val peak = bars.maxByOrNull { it.tokens }?.takeIf { it.tokens > 0 }
+        ?: return "Tokens by agent over the last ${window.label}: none counted."
+    val lead = peak.parts.maxByOrNull { it.second }
+    return "Tokens by agent over the last ${window.label}, a bar per ${if (window.bucket < 86_400) "hour" else "day"}. " +
+        "The most: ${bucketLabel(peak.at)}, ${tokensText(peak.tokens)}" + (lead?.let { ", mostly ${label(it.first)}." } ?: ".")
+}
+
+/**
+ * The points of [series] that fall on none of [bars]: what the chart cannot show. None, when
+ * the bars are built from the window and offset the report was asked with.
+ */
+fun usageOffChart(series: List<UsageSeries>, bars: List<UsageBar>): Int {
+    val starts = bars.map { it.at }.toSet()
+    return series.sumOf { s -> s.points.count { it.at !in starts && (it.tokens ?: 0) > 0 } }
+}
+
+/**
+ * A bucket's start as the phone said it when it asked: a time for an hour, a weekday and date
+ * for a day, at the offset the buckets were made with, so a day before a clock change is still
+ * named by its own date.
+ */
+fun usageBucketLabel(at: Long, window: UsageWindow, offset: Long, locale: Locale = Locale.getDefault()): String {
+    val time = Instant.ofEpochSecond(at).atOffset(ZoneOffset.ofTotalSeconds(offset.toInt()))
+    return if (window.bucket < 86_400) DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale).format(time)
+    else DateTimeFormatter.ofPattern("EEE d MMM", locale).format(time)
+}
+
+/**
+ * The color slot of each agent of [shown]: by its place among [known], the host's agents in
+ * name order, so an agent keeps its color whatever the window and whoever else used more. An
+ * agent the host no longer lists comes after them all, and one past the slots takes the first
+ * free: those are stable only as long as who is shown is. Never more than [slots] in a chart.
+ */
+fun usageSlots(known: List<String>, shown: List<String>, slots: Int = 8): Map<String, Int> {
+    val listed = known.distinct().sorted()
+    val order = listed + shown.filter { it !in listed }.distinct().sorted()
+    val taken = mutableMapOf<String, Int>()
+    shown.forEach { agent -> order.indexOf(agent).takeIf { it in 0 until slots && it !in taken.values }?.let { taken[agent] = it } }
+    shown.filter { it !in taken }.forEach { agent -> (0 until slots).firstOrNull { it !in taken.values }?.let { taken[agent] = it } }
+    return taken
 }
 
 /** What one agent (`sandbox/agent`) used over a window. */
-data class AgentUsage(val agent: String, val total: UsageTotal)
+/** What one agent (`sandbox/agent`) used over a window; [outside] when its calls outside the app are counted too. */
+data class AgentUsage(val agent: String, val total: UsageTotal, val outside: Boolean = false)
 
 /**
  * A host's usage: the rows of [window], as its bridge last answered, and the window [asked]
@@ -80,11 +167,23 @@ data class AgentUsage(val agent: String, val total: UsageTotal)
 data class HostUsage(
     val window: UsageWindow = UsageWindow.Week,
     val agents: List<AgentUsage> = emptyList(),
+    /** Each heavy agent's usage over [window], when the bridge gives series; heaviest first. */
+    val series: List<UsageSeries> = emptyList(),
+    /** Whether it counts the agents' calls outside the app too: for the host's person. */
+    val outside: Boolean = false,
     /** Where the bridge's sums start (Unix seconds), once it answered. */
     val since: Long? = null,
     val loaded: Boolean = false,
     val request: String? = null,
     val asked: UsageWindow? = null,
+    /**
+     * When the report was asked (Unix seconds) and the phone's offset from UTC then, which its
+     * series' buckets follow: the chart is drawn from these, not from the time it is drawn.
+     */
+    val at: Long = 0,
+    val offset: Long = 0,
+    private val askedAt: Long = 0,
+    private val askedOffset: Long = 0,
     val error: String? = null,
 ) {
     /** The tab to show selected: the window asked for, while it loads. */
@@ -93,7 +192,8 @@ data class HostUsage(
     /** Whether the rows shown are those of the selected tab. */
     val rowsShown: Boolean get() = loaded && selected == window
 
-    fun loading(id: String, window: UsageWindow) = copy(request = id, asked = window, error = null)
+    fun loading(id: String, window: UsageWindow, at: Long = 0, offset: Long = 0) =
+        copy(request = id, asked = window, askedAt = at, askedOffset = offset, error = null)
 
     /**
      * The answer to [of]: the agents that used the most first, each once. A report that is not
@@ -105,19 +205,62 @@ data class HostUsage(
             ?: return failed(of, "The host's usage could not be read.")
         val read = (0 until list.length()).map { i ->
             list.optJSONObject(i)?.let { a ->
-                a.optString("agent").ifBlank { null }?.let { AgentUsage(it, UsageTotal.of(a.optJSONObject("total"))) }
+                a.optString("agent").ifBlank { null }?.let { AgentUsage(it, UsageTotal.of(a.optJSONObject("total")), a.optBoolean("outside")) }
             }
         }
         val agents = read.filterNotNull().distinctBy { it.agent }.sortedByDescending { it.total.tokens.total }
         val unread = read.count { it == null }
+        val (series, unreadSeries) = seriesOf(report)
+        val said = listOfNotNull(
+            "$unread rows".takeIf { unread > 0 },
+            "$unreadSeries chart entries".takeIf { unreadSeries > 0 },
+        )
         return copy(
             window = asked ?: window, agents = agents, since = count(report, "since"), loaded = true, request = null, asked = null,
-            error = if (unread > 0) "The host sent $unread rows the app could not read." else null,
+            series = series, outside = report.optBoolean("outside"), at = askedAt, offset = askedOffset,
+            error = if (said.isEmpty()) null else "The host sent ${said.joinToString(" and ")} the app could not read.",
         )
     }
 
     fun failed(of: String, why: String): HostUsage =
         if (request == of) copy(request = null, asked = null, error = why.ifBlank { "The host could not return its usage." }) else this
+}
+
+/** The most series a chart draws: its colors. */
+const val MAX_CHART_SERIES = 8
+
+/**
+ * A report's `series`, and how many of its entries the app could not read: each agent once,
+ * at most [MAX_CHART_SERIES], its points with a start and their counts. A series, point or
+ * count that is not one is counted, never read as 0; a point's absent `tokens` is the runtime
+ * counting none, not an error.
+ */
+private fun seriesOf(report: JSONObject): Pair<List<UsageSeries>, Int> {
+    val list = report.optJSONArray("series") ?: return emptyList<UsageSeries>() to 0
+    var unread = 0
+    val read = (0 until list.length()).mapNotNull { i ->
+        val s = list.optJSONObject(i)
+        val agent = s?.optString("agent")?.ifBlank { null }
+        if (s == null || agent == null) {
+            unread++
+            return@mapNotNull null
+        }
+        val points = s.optJSONArray("points")
+        UsageSeries(agent, (0 until (points?.length() ?: 0)).mapNotNull { j ->
+            val p = points!!.optJSONObject(j)
+            val at = p?.let { count(it, "at") }
+            val calls = p?.let { count(it, "calls") }
+            val tokens = p?.let { count(it, "tokens") }
+            if (p == null || at == null || calls == null || (p.has("tokens") && tokens == null)) {
+                unread++
+                return@mapNotNull null
+            }
+            UsagePoint(at, calls, tokens)
+        }.sortedBy { it.at })
+    }
+    val once = read.distinctBy { it.agent }
+    unread += read.size - once.size + (once.size - MAX_CHART_SERIES).coerceAtLeast(0)
+    return once.take(MAX_CHART_SERIES) to unread
 }
 
 /**
