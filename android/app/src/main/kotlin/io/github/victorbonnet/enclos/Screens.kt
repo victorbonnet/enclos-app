@@ -1111,6 +1111,7 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
         }
         return
     }
+    RecentUsageRefresh(model, model.paired.map { it.name })
     val words = fold(query).split(' ').filter { it.isNotEmpty() }
     val shown = model.agents.filter { a -> words.all { it in fold("${a.label} ${a.address} ${a.runtime}") } }
     LazyColumn(Modifier.fillMaxSize()) {
@@ -1181,6 +1182,20 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
     }
 }
 
+/**
+ * Keeps [hosts]' last 24 hours by agent fresh while the screen calling it shows: asked again
+ * once older than [RECENT_USAGE_FRESH_SECONDS].
+ */
+@Composable
+internal fun RecentUsageRefresh(model: AppModel, hosts: List<String>) {
+    LaunchedEffect(hosts) {
+        while (true) {
+            hosts.forEach(model::refreshRecentUsage)
+            delay(30_000)
+        }
+    }
+}
+
 /** An agent, as the conversations view shows it, without its conversations: tapping it opens its page. */
 @Composable
 internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () -> Unit) {
@@ -1206,6 +1221,10 @@ internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () 
                 val last = model.lastActive(agent)
                 Text(if (last != null) "active ${Times.ago(last, now)}" else "no message yet", style = Type.small, color = p.textMuted)
             }
+        }
+        // What it used over the last day, so an agent using a lot stands out; nothing when none.
+        model.recentUsage[agent.host]?.of(agent.name)?.total?.let(::recentUsageText)?.let { used ->
+            Text(used, style = Type.small, color = p.textMuted, maxLines = 1)
         }
         Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
     }

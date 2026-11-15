@@ -155,7 +155,6 @@ fun usageSlots(known: List<String>, shown: List<String>, slots: Int = 8): Map<St
     return taken
 }
 
-/** What one agent (`sandbox/agent`) used over a window. */
 /** What one agent (`sandbox/agent`) used over a window; [outside] when its calls outside the app are counted too. */
 data class AgentUsage(val agent: String, val total: UsageTotal, val outside: Boolean = false)
 
@@ -224,6 +223,72 @@ data class HostUsage(
 
     fun failed(of: String, why: String): HostUsage =
         if (request == of) copy(request = null, asked = null, error = why.ifBlank { "The host could not return its usage." }) else this
+}
+
+/** The most agents a `usage.report` without series lists, by name (enclos's docs/protocol.md, Usage). */
+const val MAX_REPORT_AGENTS = 190
+
+/** How long the agents list and an agent's page keep a host's last day before asking again. */
+const val RECENT_USAGE_FRESH_SECONDS = 120L
+
+/**
+ * What each agent of a host used over the last 24 hours, for the agents list and an agent's
+ * page: the bridge's totals without series, as last answered, and the request out. A failed or
+ * late answer leaves the last totals shown.
+ */
+data class RecentUsage(
+    val agents: Map<String, AgentUsage> = emptyMap(),
+    /** Whether it counts the agents' calls outside the app too: for the host's person. */
+    val outside: Boolean = false,
+    /** When the totals shown were asked (Unix seconds), once answered. */
+    val at: Long? = null,
+    /** Whether the report was cut at [MAX_REPORT_AGENTS]: an agent left out is then unknown, not unused. */
+    val cut: Boolean = false,
+    val request: String? = null,
+    private val askedAt: Long = 0,
+    val error: String? = null,
+) {
+    /** Whether to ask again at [now]: never asked, or the last answer is older than [RECENT_USAGE_FRESH_SECONDS]. */
+    fun due(now: Long): Boolean = request == null && (at == null || now - at >= RECENT_USAGE_FRESH_SECONDS)
+
+    /**
+     * What [agent] (`sandbox/agent`) used: its row, an empty total when the host listed every agent
+     * and not it (no call), or null when unknown (not answered yet, or left out of a cut report).
+     */
+    fun of(agent: String): AgentUsage? =
+        agents[agent] ?: if (at != null && !cut) AgentUsage(agent, UsageTotal(), outside) else null
+
+    fun loading(id: String, at: Long) = copy(request = id, askedAt = at)
+
+    /** The answer to [of]; one that is not a report keeps the last totals and says so. */
+    fun received(of: String, report: JSONObject): RecentUsage {
+        if (request != of) return this
+        val list = report.optJSONArray("agents") ?: return failed(of, "The host's usage could not be read.")
+        val read = (0 until list.length()).mapNotNull { i ->
+            list.optJSONObject(i)?.let { a ->
+                a.optString("agent").ifBlank { null }?.let { AgentUsage(it, UsageTotal.of(a.optJSONObject("total")), a.optBoolean("outside")) }
+            }
+        }
+        val unread = list.length() - read.size
+        return RecentUsage(
+            agents = read.associateBy { it.agent },
+            outside = report.optBoolean("outside"),
+            at = askedAt,
+            // Rows it could not read are as unknown as rows left out.
+            cut = list.length() >= MAX_REPORT_AGENTS || unread > 0,
+            error = if (unread > 0) "The host sent $unread rows the app could not read." else null,
+        )
+    }
+
+    fun failed(of: String, why: String): RecentUsage =
+        if (request == of) copy(request = null, error = why.ifBlank { "The host could not return its usage." }) else this
+}
+
+/** One agent's last day at a glance, for the agents list: `1.2M tokens · 24h`, or its calls when its runtime counts no token; null for none. */
+fun recentUsageText(u: UsageTotal): String? = when {
+    u.calls == 0L && !u.tokens.counted -> null
+    u.tokens.counted -> "${tokensText(u.tokens.total)} tokens · 24h"
+    else -> "${if (u.calls == 1L) "1 call" else "${u.calls} calls"} · 24h"
 }
 
 /** The most series a chart draws: its colors. */

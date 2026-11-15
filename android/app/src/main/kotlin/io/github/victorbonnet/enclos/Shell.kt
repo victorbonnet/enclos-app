@@ -329,6 +329,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                     Text("$others other ${if (others == 1) "conversation" else "conversations"}, in the conversations view.", style = Type.small, color = p.textMuted)
                 }
             }
+            AgentUsageSection(model, agent)
             if (model.offersTasks(agent.address)) AgentTasks(model, agent, openChat)
             if (agent.offersRoutines) {
                 Section("Routines") {
@@ -378,6 +379,46 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(24.dp),
             )
+        }
+    }
+}
+
+/**
+ * What the agent used over the last 24 hours, on its page: its tokens, how they split, and
+ * what is counted (its calls outside the app for the host's person, when its plugin reports
+ * them). Asked again while the page shows.
+ */
+@Composable
+private fun AgentUsageSection(model: AppModel, agent: Agent) {
+    val p = palette
+    RecentUsageRefresh(model, listOf(agent.host))
+    val recent = model.recentUsage[agent.host]
+    val row = recent?.of(agent.name)
+    Section("Usage · last 24 hours") {
+        SettingRow {
+            when {
+                row != null -> {
+                    val total = row.total
+                    Text(
+                        if (total.tokens.counted) "${tokensText(total.tokens.total)} tokens" else if (total.calls == 1L) "1 call" else "${total.calls} calls",
+                        style = Type.name, color = p.text,
+                    )
+                    if (total.calls > 0) Text(usageLine(total), style = Type.small, color = p.textMuted)
+                    Text(
+                        when {
+                            !recent.outside -> "In your conversations in the app."
+                            row.outside -> "All its calls: your conversations in the app, its routines and its other chats."
+                            else -> "In the app only: its calls outside the app are not reported."
+                        },
+                        style = Type.small, color = p.textFaint,
+                    )
+                }
+                !model.connected(agent.host) -> Text("Connect to this agent's host to see its usage.", style = Type.small, color = p.textMuted)
+                !model.canReadUsage(agent.host) -> Text("Usage is unavailable. Update the host's enclos.", style = Type.small, color = p.textMuted)
+                recent?.at != null && recent.cut -> Text("Not in the host's report, which lists $MAX_REPORT_AGENTS agents at most. See Host details.", style = Type.small, color = p.textMuted)
+                recent?.error != null -> Text(recent.error, style = Type.small, color = p.textMuted)
+                else -> Text("Loading usage…", style = Type.small, color = p.textMuted)
+            }
         }
     }
 }
@@ -492,6 +533,7 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
+            RecentUsageRefresh(model, listOf(host))
             agents.forEach { a -> AgentListRow(model, a, now) { openAgent(a) } }
             if (groups.isNotEmpty()) {
                 ListHeading("Groups · ${groups.size}")

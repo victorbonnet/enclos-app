@@ -273,6 +273,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val audit = mutableStateMapOf<String, HostAudit>()
     /** By host: what each agent used over the window last asked for. */
     val hostUsage = mutableStateMapOf<String, HostUsage>()
+    /** Each host's last 24 hours by agent, for the agents list and an agent's page. */
+    val recentUsage = mutableStateMapOf<String, RecentUsage>()
     private val hostCapabilities = mutableStateMapOf<String, Set<String>>()
     /** By host: the last error its bridge sent, such as an agent it could not reach. */
     val said = mutableStateMapOf<String, String>()
@@ -597,7 +599,32 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         }, 15_000)
     }
 
+    /**
+     * Ask [host] what each agent used over the last 24 hours, unless an answer younger than
+     * [RECENT_USAGE_FRESH_SECONDS] or a request is out: the screens that show it call this
+     * while they show.
+     */
+    fun refreshRecentUsage(host: String) {
+        if (!canReadUsage(host)) return
+        val now = System.currentTimeMillis() / 1000
+        val current = recentUsage[host] ?: RecentUsage()
+        if (!current.due(now)) return
+        val request = message("usage.get", "since" to (now - UsageWindow.Day.seconds).coerceAtLeast(0))
+        val id = request.getString("id")
+        recentUsage[host] = current.loading(id, now)
+        if (connections[host]?.send(request) != true) {
+            recentUsage[host] = recentUsage.getValue(host).failed(id, "The usage request could not be sent.")
+            return
+        }
+        main.postDelayed({
+            recentUsage[host]?.let { recentUsage[host] = it.failed(id, "The host did not return its usage.") }
+        }, 15_000)
+    }
+
     private fun usageEnded(host: String) {
+        recentUsage[host]?.let { state ->
+            state.request?.let { recentUsage[host] = state.failed(it, "The connection ended.") }
+        }
         hostUsage[host]?.let { state ->
             state.request?.let { hostUsage[host] = state.failed(it, "The connection ended. Reconnect to refresh the usage.") }
         }
@@ -1066,7 +1093,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 policyConnectionEnded(host.name)
                 hostCapabilities[host.name] = hostCapabilitiesIn(m)
                 if (!hostSupports(host.name, "audit")) audit.remove(host.name)
-                if (!hostSupports(host.name, "usage")) hostUsage.remove(host.name)
+                if (!hostSupports(host.name, "usage")) {
+                    hostUsage.remove(host.name)
+                    recentUsage.remove(host.name)
+                }
                 pendingApprovalActions.keys.filter { it.startsWith("${host.name}/") }.forEach { pendingApprovalActions.remove(it) }
                 approvals.keys.filter { approvals[it]?.host == host.name }.forEach { approvals.remove(it) }
                 saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("${host.name}/") }.forEach { remove(it) } } }
@@ -1082,8 +1112,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             // A usage window this phone asked for.
             "usage.report" -> {
-                val state = hostUsage[host.name] ?: return
-                hostUsage[host.name] = state.received(m.optString("of"), m)
+                val of = m.optString("of")
+                hostUsage[host.name]?.let { hostUsage[host.name] = it.received(of, m) }
+                recentUsage[host.name]?.let { recentUsage[host.name] = it.received(of, m) }
             }
             // A model call of an agent's turn: the turn's usage, and the conversation's new total.
             "usage" -> {
@@ -1279,6 +1310,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val usageOf = m.optString("of")
                 if (hostUsage[host.name]?.request == usageOf) {
                     hostUsage[host.name]?.let { hostUsage[host.name] = it.failed(usageOf, m.optString("message")) }
+                    return
+                }
+                if (recentUsage[host.name]?.request == usageOf) {
+                    recentUsage[host.name]?.let { recentUsage[host.name] = it.failed(usageOf, m.optString("message")) }
                     return
                 }
                 val auditOf = m.optString("of")
@@ -1917,6 +1952,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         turnUsage.clear()
         usage.clear()
         hostUsage.clear()
+        recentUsage.clear()
         fetching.clear()
         asked.clear()
         files.clear()
@@ -1947,6 +1983,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         provisioning.keys.filter { it == host || it.startsWith("$host/") }.forEach { provisioning.remove(it) }
         audit.remove(host)
         hostUsage.remove(host)
+        recentUsage.remove(host)
         hostCapabilities.remove(host)
         clashes.remove(host)
         clashAgents.remove(host)
