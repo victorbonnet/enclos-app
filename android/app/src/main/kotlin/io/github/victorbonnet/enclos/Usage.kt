@@ -22,6 +22,9 @@ data class Tokens(
     /** Every token sent or received. */
     val total: Long get() = sum(prompt, output ?: 0)
 
+    /** Whether the runtime counts any token at all: one that counts calls alone shows no tokens, not 0. */
+    val counted: Boolean get() = listOf(input, output, cacheRead, cacheWrite).any { it != null }
+
     /** The share of the prompt read from the cache, when the runtime counts cache reads. */
     val cacheHit: Double? get() = cacheRead?.takeIf { prompt > 0 }?.let { it.toDouble() / prompt }
 
@@ -69,7 +72,11 @@ enum class UsageWindow(val label: String, val seconds: Long) {
 /** What one agent (`sandbox/agent`) used over a window. */
 data class AgentUsage(val agent: String, val total: UsageTotal)
 
-/** A host's usage over [window], as its bridge last answered; a late answer to an older request is ignored. */
+/**
+ * A host's usage: the rows of [window], as its bridge last answered, and the window [asked]
+ * for while a request is out. The rows always belong to [window]: a request that fails leaves
+ * them and their window as they were, and a late answer to an older request is ignored.
+ */
 data class HostUsage(
     val window: UsageWindow = UsageWindow.Week,
     val agents: List<AgentUsage> = emptyList(),
@@ -77,31 +84,65 @@ data class HostUsage(
     val since: Long? = null,
     val loaded: Boolean = false,
     val request: String? = null,
+    val asked: UsageWindow? = null,
     val error: String? = null,
 ) {
-    fun loading(id: String, window: UsageWindow) = copy(window = window, request = id, error = null)
+    /** The tab to show selected: the window asked for, while it loads. */
+    val selected: UsageWindow get() = asked ?: window
 
-    /** The answer to [of]: the agents that used the most first. */
+    /** Whether the rows shown are those of the selected tab. */
+    val rowsShown: Boolean get() = loaded && selected == window
+
+    fun loading(id: String, window: UsageWindow) = copy(request = id, asked = window, error = null)
+
+    /**
+     * The answer to [of]: the agents that used the most first, each once. A report that is not
+     * one, or rows without an agent, are said, not shown as no usage.
+     */
     fun received(of: String, report: JSONObject): HostUsage {
         if (request != of) return this
         val list = report.optJSONArray("agents")
-        val agents = (0 until (list?.length() ?: 0)).mapNotNull { i ->
-            val a = list!!.optJSONObject(i) ?: return@mapNotNull null
-            val agent = a.optString("agent").ifBlank { return@mapNotNull null }
-            AgentUsage(agent, UsageTotal.of(a.optJSONObject("total")))
-        }.sortedByDescending { it.total.tokens.total }
-        return copy(agents = agents, since = count(report, "since"), loaded = true, request = null, error = null)
+            ?: return failed(of, "The host's usage could not be read.")
+        val read = (0 until list.length()).map { i ->
+            list.optJSONObject(i)?.let { a ->
+                a.optString("agent").ifBlank { null }?.let { AgentUsage(it, UsageTotal.of(a.optJSONObject("total"))) }
+            }
+        }
+        val agents = read.filterNotNull().distinctBy { it.agent }.sortedByDescending { it.total.tokens.total }
+        val unread = read.count { it == null }
+        return copy(
+            window = asked ?: window, agents = agents, since = count(report, "since"), loaded = true, request = null, asked = null,
+            error = if (unread > 0) "The host sent $unread rows the app could not read." else null,
+        )
     }
 
-    fun failed(of: String, why: String): HostUsage = if (request == of) copy(request = null, error = why) else this
+    fun failed(of: String, why: String): HostUsage =
+        if (request == of) copy(request = null, asked = null, error = why.ifBlank { "The host could not return its usage." }) else this
 }
 
-/** Counts read at a glance: 950, 83.1k, 1.2M. */
-fun tokensText(n: Long): String = when {
-    n < 1_000 -> n.toString()
-    n < 1_000_000 -> String.format(Locale.ROOT, "%.1fk", n / 1e3)
-    n < 1_000_000_000 -> String.format(Locale.ROOT, "%.1fM", n / 1e6)
-    else -> String.format(Locale.ROOT, "%.1fG", n / 1e9)
+/**
+ * Where a model call's usage goes. One of a turn under way adds to the turn; a background call
+ * (a title, a summary) once the agent answered belongs to that answer, not to the next turn.
+ */
+fun usageGoesToLastAnswer(working: Boolean, background: Boolean): Boolean = !working && background
+
+/** [lines] with [call] added to the last answer's usage; null when there is no answer yet. */
+fun addedToLastAnswer(lines: List<Line>, call: UsageTotal): List<Line>? {
+    val last = lines.indexOfLast { it.from == "agent" && it.kind == "reply" }
+    if (last < 0) return null
+    return lines.toMutableList().also { it[last] = it[last].copy(usage = (it[last].usage ?: UsageTotal()) + call) }
+}
+
+/** Counts read at a glance: 950, 83.1k, 1.2M; the unit chosen after rounding, so 999,950 reads 1.0M. */
+fun tokensText(n: Long): String {
+    if (n < 1_000) return n.toString()
+    var value = n.toDouble()
+    val units = listOf("k", "M", "G", "T", "P")
+    for (unit in units) {
+        value /= 1e3
+        if (Math.round(value * 10) < 10_000 || unit == units.last()) return String.format(Locale.ROOT, "%.1f%s", value, unit)
+    }
+    error("the last unit returns")
 }
 
 /**

@@ -1424,7 +1424,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     var deleting by remember { mutableStateOf(false) }
     if (deleting) DeleteConfirmation(model, conversation) { deleting = false }
     var showingUsage by remember { mutableStateOf(false) }
-    if (showingUsage) UsageDialog(model.usage[id]) { showingUsage = false }
+    if (showingUsage) UsageDialog(model.usage[id], model.connected(conversation.host), model.hostSupports(conversation.host, "usage")) { showingUsage = false }
     // Which answers' steps are open.
     val opened = remember { mutableStateMapOf<Long, Boolean>() }
     if (renaming) {
@@ -1485,9 +1485,17 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             model.said[conversation.host]?.let { item(key = "said") { Arriving { SystemLine("The bridge said: $it") } } }
             model.unreadable[conversation.host]?.let { item(key = "unreadable") { Arriving { SystemLine(unreadableNotice(it)) } } }
             if (!live) item(key = "status") { Arriving { SystemLine(model.links[conversation.host].shown()) } }
-            // What the turn under way used so far, under the working bubble.
-            if (working) model.turnUsage[id]?.let { so -> item(key = "usage-live") { Arriving { UsageNote("So far: ${usageLine(so)}") } } }
-            if (working) item(key = "working") { Arriving { WorkingBubble(turnOf ?: agent) } }
+            // The working bubble, and under it what the turn used so far: in
+            // one item, so the line shows where the bubble is, never past the
+            // end of the list.
+            if (working) item(key = "working") {
+                Arriving {
+                    Column {
+                        WorkingBubble(turnOf ?: agent)
+                        model.turnUsage[id]?.let { so -> UsageNote("So far: ${usageLine(so)}", Modifier.padding(top = 4.dp)) }
+                    }
+                }
+            }
             // The tools it runs now, above the working bubble; a turn that
             // ended with no answer shows none.
             val running = model.steps[id].orEmpty()
@@ -1771,7 +1779,7 @@ internal fun ConfirmDialog(title: String, text: String, confirm: String, onDismi
  * bridge or runtime that reports none.
  */
 @Composable
-private fun UsageDialog(total: UsageTotal?, onDismiss: () -> Unit) {
+private fun UsageDialog(total: UsageTotal?, live: Boolean, supported: Boolean, onDismiss: () -> Unit) {
     val p = palette
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1781,7 +1789,15 @@ private fun UsageDialog(total: UsageTotal?, onDismiss: () -> Unit) {
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (total == null) {
-                    Text("No usage reported yet. The host and the agent's runtime must both report it.", style = Type.small, color = p.textMuted)
+                    Text(
+                        when {
+                            !live -> "Not connected: a conversation's usage comes from its host with the next sync."
+                            !supported -> "This host does not report usage. Update its enclos."
+                            else -> "No usage reported yet: the agent's runtime reports it as it works."
+                        },
+                        style = Type.small,
+                        color = p.textMuted,
+                    )
                 } else {
                     usageDetails(total).forEach { (label, value) ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1791,7 +1807,7 @@ private fun UsageDialog(total: UsageTotal?, onDismiss: () -> Unit) {
                     }
                     Gap(4.dp)
                     Text(
-                        "Tokens as the agent's runtime counted them, inside its sandbox: a guide to what it spends, not a bill.",
+                        "Tokens as the agent's runtime counted them, inside its sandbox: a guide to what it used, not a bill.",
                         style = Type.small,
                         color = p.textFaint,
                     )

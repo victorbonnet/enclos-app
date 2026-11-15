@@ -2,12 +2,13 @@ package io.github.victorbonnet.enclos.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -15,7 +16,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.UsageWindow
@@ -50,11 +50,11 @@ fun UsageWindowTabs(selected: UsageWindow, enabled: Boolean, onSelect: (UsageWin
                 style = Type.label,
                 color = if (on) p.bg else p.textMuted,
                 modifier = Modifier
-                    .defaultMinSize(minHeight = 32.dp)
-                    .semantics { this.selected = on }
+                    .minimumInteractiveComponentSize()
+                    .selectable(selected = on, enabled = enabled, role = Role.Tab) { if (!on) onSelect(window) }
                     .background(if (on) p.accent else p.bg, shape)
                     .border(1.dp, if (on) p.accent else p.textFaint, shape)
-                    .clickable(enabled = enabled && !on, role = Role.Tab) { onSelect(window) }
+                    .defaultMinSize(minHeight = 32.dp)
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             )
         }

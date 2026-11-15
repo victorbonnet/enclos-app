@@ -986,6 +986,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 policyConnectionEnded(host.name)
                 hostCapabilities[host.name] = hostCapabilitiesIn(m)
                 if (!hostSupports(host.name, "audit")) audit.remove(host.name)
+                if (!hostSupports(host.name, "usage")) hostUsage.remove(host.name)
                 pendingApprovalActions.keys.filter { it.startsWith("${host.name}/") }.forEach { pendingApprovalActions.remove(it) }
                 approvals.keys.filter { approvals[it]?.host == host.name }.forEach { approvals.remove(it) }
                 saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("${host.name}/") }.forEach { remove(it) } } }
@@ -1004,7 +1005,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             // A model call of an agent's turn: the turn's usage, and the conversation's new total.
             "usage" -> {
                 val id = m.getString("conversation")
-                turnUsage[id] = (turnUsage[id] ?: UsageTotal()) + UsageTotal.call(m)
+                val call = UsageTotal.call(m)
+                val answered = if (usageGoesToLastAnswer(working(id), m.optBoolean("background"))) addedToLastAnswer(lines[id].orEmpty(), call) else null
+                if (answered != null) lines[id] = answered else turnUsage[id] = (turnUsage[id] ?: UsageTotal()) + call
                 m.optJSONObject("total")?.let { usage[id] = UsageTotal.of(it) }
             }
             "audit.list" -> {
@@ -1121,6 +1124,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 }
                 val now = lines[id].orEmpty()
                 if (now.none { it.seq == line.seq }) {
+                    // The person wrote, maybe from another device: a new turn, whose usage starts from none.
+                    if (line.from != "agent") turnUsage.remove(id)
                     lines[id] = (now + line).sortedBy { it.seq }
                     keep(host.name, id, line)
                 }

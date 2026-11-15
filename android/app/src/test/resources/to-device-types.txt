@@ -1,5 +1,6 @@
 # enclos-protocol's TO_DEVICE_TYPES (crates/enclos-protocol/src/device.rs) on
-# enclos main e59e1253: every type a bridge sends a device. The app's
+# enclos main e59e1253, with `usage` and `usage.report` of enclos#290: every
+# type a bridge sends a device. The app's
 # BRIDGE_TYPES must equal it (ProtocolErrorsTest), and it must hold every type
 # of the crate core-ffi pins (core-ffi's tests). Update it from enclos when the
 # pin moves.
@@ -32,3 +33,5 @@ sandboxes.list
 synced
 tool
 typing
+usage
+usage.report

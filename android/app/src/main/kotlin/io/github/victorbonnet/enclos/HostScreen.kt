@@ -86,7 +86,7 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
                         if (usageAvailable && usage.request == null) AuditAction("Refresh") { model.loadUsage(name, usage.window) }
                     }
                     Text("Tokens each agent used in your conversations, as its runtime counted them.", style = Type.small, color = p.textMuted)
-                    UsageWindowTabs(usage.window, enabled = usageAvailable && usage.request == null) { model.loadUsage(name, it) }
+                    UsageWindowTabs(usage.selected, enabled = usageAvailable && usage.request == null) { model.loadUsage(name, it) }
                     when {
                         !live -> Text(if (usage.loaded) "Saved in memory. Reconnect to refresh." else "Connect to this host to see its usage.", style = Type.small, color = p.textMuted)
                         !usageAvailable -> Text("Usage is unavailable. Update the host's enclos.", style = Type.small, color = p.textMuted)
@@ -98,10 +98,10 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
                             Text("Loading usage…", style = Type.small, color = p.textMuted)
                         }
                     }
-                    if (usage.loaded && usage.agents.isEmpty()) Text("No usage in the last ${usage.window.label}.", style = Type.small, color = p.textMuted)
+                    if (usage.rowsShown && usage.agents.isEmpty()) Text("No usage in the last ${usage.window.label}.", style = Type.small, color = p.textMuted)
                 }
             }
-            items(usage.agents, key = { "usage:${it.agent}" }) { row -> AgentUsageRow(model.agentLabel("$name/${row.agent}"), row.agent, row.total) }
+            items(if (usage.rowsShown) usage.agents else emptyList(), key = { "usage:${it.agent}" }) { row -> AgentUsageRow(model.agentLabel("$name/${row.agent}"), row.agent, row.total) }
             item {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -143,9 +143,14 @@ private fun AgentUsageRow(label: String, address: String, total: UsageTotal) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(label, style = Type.name, color = p.text)
-                if (label != address) Text(address, style = Type.code, color = p.textFaint)
+                // Two sandboxes may have agents of one name.
+                Text(address, style = Type.code, color = p.textFaint)
             }
-            Text("${tokensText(total.tokens.total)} tokens", style = Type.label, color = p.text)
+            Text(
+                if (total.tokens.counted) "${tokensText(total.tokens.total)} tokens" else if (total.calls == 1L) "1 call" else "${total.calls} calls",
+                style = Type.label,
+                color = p.text,
+            )
         }
         Text(usageLine(total), style = Type.small, color = p.textMuted)
     }
