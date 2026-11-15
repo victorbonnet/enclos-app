@@ -1386,6 +1386,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         return
     }
     val lines = model.lines[id].orEmpty()
+    // Where each held task's card is drawn: the newest message that introduced it.
+    val introductions = remember(lines) { heldTaskIntroductions(lines) }
     val scope = "${conversation.host}/${conversation.agent}"
     val agent = if (conversation.group) conversation.members.joinToString(", ") { model.agentLabel("${conversation.host}/$it") } else model.agentLabel(scope)
     val live = model.connected(conversation.host)
@@ -1498,6 +1500,9 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                     }
                     Arriving {
                         val question = if (line.from == "agent") model.questions.current(conversation, line.question)?.takeIf { it.matchesMessageKind(line.kind) } else null
+                        // A held task's card, at the newest message that introduced it, in its current state.
+                        val held = line.heldTask?.takeIf { question == null && introductions[it] == line.seq }
+                            ?.let { model.heldTasks.current(conversation, it) }
                         Bubble(
                             text = line.text,
                             time = Times.clock(line.time),
@@ -1511,7 +1516,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             },
                             content = question?.let { known -> {
                                 if (known.approval != null) RuntimeApprovalCard(model.questions, known) else QuestionCard(model.questions, known)
-                            } },
+                            } } ?: held?.let { card -> { HeldTaskCard(model.heldTasks, card) } },
                         )
                     }
                 }

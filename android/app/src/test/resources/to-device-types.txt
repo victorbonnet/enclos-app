@@ -2,7 +2,9 @@
 # enclos main e59e1253: every type a bridge sends a device. The app's
 # BRIDGE_TYPES must equal it (ProtocolErrorsTest), and it must hold every type
 # of the crate core-ffi pins (core-ffi's tests). Update it from enclos when the
-# pin moves.
+# pin moves. held_task and held_task.result come from enclos#287 (held tasks,
+# ADR 0066), ahead of the pin: the app reads them in Kotlin, so no core-ffi
+# change needs them.
 ack
 agent.avatar
 agent.name
@@ -16,6 +18,8 @@ conversation
 conversation.deleted
 error
 group.state
+held_task
+held_task.result
 message
 operation.progress
 pair.accepted

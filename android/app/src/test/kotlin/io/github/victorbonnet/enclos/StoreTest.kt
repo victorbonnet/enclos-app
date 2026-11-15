@@ -44,6 +44,15 @@ class StoreTest {
     }
 
     @Test
+    fun version_7_gets_held_tasks_and_each_messages_link_to_one() {
+        val steps = upgrades(7)
+        assertEquals("ALTER TABLE messages ADD COLUMN held_task TEXT", steps.first())
+        assertTrue(steps[1].startsWith("CREATE TABLE held_tasks ("))
+        assertEquals(2, steps.size)
+        assertEquals(8, STORE_VERSION)
+    }
+
+    @Test
     fun version_1_goes_through_each_step_in_order() {
         assertEquals(listOf("ALTER TABLE conversations ADD COLUMN home INTEGER NOT NULL DEFAULT 0") + upgrades(2), upgrades(1))
         assertEquals(emptyList<String>(), upgrades(STORE_VERSION))
