@@ -583,9 +583,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (hostSupports(host, "usage.series")) {
             request.put("bucket", window.bucket)
             request.put("offset", java.util.TimeZone.getDefault().getOffset(now) / 1000)
+            // The same offset is kept with the report, for its chart.
         }
         val id = request.getString("id")
-        hostUsage[host] = (hostUsage[host] ?: HostUsage()).loading(id, window)
+        val offset = java.util.TimeZone.getDefault().getOffset(now) / 1000L
+        hostUsage[host] = (hostUsage[host] ?: HostUsage()).loading(id, window, now / 1000, offset)
         if (connections[host]?.send(request) != true) {
             hostUsage[host] = hostUsage.getValue(host).failed(id, "The usage request could not be sent. Reconnect and try again.")
             return

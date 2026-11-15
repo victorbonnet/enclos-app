@@ -34,6 +34,9 @@ import io.github.victorbonnet.enclos.ui.UsageChart
 import io.github.victorbonnet.enclos.ui.UsageWindowTabs
 import io.github.victorbonnet.enclos.ui.seriesColor
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.runtime.remember
 import io.github.victorbonnet.enclos.ui.WorkingWave
 import io.github.victorbonnet.enclos.ui.palette
 import java.time.Instant
@@ -54,7 +57,9 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
     val usage = model.hostUsage[name] ?: HostUsage()
     LaunchedEffect(name, usageAvailable) { if (usageAvailable) model.loadUsage(name, usage.window) }
     // Each charted agent's color, by its place among the host's agents: it keeps it across windows.
-    val slots = usageSlots(model.agents.filter { it.host == name }.map { it.name }, usage.series.map { it.agent })
+    // Only series with a token counted are drawn, and only those get a color.
+    val charted = usage.series.filter { s -> s.points.any { (it.tokens ?: 0) > 0 } }.map { it.agent }
+    val slots = usageSlots(model.agents.filter { it.host == name }.map { it.name }, charted)
     val colors: Map<String, Color> = slots.mapValues { (_, slot) -> seriesColor(slot) }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
         AppBar {
@@ -114,22 +119,21 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
                             color = p.textMuted,
                         )
                     }
-                    if (usage.rowsShown && usage.series.isNotEmpty()) {
-                        val now = System.currentTimeMillis()
-                        val offset = java.util.TimeZone.getDefault().getOffset(now) / 1000L
-                        val bars = usageBars(usage.series, usage.window, now / 1000, offset)
+                    // Drawn from when the report was asked and the offset it was asked
+                    // with, so the bars stay those of the rows, however long the page is
+                    // open and wherever the phone has gone since.
+                    val bars = remember(usage) { if (usage.rowsShown) usageBars(usage.series, usage.window, usage.at, usage.offset) else emptyList() }
+                    if (bars.any { it.tokens > 0 }) {
                         val label = { agent: String -> model.agentLabel("$name/$agent") }
-                        UsageChart(
-                            bars,
-                            colors,
-                            label,
-                            bucketLabel = { at -> usageBucketLabel(at, usage.window) },
-                            summary = usageSummary(bars, usage.window, label) { at -> usageBucketLabel(at, usage.window) },
-                        )
+                        val bucketLabel = { at: Long -> usageBucketLabel(at, usage.window, usage.offset) }
+                        UsageChart(bars, colors, label, bucketLabel, summary = usageSummary(bars, usage.window, label, bucketLabel))
+                        usageOffChart(usage.series, bars).takeIf { it > 0 }?.let {
+                            Text("$it of the host's buckets fall outside this chart; the rows count them.", style = Type.small, color = p.textMuted)
+                        }
                     }
                 }
             }
-            items(if (usage.rowsShown) usage.agents else emptyList(), key = { "usage:${it.agent}" }) { row -> AgentUsageRow(model.agentLabel("$name/${row.agent}"), row.agent, row.total, colors[row.agent]) }
+            items(if (usage.rowsShown) usage.agents else emptyList(), key = { "usage:${it.agent}" }) { row -> AgentUsageRow(model.agentLabel("$name/${row.agent}"), row.agent, row.total, colors[row.agent], appOnly = usage.outside && !row.outside) }
             item {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -165,12 +169,13 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
 
 /** One agent's usage over the window: its name, its tokens, and how they split. */
 @Composable
-private fun AgentUsageRow(label: String, address: String, total: UsageTotal, color: Color?) {
+private fun AgentUsageRow(label: String, address: String, total: UsageTotal, color: Color?, appOnly: Boolean) {
     val p = palette
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            // Its color in the chart, which these rows are the legend of.
-            if (color != null) SeriesDot(color)
+            // Its color in the chart, which these rows are the legend of; the same room
+            // for a row without, so the names line up.
+            if (color != null) SeriesDot(color) else Spacer(Modifier.size(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(label, style = Type.name, color = p.text)
                 // Two sandboxes may have agents of one name.
@@ -183,14 +188,9 @@ private fun AgentUsageRow(label: String, address: String, total: UsageTotal, col
             )
         }
         Text(usageLine(total), style = Type.small, color = p.textMuted)
+        // Its plugin does not report its routines and other chats: the app's alone.
+        if (appOnly) Text("In the app only: its calls outside the app are not reported.", style = Type.small, color = p.textFaint)
     }
-}
-
-/** A bucket's start as the phone says it: a time for an hour, a weekday and date for a day. */
-private fun usageBucketLabel(at: Long, window: UsageWindow): String {
-    val time = java.time.Instant.ofEpochSecond(at).atZone(java.time.ZoneId.systemDefault())
-    return if (window.bucket < 86_400) DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).format(time)
-    else DateTimeFormatter.ofPattern("EEE d MMM").format(time)
 }
 
 @Composable

@@ -35,6 +35,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -139,6 +140,8 @@ fun UsageChart(
             Modifier
                 .fillMaxWidth()
                 .height(140.dp)
+                // A stack of many thin parts, each kept visible, never draws over the scale.
+                .clipToBounds()
                 .semantics { contentDescription = summary }
                 .pointerInput(bars) {
                     detectTapGestures { at ->
@@ -157,7 +160,9 @@ fun UsageChart(
                 val x = slot * i + (slot - barWidth) / 2
                 var y = size.height
                 bar.parts.forEachIndexed { k, (agent, tokens) ->
-                    val h = (tokens.toFloat() / top * size.height).coerceAtLeast(1.dp.toPx())
+                    // At least a sliver above its gap, so an agent in the readout is in the bar.
+                    val floor = 1.dp.toPx() + if (k > 0) gap else 0f
+                    val h = (tokens.toFloat() / top * size.height).coerceAtLeast(floor)
                     val color = colors[agent] ?: p.textFaint
                     val last = k == bar.parts.lastIndex
                     drawPart(color, x, y - h, barWidth, h - if (k > 0) gap else 0f, rounded = last)
