@@ -346,7 +346,7 @@ private fun Screens(model: AppModel, ask: Ask) {
                         views,
                         onView = onView,
                         openChat = { go(Route.Chat(it)) },
-                        openAgent = { go(Route.AgentPage(it.address)) },
+                        openAgent = { go(Route.AgentPage(it)) },
                         openRoutines = { go(Route.RoutinesPage(it.address)) },
                         openSandbox = { go(Route.SandboxPage(it)) },
                         openApproval = { go(Route.ApprovalPage(it)) },
