@@ -62,8 +62,8 @@ class ConversationMetadataTest {
     @Test
     fun every_message_about_a_clashing_conversation_is_left_out_not_only_its_lines() {
         val mac = listOf(Conversation("mac", "lab/main", "home.lab.main", title = "Home", home = true, revision = 1))
-        // Host pi's typing, tool steps and group state would otherwise land on mac's Home.
-        listOf("conversation", "message", "typing", "tool", "group.state").forEach {
+        // Host pi's typing, tool steps, usage and group state would otherwise land on mac's Home.
+        listOf("conversation", "message", "typing", "tool", "usage", "group.state").forEach {
             assertTrue(it, leftOutForClash(mac, "pi", it, "home.lab.main"))
         }
         assertFalse(leftOutForClash(mac, "mac", "typing", "home.lab.main"))

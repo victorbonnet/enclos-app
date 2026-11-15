@@ -18,6 +18,8 @@ Supporting agents ask [questions with native choices](docs/spec.md#questions): s
 
 [Runtime approvals](docs/spec.md#runtime-approvals) have native scope buttons too: review the complete command and reason, then Allow once, Allow for session, Always allow or Deny when offered. The exact native request stays with the runtime; approving it changes no enclos sandbox policy. The buttons need an updated Hermes, bridge and channel. With an older one, an approval arrives as text that shows the whole command and says the app cannot decide it. Typed approval commands are refused from everyone, whatever the Hermes: the bridge and its channel refuse them. Android is implemented; the spec and ADR define matching iOS behaviour.
 
+Supporting agents report [what they use](docs/spec.md#a-hosts-page): each answer shows its model calls and tokens (`3 calls · 33.8k in (94% cached) · 96 out`), a conversation's actions show its whole usage, and a host's page shows what each agent used in your conversations over the last 24 hours, 7 days or 30 days. Hermes is the first runtime to report it; the counts are the runtime's own, a guide rather than a bill.
+
 With an updated bridge, the host's person can create a sandbox and install a runtime from Agents on a paired phone. Runtime login and app channel setup continue on the host; restart the bridge after setup to list the agent.
 
 ## Build

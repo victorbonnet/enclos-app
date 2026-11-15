@@ -129,6 +129,7 @@ import io.github.victorbonnet.enclos.ui.TextLink
 import io.github.victorbonnet.enclos.ui.Type
 import io.github.victorbonnet.enclos.ui.Motion
 import io.github.victorbonnet.enclos.ui.UnreadBadge
+import io.github.victorbonnet.enclos.ui.UsageNote
 import io.github.victorbonnet.enclos.ui.Files
 import io.github.victorbonnet.enclos.ui.TaskCard
 import io.github.victorbonnet.enclos.ui.ToolSteps
@@ -1443,6 +1444,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     var options by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     if (deleting) DeleteConfirmation(model, conversation) { deleting = false }
+    var showingUsage by remember { mutableStateOf(false) }
+    if (showingUsage) UsageDialog(model.usage[id], model.connected(conversation.host), model.hostSupports(conversation.host, "usage")) { showingUsage = false }
     // Which answers' steps are open.
     val opened = remember { mutableStateMapOf<Long, Boolean>() }
     if (renaming) {
@@ -1494,6 +1497,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 IconButton(Glyphs.more, "Conversation actions", { options = true })
                 DropdownMenu(options, { options = false }, modifier = Modifier.background(p.bg)) {
                     MenuRow(Glyphs.compose, "Rename") { options = false; renaming = true }
+                    MenuRow(Glyphs.usage, "Usage") { options = false; showingUsage = true }
                     ArchiveMenuItem(model, conversation) { options = false }
                     DeleteMenuItem(model, conversation) { options = false; deleting = true }
                 }
@@ -1517,7 +1521,17 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             model.said[conversation.host]?.let { item(key = "said") { Arriving { SystemLine("The bridge said: $it") } } }
             model.unreadable[conversation.host]?.let { item(key = "unreadable") { Arriving { SystemLine(unreadableNotice(it)) } } }
             if (!live) item(key = "status") { Arriving { SystemLine(model.links[conversation.host].shown()) } }
-            if (working) item(key = "working") { Arriving { WorkingBubble(turnOf ?: agent) } }
+            // The working bubble, and under it what the turn used so far: in
+            // one item, so the line shows where the bubble is, never past the
+            // end of the list.
+            if (working) item(key = "working") {
+                Arriving {
+                    Column {
+                        WorkingBubble(turnOf ?: agent)
+                        model.turnUsage[id]?.let { so -> UsageNote("So far: ${usageLine(so)}", Modifier.padding(top = 4.dp)) }
+                    }
+                }
+            }
             // The tools it runs now, above the working bubble; a turn that
             // ended with no answer shows none.
             val running = model.steps[id].orEmpty()
@@ -1541,6 +1555,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             for (i in lines.indices.reversed()) {
                 val line = lines[i]
                 cardsAt(i)
+                line.usage?.let { used -> item(key = "usage-${line.seq}") { Arriving { UsageNote(usageLine(used)) } } }
                 item(key = line.seq) {
                     // The runtime about itself: a quiet line, not a bubble.
                     // One with files is drawn as a message, so they show.
@@ -1811,6 +1826,51 @@ internal fun ConfirmDialog(title: String, text: String, confirm: String, onDismi
         text = { Text(text, style = Type.small, color = p.textMuted) },
         confirmButton = { DialogButton(confirm, enabled = enabled, onClick = onConfirm) },
         dismissButton = { DialogButton(dismissLabel, onClick = onDismiss) },
+    )
+}
+
+/**
+ * What a conversation used in all, each count labelled, as its bridge summed what the agent's
+ * runtime reported (docs/spec.md, Usage). [total] is null before the first report, or from a
+ * bridge or runtime that reports none.
+ */
+@Composable
+private fun UsageDialog(total: UsageTotal?, live: Boolean, supported: Boolean, onDismiss: () -> Unit) {
+    val p = palette
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = p.surface,
+        shape = Shapes.bubble,
+        title = { Text("Usage", style = Type.heading, color = p.text) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (total == null) {
+                    Text(
+                        when {
+                            !live -> "Not connected: a conversation's usage comes from its host with the next sync."
+                            !supported -> "This host does not report usage. Update its enclos."
+                            else -> "No usage reported yet: the agent's runtime reports it as it works."
+                        },
+                        style = Type.small,
+                        color = p.textMuted,
+                    )
+                } else {
+                    usageDetails(total).forEach { (label, value) ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(label, style = Type.small, color = p.textMuted)
+                            Text(value, style = Type.code, color = p.text)
+                        }
+                    }
+                    Gap(4.dp)
+                    Text(
+                        "Tokens as the agent's runtime counted them, inside its sandbox: a guide to what it used, not a bill.",
+                        style = Type.small,
+                        color = p.textFaint,
+                    )
+                }
+            }
+        },
+        confirmButton = { DialogButton("Close", onClick = onDismiss) },
     )
 }
 
