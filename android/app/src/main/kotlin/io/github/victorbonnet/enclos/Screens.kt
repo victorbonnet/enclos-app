@@ -299,7 +299,7 @@ fun InboxScreen(
     archivedOnly: Boolean,
     open: (String) -> Unit,
     start: (Agent) -> Unit,
-    openAgent: (Agent) -> Unit,
+    openAgent: (String) -> Unit,
     openRoutines: (Agent) -> Unit,
     pair: () -> Unit,
     openApproval: (String) -> Unit,
@@ -426,7 +426,8 @@ fun InboxScreen(
                                             start = agent?.let { { start(it) } },
                                             all = if (more) toggle else null,
                                             expanded = expanded,
-                                            about = agent?.let { { openAgent(it) } },
+                                            // Its page says when its host no longer lists it, and offers Forget once it is removed.
+                                            about = { openAgent(entry.address) },
                                             routines = agent?.takeIf { it.offersRoutines }?.let { { openRoutines(it) } },
                                         ),
                                         onOpen = entry.home?.let { home -> { open(home.id) } } ?: if (more) toggle else null,
@@ -1095,7 +1096,7 @@ private fun MoreRow(name: String, hidden: Int, shown: Int, unfolded: Boolean, on
  * whose address or runtime has every word of it.
  */
 @Composable
-fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, openSandbox: (String) -> Unit, pair: () -> Unit, createSandbox: (String) -> Unit, openHost: (String) -> Unit) {
+fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, openSandbox: (String) -> Unit, pair: () -> Unit, createSandbox: (String) -> Unit, openHost: (String) -> Unit) {
     // "5 min ago" stays true while the screen shows.
     val now by produceState(System.currentTimeMillis() / 1000) {
         while (true) {
@@ -1164,7 +1165,7 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (Agent) -> Unit, ope
                     }
                 }
                 items(agents, key = { "agent-${it.address}" }) { agent ->
-                    Arriving { AgentListRow(model, agent, now) { openAgent(agent) } }
+                    Arriving { AgentListRow(model, agent, now) { openAgent(agent.address) } }
                 }
             }
             item(key = "$key-gap") { Gap(8.dp) }

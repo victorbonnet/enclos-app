@@ -97,12 +97,20 @@ class ConversationDeletionTest {
     @Test fun malformed_deletion_ids_fail_as_protocol_errors_without_changing_state() {
         val f = Fixture()
         f.client.delete(f.chat)
-        for (id in listOf("", "home.lab.main", "x".repeat(129), "bad\u0000id")) {
+        for (id in listOf("", "x".repeat(129), "bad\u0000id")) {
             assertThrows(org.json.JSONException::class.java) { f.deleted(id = id) }
         }
         assertTrue(f.removed.isEmpty())
         assertTrue(f.client.deleted.isEmpty())
         assertTrue(f.key in f.client.pending)
+    }
+
+    @Test fun a_forgotten_agents_home_is_removed_by_its_deletion_record() {
+        val f = Fixture()
+        f.deleted(id = "home.gone.coder")
+        assertEquals(listOf(ConversationKey("mac", "home.gone.coder")), f.removed)
+        // Still never deleted from the phone on its own.
+        assertFalse(f.client.delete(f.chat.copy(id = "home.lab.main", home = true)))
     }
 
     @Test fun drafts_are_disabled_before_any_command_can_reach_the_host() {

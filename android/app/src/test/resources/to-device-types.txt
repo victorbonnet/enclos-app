@@ -1,5 +1,5 @@
 # enclos-protocol's TO_DEVICE_TYPES (crates/enclos-protocol/src/device.rs) on
-# enclos 14a4767d (tasks/1-protocol): every type a bridge sends a device. The app's
+# enclos main 070bba51 (#293, after 8a61dadc's `agents.removed.list`): every type a bridge sends a device. The app's
 # BRIDGE_TYPES must equal it (ProtocolErrorsTest), and it must hold every type
 # of the crate core-ffi pins (core-ffi's tests). Update it from enclos when the
 # pin moves.
@@ -8,6 +8,7 @@ agent.activity
 agent.avatar
 agent.name
 agents.list
+agents.removed.list
 approval
 attachment.data
 audit.list

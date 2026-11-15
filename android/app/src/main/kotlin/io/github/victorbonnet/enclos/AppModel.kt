@@ -329,6 +329,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         later = { wait, action -> main.postDelayed({ action() }, wait) },
         isDraft = { it.id in drafts },
     )
+    val forgetting = AgentForgetting(
+        connected = ::connected,
+        supported = { host -> hostSupports(host, AGENT_FORGET) },
+        send = { host, command -> connections[host]?.send(command) == true },
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+    )
     private data class ArchiveKey(val host: String, val conversation: String)
     private val archiveRequests = mutableMapOf<String, ArchiveKey>()
     private val archivePending = mutableStateMapOf<ArchiveKey, Boolean>()
@@ -893,6 +899,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections.remove(host.name)
         provisioningEnded(host.name)
         deletion.ended(host.name)
+        forgetting.ended(host.name)
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         routines.ended(host.name)
         questions.ended(host.name)
@@ -946,6 +953,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun received(host: Host, m: JSONObject) {
         if (provisioningClient.received(host.name, m)) return
         if (deletion.received(host.name, m)) return
+        if (forgetting.received(host.name, m)) return
         val conversationId = m.optString("conversation")
         if (m.optString("type") in conversationScoped && ConversationKey(host.name, conversationId) in deletion.deleted) return
         // Once for every message about a conversation: another host's with the same id keeps it.
@@ -1004,6 +1012,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 connections[host.name]?.send(message("agents"))
                 // The sync sends every task the bridge keeps for this person: those it does not are dropped at `synced`.
                 tasks.syncing(host.name)
+                forgetting.authenticated(host.name)
                 // What is on the phone is kept: only what is newer comes.
                 connections[host.name]?.send(message("sync", "since" to since(host.name)))
             }
@@ -1794,6 +1803,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         approvalsFresh.clear()
         pendingApprovalActions.clear()
         hostCapabilities.clear()
+        forgetting.clear()
         approvalErrors.clear()
         saving.execute { approvalCache.edit { clear() } }
         activities.clear()
@@ -1843,6 +1853,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         clashAgents.remove(host)
         questions.forget(host)
         deletion.forget(host)
+        forgetting.clear(host)
         clearArchiveRequests(host)
         archiveProblems.keys.filter { it.host == host }.forEach { archiveProblems.remove(it) }
         agentImages.forget(host)

@@ -485,7 +485,7 @@ dependencies = [
 [[package]]
 name = "enclos-protocol"
 version = "0.1.0"
-source = "git+https://github.com/victorbonnet/enclos?rev=14a4767d5834478eb1bb7d95d1f03bfcfbee2a38#14a4767d5834478eb1bb7d95d1f03bfcfbee2a38"
+source = "git+https://github.com/victorbonnet/enclos?rev=070bba512352c23dcba4d14abf646d5c85794274#070bba512352c23dcba4d14abf646d5c85794274"
 dependencies = [
  "base64",
  "chacha20poly1305 0.11.0",
