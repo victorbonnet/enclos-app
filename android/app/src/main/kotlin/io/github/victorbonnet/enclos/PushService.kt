@@ -9,7 +9,9 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.core.content.edit
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
@@ -23,7 +25,9 @@ import io.github.victorbonnet.enclos.core.openPreview
 class EnclosApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        PushSetup.start(this)
+        // Only in the app's own process: not in the isolated one that
+        // renders PDFs (ADR 0008), which Android also gives this class.
+        if (getProcessName() == packageName) PushSetup.start(this)
     }
 }
 
@@ -49,15 +53,27 @@ object PushSetup {
                 .build()
             FirebaseApp.initializeApp(context, options)
         }
-        // Asked for here, not by Firebase on its own (its auto-init is off).
-        FirebaseMessaging.getInstance().token.addOnSuccessListener { PushTokens.save(context, it) }
+        askToken(context)
+    }
+
+    /**
+     * Asks Firebase for this phone's token (its auto-init is off). A failure
+     * (no Play services, no network yet) is logged, and asked again when a
+     * host next connects.
+     */
+    fun askToken(context: Context) {
+        if (!configured || FirebaseApp.getApps(context).isEmpty()) return
+        FirebaseMessaging.getInstance().token
+            .addOnSuccessListener { PushTokens.save(context, it) }
+            .addOnFailureListener { Log.w("enclos", "no FCM token: ${it.javaClass.simpleName}") }
     }
 }
 
 /**
  * This phone's FCM token, kept in the app's private preferences (no backup,
- * as the rest), and given to each host: at pairing, at each connection, and
- * at once to the hosts connected when it changes.
+ * as the rest) with the project it is for, and given to each host: at
+ * pairing, at each connection, and at once to the hosts connected when it
+ * changes.
  */
 object PushTokens {
     /** Told of a new token while the app's model lives. */
@@ -66,11 +82,24 @@ object PushTokens {
 
     private fun prefs(context: Context) = context.getSharedPreferences("push", Context.MODE_PRIVATE)
 
-    fun current(context: Context): String? = prefs(context).getString("token", null)
+    /**
+     * The token to give hosts: none when this build has push off, or when the
+     * token kept is another project's (a build installed over one made with
+     * other settings), which every push would fail for.
+     */
+    fun current(context: Context): String? {
+        if (!PushSetup.configured) return null
+        val prefs = prefs(context)
+        if (prefs.getString("sender", null) != BuildConfig.FIREBASE_SENDER_ID) return null
+        return prefs.getString("token", null)
+    }
 
     fun save(context: Context, token: String) {
         if (current(context) == token) return
-        prefs(context).edit { putString("token", token) }
+        prefs(context).edit {
+            putString("token", token)
+            putString("sender", BuildConfig.FIREBASE_SENDER_ID)
+        }
         changed?.invoke(token)
     }
 }
@@ -89,28 +118,43 @@ object Notifier {
     const val EXTRA_HOST = "host"
     const val EXTRA_CONVERSATION = "conversation"
 
-    private fun shownPrefs(context: Context) = context.getSharedPreferences("push", Context.MODE_PRIVATE)
+    private fun prefs(context: Context) = context.getSharedPreferences("push", Context.MODE_PRIVATE)
 
     fun received(context: Context, data: Map<String, String>) {
-        val push = Push.parse(data) { decodeBytes(it) } ?: return
-        val preview = Push.open(push, Hosts(context).all(), Keys::unwrap) { key, host, seq, sealed ->
-            openPreview(key, host, seq, sealed)
-        } ?: return
-        val prefs = shownPrefs(context)
-        val shownKey = "shown.${preview.host}"
-        val last = if (prefs.contains(shownKey)) prefs.getLong(shownKey, 0) else null
-        if (Push.seen(preview, last)) return
-        prefs.edit { putLong(shownKey, preview.seq) }
-        show(context, preview)
+        val prefs = prefs(context)
+        val decision = Push.decide(
+            data = data,
+            hosts = Hosts(context).all(),
+            decode = { decodeBytes(it) },
+            unwrap = Keys::unwrap,
+            open = { key, host, seq, sealed -> openPreview(key, host, seq, sealed) },
+            lastShown = { host, conversation ->
+                Push.shownKey(host, conversation).takeIf(prefs::contains)?.let { prefs.getLong(it, 0) }
+            },
+            unwrapFailed = { _, e -> Log.w("enclos", "a host's push key could not be unwrapped: ${e.javaClass.simpleName}") },
+        )
+        when (decision) {
+            is PushDecision.Drop -> decision.why?.let { Log.w("enclos", "push dropped: $it") }
+            // Kept as shown only once it is: a push the phone did not show
+            // (notifications refused) is no reason to drop the next.
+            is PushDecision.Show -> if (show(context, decision.preview)) {
+                prefs.edit { putLong(Push.shownKey(decision.preview.host, decision.preview.conversation), decision.preview.seq) }
+            }
+        }
     }
 
-    private fun allowed(context: Context): Boolean =
+    /** Whether the app may show notifications: on Android 13 and later, the person said so. */
+    fun allowed(context: Context): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
-    private fun show(context: Context, preview: PushPreview) {
-        if (!allowed(context)) return
-        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+    /** Shows [preview]; whether it was shown. */
+    private fun show(context: Context, preview: PushPreview): Boolean {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return false
+        if (!allowed(context) || !manager.areNotificationsEnabled()) {
+            Log.w("enclos", "push not shown: notifications are off for the app")
+            return false
+        }
         val channel = Push.channel(preview.host, preview.agent)
         manager.createNotificationChannel(
             NotificationChannel(channel, "${preview.agent} on ${preview.host}", NotificationManager.IMPORTANCE_HIGH).apply {
@@ -120,13 +164,16 @@ object Notifier {
         // With the app lock on, what a message says stays behind it.
         val locked = context.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean("lock", false)
         val text = Push.shown(preview.text, locked)
-        val id = Push.notificationId(preview.host, preview.conversation)
+        val id = Push.notificationId(preview.conversation)
+        // The data makes each conversation's intent its own, whatever its id's hash.
         val open = Intent(context, MainActivity::class.java)
             .setAction(OPEN_CONVERSATION)
+            .setData(Uri.Builder().scheme("enclos-notification").authority(preview.host).appendPath(preview.conversation).build())
             .putExtra(EXTRA_HOST, preview.host)
             .putExtra(EXTRA_CONVERSATION, preview.conversation)
         val tap = PendingIntent.getActivity(context, id, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        // On the lock screen, only that a message came.
+        // On the lock screen, when the person's system setting hides
+        // sensitive content: only that a message came.
         val public = Notification.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Enclos")
@@ -143,11 +190,32 @@ object Notifier {
             .setContentIntent(tap)
             .setAutoCancel(true)
             .build()
-        manager.notify(id, notification)
+        manager.notify(preview.host, id, notification)
+        return true
     }
 
     /** Takes away the notification of a conversation the person opened. */
     fun cancel(context: Context, host: String, conversation: String) {
-        context.getSystemService(NotificationManager::class.java)?.cancel(Push.notificationId(host, conversation))
+        context.getSystemService(NotificationManager::class.java)?.cancel(host, Push.notificationId(conversation))
+    }
+
+    /** Takes away every notification of the app: the app lock was turned on. */
+    fun cancelAll(context: Context) {
+        context.getSystemService(NotificationManager::class.java)?.cancelAll()
+    }
+
+    /**
+     * Forgets what the phone showed of [host]: forgotten, or paired again
+     * (its bridge may count again from the start). Its marks, its
+     * notifications and its agents' channels go.
+     */
+    fun forget(context: Context, host: String) {
+        val prefs = prefs(context)
+        prefs.edit { prefs.all.keys.filter { it.startsWith(Push.shownPrefix(host)) }.forEach { remove(it) } }
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.activeNotifications.filter { it.tag == host }.forEach { manager.cancel(host, it.id) }
+        manager.notificationChannels.filter { it.id.startsWith(Push.channelPrefix(host)) }.forEach {
+            manager.deleteNotificationChannel(it.id)
+        }
     }
 }

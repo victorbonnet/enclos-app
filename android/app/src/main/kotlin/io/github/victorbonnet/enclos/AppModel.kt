@@ -477,7 +477,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         screenLock = { AppLock.available(getApplication()) },
         clock = android.os.SystemClock::elapsedRealtime,
         // Written at once (commit), not later: a choice must survive the app being stopped right after.
-        keep = { on -> settings.edit(commit = true) { putBoolean("lock", on) } },
+        keep = { on ->
+            settings.edit(commit = true) { putBoolean("lock", on) }
+            // Notifications shown before keep their words: they go, as the
+            // ones to come say only "New message".
+            if (on) Notifier.cancelAll(getApplication())
+        },
     )
 
     /** The agents (`host/sandbox/agent`) whose conversations the inbox shows unfolded, while the app runs. */
@@ -514,15 +519,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * A conversation a notification was tapped for: opened once the phone
-     * holds it, which may be after the sync the connection starts.
+     * A conversation a notification was tapped for, with its host: opened
+     * once the phone holds it, which may be after the sync the connection
+     * starts. The person going anywhere else first drops it.
      */
-    val openedConversation = mutableStateOf<String?>(null)
+    val openedConversation = mutableStateOf<ConversationKey?>(null)
 
     /** A notification of [conversation], from [host], was tapped. */
     fun openFromNotification(host: String, conversation: String) {
         if (paired.none { it.name == host }) return
-        openedConversation.value = conversation
+        openedConversation.value = ConversationKey(host, conversation)
     }
 
     /**
@@ -766,6 +772,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         }
         // Paired again, as another device: what the host sent before is forgotten.
         forget(host.name)
+        // Its pushes too: a bridge paired again may count from the start.
+        Notifier.forget(getApplication(), host.name)
         paired.removeAll { it.name == host.name }
         paired.add(host)
         // Another bridge under the same name: nothing of the old one stays.
@@ -911,9 +919,18 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (ready) paired.filter { it.name !in connections }.forEach { connect(it) }
     }
 
-    /** The app left the foreground: its connections stay up while the phone lets them. */
+    /**
+     * The app left the foreground. With push on, it closes its connections:
+     * a host pushes only to a person with no device connected, so a
+     * connection kept up in the background would keep every notification
+     * away (enclos `docs/protocol.md`, Notifications). Without push they stay
+     * up while the phone lets them, as before. Back in the foreground,
+     * [foreground] opens them again.
+     */
     fun background() {
         foreground = false
+        if (PushTokens.current(getApplication()) == null) return
+        connections.values.toList().forEach { it.close() }
     }
 
     private fun reopen(name: String) {
@@ -982,7 +999,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 // What is on the phone is kept: only what is newer comes.
                 connections[host.name]?.send(message("sync", "since" to since(host.name)))
                 // The token at each connection: the host keeps the last one given.
-                PushTokens.current(getApplication())?.let { pushToken(host.name, it) }
+                // None yet (Firebase could not give one at start): asked again.
+                when (val token = PushTokens.current(getApplication())) {
+                    null -> PushSetup.askToken(getApplication())
+                    else -> pushToken(host.name, token)
+                }
             }
             "audit.list" -> {
                 val state = audit[host.name] ?: return
@@ -1695,6 +1716,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections.remove(name)?.close()
         failures.remove(name)
         hosts.remove(name)
+        Notifier.forget(getApplication(), name)
         // The Keystore off the main thread; should it fail, the next start's sweep deletes the key.
         saving.execute {
             try {

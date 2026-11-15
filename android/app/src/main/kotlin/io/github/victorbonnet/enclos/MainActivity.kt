@@ -279,6 +279,9 @@ private fun Screens(model: AppModel, ask: Ask) {
     }
     val go = { to: Route ->
         val leaving = (routes.targetState as? Route.Chat)?.takeIf { it != to }
+        // Going anywhere drops a notification's conversation still to open:
+        // it does not take the person away later, once it syncs.
+        model.openedConversation.value = null
         saved = to.save()
         scope.launch {
             routes.animateTo(to)
@@ -317,16 +320,15 @@ private fun Screens(model: AppModel, ask: Ask) {
     LaunchedEffect(opened) { if (opened != null) go(Route.Pair) }
 
     // A notification tapped: to its conversation, once the phone holds it.
+    // The phone keeps one conversation per id (a second host's Home of the
+    // same name is left out, spec §4): it opens only if it is that host's.
     val notified = model.openedConversation.value
-    val held = notified != null && model.conversations.any { it.id == notified }
+    val held = notified != null && model.conversations.any { it.id == notified.id && it.host == notified.host }
     LaunchedEffect(notified, held) {
-        if (notified != null && held) {
-            model.openedConversation.value = null
-            go(Route.Chat(notified))
-        }
+        if (notified != null && held) go(Route.Chat(notified.id))
     }
 
-    // A conversation shown: its notification goes.
+    // A conversation shown: its notification goes, from its own host.
     val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(showing) {
         if (showing is Route.Chat) {

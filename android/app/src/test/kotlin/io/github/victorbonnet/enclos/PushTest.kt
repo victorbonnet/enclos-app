@@ -21,6 +21,10 @@ class PushTest {
     @Test
     fun a_push_is_read_from_fcms_strings() {
         assertEquals(PushData("mac", 42, "sealed".toByteArray()), Push.parse(data(), decode))
+        // At the bounds, and with fields it does not know.
+        assertEquals("h".repeat(63), Push.parse(data(host = "h".repeat(63)), decode)?.host)
+        assertEquals(Long.MAX_VALUE, Push.parse(data(seq = Long.MAX_VALUE.toString()), decode)?.seq)
+        assertEquals(42L, Push.parse(data() + ("later" to "x"), decode)?.seq)
     }
 
     @Test
@@ -32,6 +36,7 @@ class PushTest {
             data(host = "h".repeat(64)),
             data(seq = "x"),
             data(seq = "-1"),
+            data(seq = "9223372036854775808"),
             data(preview = "not base64 !"),
             data(preview = null),
         )) {
@@ -49,16 +54,16 @@ class PushTest {
         pushKeyWrapped = byteArrayOf(key),
     )
 
-    private val preview = JSONObject()
+    private fun previewOf(conversation: String = "c-1") = JSONObject()
         .put("agent", "lab/main")
-        .put("conversation", "c-1")
+        .put("conversation", conversation)
         .put("text", "**Sunny** in Lyon")
         .toString()
         .toByteArray()
 
-    /** Opens only what was sealed with key 7, for host `mac` and seq 42, as the core does. */
+    /** Opens only what was sealed with key 7 for host `mac`, seq 42, as the core does; refuses by throwing. */
     private val open: (ByteArray, String, Long, ByteArray) -> ByteArray? = { key, host, seq, _ ->
-        if (key.contentEquals(byteArrayOf(7)) && host == "mac" && seq == 42L) preview else throw IllegalStateException("sealed")
+        if (key.contentEquals(byteArrayOf(7)) && host == "mac" && seq == 42L) previewOf() else throw IllegalStateException("sealed")
     }
 
     @Test
@@ -67,8 +72,19 @@ class PushTest {
         val opened = Push.open(push, listOf(host("pi", 3), host("mac", 7)), { it }, open)
         assertEquals(PushPreview("mac", "lab/main", "c-1", "**Sunny** in Lyon", 42), opened)
         // Under another name the phone knows it by, the key still tells.
-        val renamed = Push.open(push, listOf(host("laptop", 7)), { it }, open)
-        assertEquals("laptop", renamed?.host)
+        assertEquals("laptop", Push.open(push, listOf(host("laptop", 7)), { it }, open)?.host)
+    }
+
+    @Test
+    fun the_host_named_in_the_push_is_tried_first_and_a_key_that_returns_nothing_is_passed_over() {
+        val tried = mutableListOf<Byte>()
+        val nullForWrongKey: (ByteArray, String, Long, ByteArray) -> ByteArray? = { key, _, _, _ ->
+            tried += key[0]
+            if (key[0] == 7.toByte()) previewOf() else null
+        }
+        val push = PushData("mac", 42, byteArrayOf())
+        assertEquals("pi", Push.open(push, listOf(host("pi", 7), host("mac", 3)), { it }, nullForWrongKey)?.host)
+        assertEquals(listOf<Byte>(3, 7), tried)
     }
 
     @Test
@@ -76,17 +92,37 @@ class PushTest {
         assertNull(Push.open(PushData("mac", 42, byteArrayOf()), listOf(host("mac", 8)), { it }, open))
         assertNull(Push.open(PushData("mac", 43, byteArrayOf()), listOf(host("mac", 7)), { it }, open))
         assertNull(Push.open(PushData("mac", 42, byteArrayOf()), emptyList(), { it }, open))
-        // A key the key store cannot unwrap is one that does not open it.
-        assertNull(Push.open(PushData("mac", 42, byteArrayOf()), listOf(host("mac", 7)), { error("gone") }, open))
+    }
+
+    @Test
+    fun a_key_the_key_store_cannot_give_is_reported_and_passed_over() {
+        val failed = mutableListOf<String>()
+        val opened = Push.open(
+            PushData("mac", 42, byteArrayOf()),
+            listOf(host("mac", 7), host("laptop", 7)),
+            { if (failed.isEmpty()) throw java.security.KeyStoreException("gone") else it },
+            open,
+            { host, _ -> failed += host.name },
+        )
+        assertEquals(listOf("mac"), failed)
+        assertEquals("laptop", opened?.host)
+    }
+
+    @Test(expected = UnsatisfiedLinkError::class)
+    fun an_error_is_not_taken_for_a_key_that_does_not_fit() {
+        Push.open(PushData("mac", 42, byteArrayOf()), listOf(host("mac", 7)), { it }, { _, _, _, _ -> throw UnsatisfiedLinkError("no core") })
     }
 
     @Test
     fun a_preview_needs_an_agent_and_a_conversation_without_hidden_characters() {
         fun read(json: JSONObject) = Push.preview("mac", 1, json.toString().toByteArray())
         assertNull(Push.preview("mac", 1, "not json".toByteArray()))
+        assertNull(Push.preview("mac", 1, "[1,2]".toByteArray()))
         assertNull(read(JSONObject().put("conversation", "c-1").put("text", "x")))
         assertNull(read(JSONObject().put("agent", "lab/main").put("text", "x")))
         assertNull(read(JSONObject().put("agent", "lab/‮main").put("conversation", "c-1")))
+        assertEquals("a".repeat(256), read(JSONObject().put("agent", "a".repeat(256)).put("conversation", "c-1"))?.agent)
+        assertNull(read(JSONObject().put("agent", "a".repeat(257)).put("conversation", "c-1")))
         assertEquals("", read(JSONObject().put("agent", "lab/main").put("conversation", "c-1"))?.text)
     }
 
@@ -96,26 +132,60 @@ class PushTest {
         assertEquals(Push.GENERIC, Push.shown("**Sunny** in Lyon", locked = true))
         assertEquals(Push.GENERIC, Push.shown("", locked = false))
         assertEquals(Push.GENERIC, Push.shown("​", locked = false))
-        assertEquals("a‮b".length - 1, Push.shown("a‮b", locked = false).length)
+        assertEquals("ab", Push.shown("a‮b", locked = false))
+    }
+
+    @Test
+    fun a_notification_holds_at_most_120_characters_cut_between_two() {
+        val exact = "x".repeat(Push.PREVIEW_CHARS)
+        assertEquals(exact, Push.shown(exact, locked = false))
         val long = Push.shown("word ".repeat(60), locked = false)
         assertTrue(long, long.endsWith("…"))
-        assertEquals(Push.PREVIEW_CHARS, long.codePointCount(0, long.length))
+        assertTrue(long.codePointCount(0, long.length) <= Push.PREVIEW_CHARS)
+        // Emoji are two UTF-16 units each: the cut never splits one.
+        val emoji = Push.shown("😀".repeat(130), locked = false)
+        assertEquals(Push.PREVIEW_CHARS, emoji.codePointCount(0, emoji.length))
+        assertEquals("😀".repeat(Push.PREVIEW_CHARS - 1) + "…", emoji)
+    }
+
+    private fun decide(push: Map<String, String>, shown: Map<String, Long> = emptyMap()) = Push.decide(
+        data = push,
+        hosts = listOf(host("mac", 7)),
+        decode = decode,
+        unwrap = { it },
+        open = { key, h, seq, _ -> if (key[0] == 7.toByte() && h == "mac") previewOf(if (seq == 41L) "c-2" else "c-1") else null },
+        lastShown = { h, c -> shown[Push.shownKey(h, c)] },
+    )
+
+    @Test
+    fun a_push_is_shown_once_and_one_for_another_conversation_whatever_its_order() {
+        assertEquals(
+            PushDecision.Show(PushPreview("mac", "lab/main", "c-1", "**Sunny** in Lyon", 42)),
+            decide(data(seq = "42")),
+        )
+        // Shown already, or older, in its conversation: dropped, with no fault to log.
+        assertEquals(PushDecision.Drop(null), decide(data(seq = "42"), mapOf(Push.shownKey("mac", "c-1") to 42L)))
+        // Another conversation's push that FCM brings later, with a lower seq: shown.
+        val older = decide(data(seq = "41"), mapOf(Push.shownKey("mac", "c-1") to 42L))
+        assertEquals("c-2", (older as PushDecision.Show).preview.conversation)
     }
 
     @Test
-    fun a_push_already_shown_or_older_is_dropped() {
-        val push = PushPreview("mac", "lab/main", "c-1", "", 42)
-        assertFalse(Push.seen(push, null))
-        assertFalse(Push.seen(push, 41))
-        assertTrue(Push.seen(push, 42))
-        assertTrue(Push.seen(push, 50))
+    fun a_push_dropped_for_a_fault_says_why() {
+        val other = decide(data(v = "2"))
+        assertTrue(other.toString(), (other as PushDecision.Drop).why!!.contains("version 2"))
+        assertEquals(PushDecision.Drop("a push no paired host opens"), decide(data(host = "pi")))
     }
 
     @Test
-    fun one_channel_per_agent_and_one_notification_per_conversation() {
+    fun a_hosts_marks_and_channels_are_its_own() {
+        assertEquals("shown.mac/c-1", Push.shownKey("mac", "c-1"))
+        assertTrue(Push.shownKey("mac", "c-1").startsWith(Push.shownPrefix("mac")))
+        assertFalse(Push.shownKey("mac2", "c-1").startsWith(Push.shownPrefix("mac")))
         assertEquals("agent:mac/lab/main", Push.channel("mac", "lab/main"))
-        assertEquals(Push.notificationId("mac", "c-1"), Push.notificationId("mac", "c-1"))
-        assertFalse(Push.notificationId("mac", "c-1") == Push.notificationId("pi", "c-1"))
+        assertTrue(Push.channel("mac", "lab/main").startsWith(Push.channelPrefix("mac")))
+        assertFalse(Push.channel("mac2", "lab/main").startsWith(Push.channelPrefix("mac")))
+        assertEquals(Push.notificationId("c-1"), Push.notificationId("c-1"))
     }
 
     @Test

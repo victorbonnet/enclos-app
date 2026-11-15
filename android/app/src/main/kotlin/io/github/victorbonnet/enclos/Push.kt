@@ -17,6 +17,14 @@ data class PushData(val host: String, val seq: Long, val sealed: ByteArray) {
 /** What a push's preview says, once opened by the host it came from. */
 data class PushPreview(val host: String, val agent: String, val conversation: String, val text: String, val seq: Long)
 
+/** What becomes of a push: shown, or dropped, and why when that is worth a log line. */
+sealed interface PushDecision {
+    data class Show(val preview: PushPreview) : PushDecision
+
+    /** [why] is null for a push already shown, which is no fault. */
+    data class Drop(val why: String?) : PushDecision
+}
+
 object Push {
     /** The protocol version the app reads. */
     const val VERSION = "1"
@@ -41,28 +49,46 @@ object Push {
         if (data["v"] != VERSION) return null
         val host = data["host"]?.takeIf { it.isNotEmpty() && it.length <= HOST_CHARS } ?: return null
         val seq = data["seq"]?.toLongOrNull()?.takeIf { it >= 0 } ?: return null
-        val sealed = data["preview"]?.let { runCatching { decode(it) }.getOrNull() } ?: return null
+        val sealed = data["preview"]?.let {
+            try {
+                decode(it)
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return null
         return PushData(host, seq, sealed)
     }
 
     /**
      * Opens [push] with the push key of each paired host, under the push's
-     * own host name: the host whose key opens it is the one it came from.
-     * Null when none does, so a push no paired host sealed shows nothing.
-     * [open] throws, or returns null, for a key that does not open it;
-     * [unwrap] gives a host's push key from the key store.
+     * own host name, the host of that name first: the host whose key opens
+     * it is the one it came from. Null when none does, so a push no paired
+     * host sealed shows nothing. [open] returns null, or throws, for a key
+     * that does not open it; [unwrap] gives a host's push key from the key
+     * store, and a host whose key it cannot give is told to [unwrapFailed]
+     * and passed over. Only exceptions are caught: an `Error` (a native
+     * library missing) is not a key that does not fit.
      */
     fun open(
         push: PushData,
         hosts: List<Host>,
         unwrap: (ByteArray) -> ByteArray,
         open: (key: ByteArray, host: String, seq: Long, sealed: ByteArray) -> ByteArray?,
+        unwrapFailed: (Host, Exception) -> Unit = { _, _ -> },
     ): PushPreview? {
-        // The host of that name first: it is the one that sent it, unless
-        // two hosts share a name, which pairing does not allow.
-        val ordered = hosts.sortedBy { if (it.name == push.host) 0 else 1 }
-        for (host in ordered) {
-            val plain = runCatching { open(unwrap(host.pushKeyWrapped), push.host, push.seq, push.sealed) }.getOrNull() ?: continue
+        for (host in hosts.sortedBy { if (it.name == push.host) 0 else 1 }) {
+            val key = try {
+                unwrap(host.pushKeyWrapped)
+            } catch (e: Exception) {
+                unwrapFailed(host, e)
+                continue
+            }
+            val plain = try {
+                open(key, push.host, push.seq, push.sealed)
+            } catch (_: Exception) {
+                null
+            } ?: continue
+            // The key fits: this host sealed it, whatever its preview holds.
             return preview(host.name, push.seq, plain)
         }
         return null
@@ -70,17 +96,43 @@ object Push {
 
     /** The preview's JSON, or null when it is not one the bridge makes. */
     fun preview(host: String, seq: Long, plain: ByteArray): PushPreview? {
-        val json = runCatching { JSONObject(String(plain, Charsets.UTF_8)) }.getOrNull() ?: return null
+        val json = try {
+            JSONObject(String(plain, Charsets.UTF_8))
+        } catch (_: Exception) {
+            return null
+        }
         val agent = json.optString("agent").takeIf { it.isNotEmpty() && it.length <= ID_CHARS && !Visible.hasHidden(it) } ?: return null
         val conversation = json.optString("conversation").takeIf { it.isNotEmpty() && it.length <= ID_CHARS && !Visible.hasHidden(it) } ?: return null
         return PushPreview(host, agent, conversation, json.optString("text"), seq)
     }
 
     /**
+     * What becomes of FCM's [data]: shown, or dropped. [lastShown] gives the
+     * `seq` last shown in a host's conversation; a push not newer than it is
+     * dropped, while one for another conversation is not, however FCM orders
+     * them.
+     */
+    fun decide(
+        data: Map<String, String>,
+        hosts: List<Host>,
+        decode: (String) -> ByteArray,
+        unwrap: (ByteArray) -> ByteArray,
+        open: (ByteArray, String, Long, ByteArray) -> ByteArray?,
+        lastShown: (host: String, conversation: String) -> Long?,
+        unwrapFailed: (Host, Exception) -> Unit = { _, _ -> },
+    ): PushDecision {
+        val push = parse(data, decode) ?: return PushDecision.Drop("a push the app cannot read (version ${data["v"]})")
+        val preview = open(push, hosts, unwrap, open, unwrapFailed)
+            ?: return PushDecision.Drop("a push no paired host opens")
+        if (seen(preview, lastShown(preview.host, preview.conversation))) return PushDecision.Drop(null)
+        return PushDecision.Show(preview)
+    }
+
+    /**
      * The notification's words: the preview's, without the markdown's marks
-     * or hidden characters, cut to [PREVIEW_CHARS]; [GENERIC] when [locked]
-     * (the app lock is on: its content stays behind it) or when nothing is
-     * left.
+     * or hidden characters, at most [PREVIEW_CHARS] characters (cut between
+     * two, never inside one); [GENERIC] when [locked] (the app lock is on:
+     * its content stays behind it) or when nothing is left.
      */
     fun shown(text: String, locked: Boolean): String {
         if (locked) return GENERIC
@@ -92,14 +144,26 @@ object Push {
         }
     }
 
-    /** A push already shown, or older than one shown: a host's `seq` only grows. */
+    /** A push already shown, or older than one shown in its conversation. */
     fun seen(push: PushPreview, lastShown: Long?): Boolean = lastShown != null && push.seq <= lastShown
+
+    /** The key under which the `seq` last shown in a host's conversation is kept. */
+    fun shownKey(host: String, conversation: String) = "shown.$host/$conversation"
+
+    /** The prefix of every [shownKey] of [host]: a host's name holds no `/`. */
+    fun shownPrefix(host: String) = "shown.$host/"
 
     /** The notification channel of [agent] on [host]: one per agent. */
     fun channel(host: String, agent: String) = "agent:$host/$agent"
 
-    /** One notification per conversation: a new message replaces the last. */
-    fun notificationId(host: String, conversation: String) = "$host/$conversation".hashCode()
+    /** The prefix of every [channel] of [host]. */
+    fun channelPrefix(host: String) = "agent:$host/"
+
+    /**
+     * A conversation's notification, within its host's (the notification's
+     * tag): a new message replaces the last.
+     */
+    fun notificationId(conversation: String) = conversation.hashCode()
 
     /** The `push.token` message, or a pairing request's `push`, for [token]. */
     fun token(token: String): JSONObject = JSONObject().put("kind", "fcm").put("token", token)
