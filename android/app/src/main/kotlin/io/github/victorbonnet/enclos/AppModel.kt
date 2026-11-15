@@ -575,8 +575,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Ask [host] what each agent used in this person's conversations over [window]. */
     fun loadUsage(host: String, window: UsageWindow) {
         if (!canReadUsage(host)) return
-        val since = System.currentTimeMillis() / 1000 - window.seconds
+        val now = System.currentTimeMillis()
+        val since = now / 1000 - window.seconds
         val request = message("usage.get", "since" to since.coerceAtLeast(0))
+        // Bars over time, from a bridge that gives series: by the window's bucket, days at this
+        // phone's midnight.
+        if (hostSupports(host, "usage.series")) {
+            request.put("bucket", window.bucket)
+            request.put("offset", java.util.TimeZone.getDefault().getOffset(now) / 1000)
+        }
         val id = request.getString("id")
         hostUsage[host] = (hostUsage[host] ?: HostUsage()).loading(id, window)
         if (connections[host]?.send(request) != true) {

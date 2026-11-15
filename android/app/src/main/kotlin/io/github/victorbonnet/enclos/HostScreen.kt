@@ -29,7 +29,11 @@ import io.github.victorbonnet.enclos.ui.Glyphs
 import io.github.victorbonnet.enclos.ui.Hairline
 import io.github.victorbonnet.enclos.ui.IconButton
 import io.github.victorbonnet.enclos.ui.Type
+import io.github.victorbonnet.enclos.ui.SeriesDot
+import io.github.victorbonnet.enclos.ui.UsageChart
 import io.github.victorbonnet.enclos.ui.UsageWindowTabs
+import io.github.victorbonnet.enclos.ui.seriesColor
+import androidx.compose.ui.graphics.Color
 import io.github.victorbonnet.enclos.ui.WorkingWave
 import io.github.victorbonnet.enclos.ui.palette
 import java.time.Instant
@@ -49,6 +53,9 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
     val usageAvailable = model.canReadUsage(name)
     val usage = model.hostUsage[name] ?: HostUsage()
     LaunchedEffect(name, usageAvailable) { if (usageAvailable) model.loadUsage(name, usage.window) }
+    // Each charted agent's color, by its place among the host's agents: it keeps it across windows.
+    val slots = usageSlots(model.agents.filter { it.host == name }.map { it.name }, usage.series.map { it.agent })
+    val colors: Map<String, Color> = slots.mapValues { (_, slot) -> seriesColor(slot) }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
@@ -99,9 +106,30 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
                         }
                     }
                     if (usage.rowsShown && usage.agents.isEmpty()) Text("No usage in the last ${usage.window.label}.", style = Type.small, color = p.textMuted)
+                    if (usage.rowsShown && usage.agents.isNotEmpty()) {
+                        Text(
+                            if (usage.outside) "All of each agent's calls: your conversations in the app, its routines and its other chats."
+                            else "Your conversations in the app.",
+                            style = Type.small,
+                            color = p.textMuted,
+                        )
+                    }
+                    if (usage.rowsShown && usage.series.isNotEmpty()) {
+                        val now = System.currentTimeMillis()
+                        val offset = java.util.TimeZone.getDefault().getOffset(now) / 1000L
+                        val bars = usageBars(usage.series, usage.window, now / 1000, offset)
+                        val label = { agent: String -> model.agentLabel("$name/$agent") }
+                        UsageChart(
+                            bars,
+                            colors,
+                            label,
+                            bucketLabel = { at -> usageBucketLabel(at, usage.window) },
+                            summary = usageSummary(bars, usage.window, label) { at -> usageBucketLabel(at, usage.window) },
+                        )
+                    }
                 }
             }
-            items(if (usage.rowsShown) usage.agents else emptyList(), key = { "usage:${it.agent}" }) { row -> AgentUsageRow(model.agentLabel("$name/${row.agent}"), row.agent, row.total) }
+            items(if (usage.rowsShown) usage.agents else emptyList(), key = { "usage:${it.agent}" }) { row -> AgentUsageRow(model.agentLabel("$name/${row.agent}"), row.agent, row.total, colors[row.agent]) }
             item {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -137,10 +165,12 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
 
 /** One agent's usage over the window: its name, its tokens, and how they split. */
 @Composable
-private fun AgentUsageRow(label: String, address: String, total: UsageTotal) {
+private fun AgentUsageRow(label: String, address: String, total: UsageTotal, color: Color?) {
     val p = palette
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Its color in the chart, which these rows are the legend of.
+            if (color != null) SeriesDot(color)
             Column(Modifier.weight(1f)) {
                 Text(label, style = Type.name, color = p.text)
                 // Two sandboxes may have agents of one name.
@@ -154,6 +184,13 @@ private fun AgentUsageRow(label: String, address: String, total: UsageTotal) {
         }
         Text(usageLine(total), style = Type.small, color = p.textMuted)
     }
+}
+
+/** A bucket's start as the phone says it: a time for an hour, a weekday and date for a day. */
+private fun usageBucketLabel(at: Long, window: UsageWindow): String {
+    val time = java.time.Instant.ofEpochSecond(at).atZone(java.time.ZoneId.systemDefault())
+    return if (window.bucket < 86_400) DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).format(time)
+    else DateTimeFormatter.ofPattern("EEE d MMM").format(time)
 }
 
 @Composable
