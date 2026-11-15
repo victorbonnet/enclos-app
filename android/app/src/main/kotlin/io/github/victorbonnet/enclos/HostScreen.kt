@@ -29,6 +29,7 @@ import io.github.victorbonnet.enclos.ui.Glyphs
 import io.github.victorbonnet.enclos.ui.Hairline
 import io.github.victorbonnet.enclos.ui.IconButton
 import io.github.victorbonnet.enclos.ui.Type
+import io.github.victorbonnet.enclos.ui.UsageWindowTabs
 import io.github.victorbonnet.enclos.ui.WorkingWave
 import io.github.victorbonnet.enclos.ui.palette
 import java.time.Instant
@@ -36,7 +37,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
-/** Host details and its owner's audit, fetched only while this page is visible. */
+/** Host details, its agents' usage in your conversations, and its owner's audit, fetched only while this page is visible. */
 @Composable
 fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (String) -> Unit) {
     val p = palette
@@ -45,6 +46,9 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
     val available = model.canReadAudit(name)
     val audit = model.audit[name] ?: HostAudit()
     LaunchedEffect(name, available) { if (available) model.loadAudit(name) }
+    val usageAvailable = model.canReadUsage(name)
+    val usage = model.hostUsage[name] ?: HostUsage()
+    LaunchedEffect(name, usageAvailable) { if (usageAvailable) model.loadUsage(name, usage.window) }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
@@ -78,6 +82,29 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
             item {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Usage", style = Type.name, color = p.text)
+                        if (usageAvailable && usage.request == null) AuditAction("Refresh") { model.loadUsage(name, usage.window) }
+                    }
+                    Text("Tokens each agent used in your conversations, as its runtime counted them.", style = Type.small, color = p.textMuted)
+                    UsageWindowTabs(usage.window, enabled = usageAvailable && usage.request == null) { model.loadUsage(name, it) }
+                    when {
+                        !live -> Text(if (usage.loaded) "Saved in memory. Reconnect to refresh." else "Connect to this host to see its usage.", style = Type.small, color = p.textMuted)
+                        !usageAvailable -> Text("Usage is unavailable. Update the host's enclos.", style = Type.small, color = p.textMuted)
+                    }
+                    usage.error?.let { Text(it, style = Type.small, color = p.textMuted) }
+                    if (usage.request != null) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            WorkingWave()
+                            Text("Loading usage…", style = Type.small, color = p.textMuted)
+                        }
+                    }
+                    if (usage.loaded && usage.agents.isEmpty()) Text("No usage in the last ${usage.window.label}.", style = Type.small, color = p.textMuted)
+                }
+            }
+            items(usage.agents, key = { "usage:${it.agent}" }) { row -> AgentUsageRow(model.agentLabel("$name/${row.agent}"), row.agent, row.total) }
+            item {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text("Audit", style = Type.name, color = p.text)
                         if (available && audit.request == null) AuditAction("Refresh") { model.loadAudit(name) }
                     }
@@ -105,6 +132,22 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
                 }
             }
         }
+    }
+}
+
+/** One agent's usage over the window: its name, its tokens, and how they split. */
+@Composable
+private fun AgentUsageRow(label: String, address: String, total: UsageTotal) {
+    val p = palette
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(label, style = Type.name, color = p.text)
+                if (label != address) Text(address, style = Type.code, color = p.textFaint)
+            }
+            Text("${tokensText(total.tokens.total)} tokens", style = Type.label, color = p.text)
+        }
+        Text(usageLine(total), style = Type.small, color = p.textMuted)
     }
 }
 

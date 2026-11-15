@@ -63,6 +63,8 @@ data class Line(
     val attachments: List<Attachment> = emptyList(),
     /** The tools the agent ran for this answer, which the bridge does not keep: this phone does. */
     val steps: List<Step> = emptyList(),
+    /** What the agent's model calls for this answer used, live from the bridge; kept in memory only. */
+    val usage: UsageTotal? = null,
     /** In a group, the member who said it (`host/sandbox/agent`); none otherwise. */
     val agent: String? = null,
     /** Typed native question metadata is delivered separately, before this message. */
@@ -157,8 +159,8 @@ fun acceptsConversationMetadata(current: Conversation?, incoming: Conversation):
 fun heldByAnotherHost(conversations: List<Conversation>, host: String, id: String): Boolean =
     conversations.any { it.id == id && it.host != host }
 
-/** The messages whose `conversation` names what this phone keeps by that id: the conversation, its lines, typing, steps, a group's state. */
-val conversationScoped = setOf("conversation", "message", "group.state", "typing", "tool")
+/** The messages whose `conversation` names what this phone keeps by that id: the conversation, its lines, typing, steps, usage, a group's state. */
+val conversationScoped = setOf("conversation", "message", "group.state", "typing", "tool", "usage")
 
 /**
  * Whether a message of [type] from [host] about conversation [id] is left out: it names
@@ -267,6 +269,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** By host: where its connection stands; none before the first attempt. */
     val links = mutableStateMapOf<String, HostLink>()
     val audit = mutableStateMapOf<String, HostAudit>()
+    /** By host: what each agent used over the window last asked for. */
+    val hostUsage = mutableStateMapOf<String, HostUsage>()
     private val hostCapabilities = mutableStateMapOf<String, Set<String>>()
     /** By host: the last error its bridge sent, such as an agent it could not reach. */
     val said = mutableStateMapOf<String, String>()
@@ -445,6 +449,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private val unanswered = Awaiting()
     /** By conversation: the tools the agent runs now, live from the bridge. */
     val steps = mutableStateMapOf<String, List<Step>>()
+    /** By conversation: what the turn under way used so far, from each `usage` call. */
+    val turnUsage = mutableStateMapOf<String, UsageTotal>()
+    /** By conversation: what it used in all, as the bridge summed it (sent with the conversation and each call). */
+    val usage = mutableStateMapOf<String, UsageTotal>()
     /**
      * By agent (`host/sandbox/agent`): the commands the person may type to
      * its runtime, as its bridge last sent them; kept while the host is
@@ -531,6 +539,31 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         main.postDelayed({
             audit[host]?.let { audit[host] = it.failed(id, "The host did not return the audit. Try again.") }
         }, 15_000)
+    }
+
+    /** Whether [host]'s bridge answers usage windows (its `usage` capability). */
+    fun canReadUsage(host: String) = connected(host) && hostSupports(host, "usage")
+
+    /** Ask [host] what each agent used in this person's conversations over [window]. */
+    fun loadUsage(host: String, window: UsageWindow) {
+        if (!canReadUsage(host)) return
+        val since = System.currentTimeMillis() / 1000 - window.seconds
+        val request = message("usage.get", "since" to since.coerceAtLeast(0))
+        val id = request.getString("id")
+        hostUsage[host] = (hostUsage[host] ?: HostUsage()).loading(id, window)
+        if (connections[host]?.send(request) != true) {
+            hostUsage[host] = hostUsage.getValue(host).failed(id, "The usage request could not be sent. Reconnect and try again.")
+            return
+        }
+        main.postDelayed({
+            hostUsage[host]?.let { hostUsage[host] = it.failed(id, "The host did not return its usage. Try again.") }
+        }, 15_000)
+    }
+
+    private fun usageEnded(host: String) {
+        hostUsage[host]?.let { state ->
+            state.request?.let { hostUsage[host] = state.failed(it, "The connection ended. Reconnect to refresh the usage.") }
+        }
     }
 
     private fun auditEnded(host: String) {
@@ -740,6 +773,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             typing.remove(it.id)
             answered(it.id)
             steps.remove(it.id)
+            turnUsage.remove(it.id)
         }
         // Paired again, as another device: what the host sent before is forgotten.
         forget(host.name)
@@ -795,6 +829,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun connect(host: Host) {
         provisioningEnded(host.name)
         auditEnded(host.name)
+        usageEnded(host.name)
         agentNames.ended(host.name)
         routines.ended(host.name)
         questions.ended(host.name)
@@ -847,6 +882,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     private fun ended(host: Host, why: String) {
         auditEnded(host.name)
+        usageEnded(host.name)
         connections.remove(host.name)
         provisioningEnded(host.name)
         deletion.ended(host.name)
@@ -866,6 +902,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         typing.keys.filter { it in ids }.forEach { typing.remove(it) }
         ids.forEach { answered(it) }
         steps.keys.filter { it in ids }.forEach { steps.remove(it) }
+        turnUsage.keys.filter { it in ids }.forEach { turnUsage.remove(it) }
         // Its agents' commands come again with the next connection.
         commands.keys.filter { it.startsWith("${host.name}/") }.forEach { commands.remove(it) }
         // Files being fetched from it stop; asked again, they go on from where they were.
@@ -959,6 +996,17 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 // What is on the phone is kept: only what is newer comes.
                 connections[host.name]?.send(message("sync", "since" to since(host.name)))
             }
+            // A usage window this phone asked for.
+            "usage.report" -> {
+                val state = hostUsage[host.name] ?: return
+                hostUsage[host.name] = state.received(m.optString("of"), m)
+            }
+            // A model call of an agent's turn: the turn's usage, and the conversation's new total.
+            "usage" -> {
+                val id = m.getString("conversation")
+                turnUsage[id] = (turnUsage[id] ?: UsageTotal()) + UsageTotal.call(m)
+                m.optJSONObject("total")?.let { usage[id] = UsageTotal.of(it) }
+            }
             "audit.list" -> {
                 val state = audit[host.name] ?: return
                 val of = m.optString("of")
@@ -996,6 +1044,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 startingGroups.values.remove(id)
                 val at = conversations.indexOfFirst { it.id == id }
                 if (!acceptsConversationMetadata(conversations.getOrNull(at), known)) return
+                // What it used in all, as its bridge summed it; none from an older bridge.
+                m.optJSONObject("usage")?.let { usage[id] = UsageTotal.of(it) }
                 if (at < 0 || conversations[at] != known) {
                     if (at < 0) conversations.add(known) else conversations[at] = known
                     save { conversation(known) }
@@ -1055,6 +1105,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                         typing.remove(id)
                         answered(id)
                         steps.remove(id)?.let { line = line.copy(steps = it) }
+                        turnUsage.remove(id)?.let { line = line.copy(usage = it) }
                     } else if (agents.none { it.host == host.name && it.name == agent && "typing" in it.capabilities }) {
                         // A message on its own (a cron job's) while the agent
                         // works keeps the turn's steps and its working state;
@@ -1129,6 +1180,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             "error" -> {
+                val usageOf = m.optString("of")
+                if (hostUsage[host.name]?.request == usageOf) {
+                    hostUsage[host.name]?.let { hostUsage[host.name] = it.failed(usageOf, m.optString("message")) }
+                    return
+                }
                 val auditOf = m.optString("of")
                 if (audit[host.name]?.request == auditOf) {
                     audit[host.name]?.let { audit[host.name] = it.failed(auditOf, m.optString("message")) }
@@ -1529,8 +1585,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (!sent) return "Not sent: not connected to ${conversation.host}. Your message is still here."
         unanswered.sent(out.getString("id"), conversation.id, SystemClock.elapsedRealtime())
         awaiting[conversation.id] = true
-        // A new turn: steps left by one that ended with no answer are not its own.
+        // A new turn: steps and usage left by one that ended with no answer are not its own.
         steps.remove(conversation.id)
+        turnUsage.remove(conversation.id)
         main.postDelayed({ stillAwaiting(conversation.id) }, unanswered.limit)
         return null
     }
@@ -1549,6 +1606,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             typing.remove(key.id)
             answered(key.id)
             steps.remove(key.id)
+            turnUsage.remove(key.id)
+            usage.remove(key.id)
             lastRead.remove(key.id)
             unsettledRead.remove(key.id)
             reads.edit { remove(key.id) }
@@ -1695,6 +1754,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             typing.remove(it)
             answered(it)
             steps.remove(it)
+            turnUsage.remove(it)
+            usage.remove(it)
             lastRead.remove(it)
         }
         reads.edit { ids.forEach { remove(it) } }
@@ -1751,6 +1812,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         sandboxes.clear()
         kept.clear()
         steps.clear()
+        turnUsage.clear()
+        usage.clear()
+        hostUsage.clear()
         fetching.clear()
         asked.clear()
         files.clear()
@@ -1780,6 +1844,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         sandboxes.remove(host)
         provisioning.keys.filter { it == host || it.startsWith("$host/") }.forEach { provisioning.remove(it) }
         audit.remove(host)
+        hostUsage.remove(host)
         hostCapabilities.remove(host)
         clashes.remove(host)
         clashAgents.remove(host)
@@ -1794,6 +1859,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
         conversations.removeAll { it.host == host }
         ids.forEach { lines.remove(it) }
+        ids.forEach { usage.remove(it); turnUsage.remove(it) }
         ids.forEach { unsettledRead.remove(it) }
         agents.removeAll { it.host == host }
         approvals.keys.filter { approvals[it]?.host == host }.forEach { approvals.remove(it) }
