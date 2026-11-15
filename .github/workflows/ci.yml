@@ -66,6 +66,19 @@ jobs:
           fi
           printf '%s' "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/enclos-debug.keystore"
           echo "ENCLOS_DEBUG_KEYSTORE=$RUNNER_TEMP/enclos-debug.keystore" >> "$GITHUB_ENV"
+      # Firebase's settings for push (docs/adr/0010): not secret, but kept out
+      # of git so the repository names no project. Without them the APK has
+      # push off, and says so.
+      - name: Put Firebase's settings in place
+        env:
+          SETTINGS: ${{ secrets.ENCLOS_FIREBASE_PROPERTIES_B64 }}
+        run: |
+          if [ -z "$SETTINGS" ]; then
+            echo "::warning::No ENCLOS_FIREBASE_PROPERTIES_B64 secret: this APK has push off"
+            exit 0
+          fi
+          printf '%s' "$SETTINGS" | base64 -d > "$RUNNER_TEMP/enclos-firebase.properties"
+          echo "ENCLOS_FIREBASE_PROPERTIES=$RUNNER_TEMP/enclos-firebase.properties" >> "$GITHUB_ENV"
       - name: Build, test and lint the app
         working-directory: android
         run: ./gradlew --no-daemon :app:assembleDebug :app:testDebugUnitTest :app:lintDebug

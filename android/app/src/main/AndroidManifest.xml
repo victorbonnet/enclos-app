@@ -11,6 +11,9 @@
          waits for a tap instead of coming by itself -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Android 13 and later: showing what a host's push says -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Select the person's supporting browser for Custom Tabs on Android 11+. -->
     <queries>
         <intent>
@@ -24,6 +27,7 @@
          covers 12 and later, where allowBackup no longer stops
          device-to-device transfer. -->
     <application
+        android:name=".EnclosApp"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -82,6 +86,23 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/shared_files" />
         </provider>
+        <!-- Pushes from the hosts' bridges (docs/adr/0010): Firebase starts
+             only from EnclosApp, with the settings the build was given, never
+             by itself, and its token is asked for only then. -->
+        <service
+            android:name=".PushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <provider
+            android:name="com.google.firebase.provider.FirebaseInitProvider"
+            android:authorities="${applicationId}.firebaseinitprovider"
+            tools:node="remove" />
+        <meta-data
+            android:name="firebase_messaging_auto_init_enabled"
+            android:value="false" />
     </application>
 
 </manifest>

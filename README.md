@@ -34,6 +34,17 @@ It builds the Rust core for `arm64-v8a` and `x86_64`, generates its Kotlin bindi
 
 Debug builds are signed with the project's one debug key, so any build installs over any other ([ADR 0004](docs/adr/0004-one-debug-signing-key-kept-out-of-git.md)). The key is not in git: put the keystore at `~/.android/enclos-debug.keystore` (or point `ENCLOS_DEBUG_KEYSTORE` at it); CI reads it from the `ENCLOS_DEBUG_KEYSTORE_B64` secret. A new machine gets it copied from one that has it, over a private channel (never the repository, an issue or a chat); `*.keystore` and `*.jks` are ignored by git. Without it, a build is signed with the machine's own debug key and installs only after uninstalling the app, which forgets its pairings.
 
+Push notifications need Firebase's settings for the project the hosts send with ([ADR 0010](docs/adr/0010-firebase-settings-come-from-outside-git-and-push-is-off-without-them.md)), in `~/.android/enclos-firebase.properties` (or a file `ENCLOS_FIREBASE_PROPERTIES` names); CI reads it from the `ENCLOS_FIREBASE_PROPERTIES_B64` secret. Take the values from the Firebase console, Project settings, the Android app `io.github.victorbonnet.enclos`:
+
+```properties
+applicationId=1:000000000000:android:0000000000000000
+apiKey=AIza...
+projectId=your-project
+senderId=000000000000
+```
+
+Without the file the app builds with push off. Each host then needs that project's service-account key: `enclos app push key <file>`. enclos's [push setup guide](https://github.com/victorbonnet/enclos/blob/main/docs/push-setup.md) goes through every step: the project, where each value is in `google-services.json`, a key that can only send, and what each failure means.
+
 ## License
 
 MIT

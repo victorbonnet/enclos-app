@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.view.WindowManager
+import androidx.core.content.edit
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -170,10 +171,33 @@ class MainActivity : ComponentActivity() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) setRecentsScreenshotEnabled(!on)
     }
 
-    /** An `enclos://pair` link the system opened the app with: shown on the pairing screen, which asks first. */
+    /**
+     * An `enclos://pair` link the system opened the app with: shown on the
+     * pairing screen, which asks first. Or a notification tapped: its
+     * conversation opens.
+     */
     private fun open(intent: Intent?) {
+        if (intent?.action == Notifier.OPEN_CONVERSATION) {
+            val host = intent.getStringExtra(Notifier.EXTRA_HOST) ?: return
+            val conversation = intent.getStringExtra(Notifier.EXTRA_CONVERSATION) ?: return
+            model.openFromNotification(host, conversation)
+            return
+        }
         val link = intent?.data?.takeIf { intent.action == Intent.ACTION_VIEW && it.scheme == "enclos" } ?: return
         model.opened(link.toString())
+    }
+
+    /** Asks once, on Android 13 and later, to show notifications: when push is on and a host is paired. */
+    private val askNotifications = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) {}
+
+    private fun askNotificationsOnce() {
+        if (!PushSetup.configured || model.paired.isEmpty()) return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        val prefs = getSharedPreferences("push", MODE_PRIVATE)
+        if (prefs.getBoolean("asked", false)) return
+        prefs.edit { putBoolean("asked", true) }
+        askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -213,6 +237,10 @@ class MainActivity : ComponentActivity() {
             }
             val lockOn = model.lock.on.value
             LaunchedEffect(lockOn) { secure(lockOn) }
+            // Once a host is paired, and not while the app is locked.
+            val hosts = model.paired.size
+            val locked = model.lock.locked.value
+            LaunchedEffect(hosts, locked) { if (!locked) askNotificationsOnce() }
             // Kept while the screens are not composed: the route, the tab, scroll positions.
             val kept = rememberSaveableStateHolder()
             EnclosTheme(dark) {
@@ -251,6 +279,9 @@ private fun Screens(model: AppModel, ask: Ask) {
     }
     val go = { to: Route ->
         val leaving = (routes.targetState as? Route.Chat)?.takeIf { it != to }
+        // Going anywhere drops a notification's conversation still to open:
+        // it does not take the person away later, once it syncs.
+        model.openedConversation.value = null
         saved = to.save()
         scope.launch {
             routes.animateTo(to)
@@ -287,6 +318,23 @@ private fun Screens(model: AppModel, ask: Ask) {
     // A pairing link opened the app: to the pairing screen, which asks.
     val opened = model.openedLink.value
     LaunchedEffect(opened) { if (opened != null) go(Route.Pair) }
+
+    // A notification tapped: to its conversation, once the phone holds it.
+    // The phone keeps one conversation per id (a second host's Home of the
+    // same name is left out, spec §4): it opens only if it is that host's.
+    val notified = model.openedConversation.value
+    val held = notified != null && model.conversations.any { it.id == notified.id && it.host == notified.host }
+    LaunchedEffect(notified, held) {
+        if (notified != null && held) go(Route.Chat(notified.id))
+    }
+
+    // A conversation shown: its notification goes, from its own host.
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(showing) {
+        if (showing is Route.Chat) {
+            model.conversations.firstOrNull { it.id == showing.id }?.let { Notifier.cancel(context, it.host, it.id) }
+        }
+    }
 
     // Back from the agents: to the conversations. The settled page, so a
     // swipe half way does not change what Back does.

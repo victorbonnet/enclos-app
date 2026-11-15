@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The notification's small icon: the Home base mark of ic_launcher_foreground,
+     in its own 64 x 64 coordinates, on a 24dp icon with room around it. The
+     system draws only its alpha, so it is plain white. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:pathData="M24,10H10v14m30,-14h14v14M10,40v14h14m30,-14v14H40"
+        android:strokeWidth="7.15"
+        android:strokeColor="#FFFFFF" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M24.85,24.85h14.3v14.3h-14.3z" />
+</vector>

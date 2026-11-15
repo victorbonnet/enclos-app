@@ -515,7 +515,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         screenLock = { AppLock.available(getApplication()) },
         clock = android.os.SystemClock::elapsedRealtime,
         // Written at once (commit), not later: a choice must survive the app being stopped right after.
-        keep = { on -> settings.edit(commit = true) { putBoolean("lock", on) } },
+        keep = { on ->
+            settings.edit(commit = true) { putBoolean("lock", on) }
+            // Notifications shown before keep their words: they go, as the
+            // ones to come say only "New message".
+            if (on) Notifier.cancelAll(getApplication())
+        },
     )
 
     /** The agents (`host/sandbox/agent`) whose conversations the inbox shows unfolded, while the app runs. */
@@ -538,9 +543,31 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     init {
         // The inbox is always by agent now: the earlier choice to group it goes.
-        if (settings.contains("inbox.grouped")) settings.edit { remove("inbox.grouped") }    }
+        if (settings.contains("inbox.grouped")) settings.edit { remove("inbox.grouped") }
+        // A new FCM token, while the app runs: given at once to each host
+        // connected; the others get it when they next connect.
+        PushTokens.changed = { token -> ui { connections.keys.toList().forEach { pushToken(it, token) } } }
+    }
 
     private fun ui(block: () -> Unit) = main.post(block)
+
+    /** Gives [host] this phone's FCM token (enclos `docs/protocol.md`, `push.token`). */
+    private fun pushToken(host: String, token: String) {
+        connections[host]?.send(message("push.token", "kind" to "fcm", "token" to token))
+    }
+
+    /**
+     * A conversation a notification was tapped for, with its host: opened
+     * once the phone holds it, which may be after the sync the connection
+     * starts. The person going anywhere else first drops it.
+     */
+    val openedConversation = mutableStateOf<ConversationKey?>(null)
+
+    /** A notification of [conversation], from [host], was tapped. */
+    fun openFromNotification(host: String, conversation: String) {
+        if (paired.none { it.name == host }) return
+        openedConversation.value = ConversationKey(host, conversation)
+    }
 
     /**
      * A link that names a host already paired with another bridge, waiting
@@ -828,6 +855,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                         "device_key" to encodeBytes(Keys.devicePublicKey(attempt.alias)),
                         "proof" to encodeBytes(pairingProof(parsed.code, session.handshakeHash())),
                         "sig" to encodeBytes(Keys.sign(attempt.alias, pairingSignatureMessage(session.handshakeHash()))),
+                        // This phone's FCM token, when push is on: the host pushes to it.
+                        "push" to PushTokens.current(getApplication())?.let(Push::token),
                     )
                 },
                 // A field missing here ends the connection (BridgeConnection),
@@ -872,6 +901,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         }
         // Paired again, as another device: what the host sent before is forgotten.
         forget(host.name)
+        // Its pushes too: a bridge paired again may count from the start.
+        Notifier.forget(getApplication(), host.name)
         paired.removeAll { it.name == host.name }
         paired.add(host)
         // Another bridge under the same name: nothing of the old one stays.
@@ -1029,9 +1060,18 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (ready) paired.filter { it.name !in connections }.forEach { connect(it) }
     }
 
-    /** The app left the foreground: its connections stay up while the phone lets them. */
+    /**
+     * The app left the foreground. With push on, it closes its connections:
+     * a host pushes only to a person with no device connected, so a
+     * connection kept up in the background would keep every notification
+     * away (enclos `docs/protocol.md`, Notifications). Without push they stay
+     * up while the phone lets them, as before. Back in the foreground,
+     * [foreground] opens them again.
+     */
     fun background() {
         foreground = false
+        if (PushTokens.current(getApplication()) == null) return
+        connections.values.toList().forEach { it.close() }
     }
 
     private fun reopen(name: String) {
@@ -1109,6 +1149,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 forgetting.authenticated(host.name)
                 // What is on the phone is kept: only what is newer comes.
                 connections[host.name]?.send(message("sync", "since" to since(host.name)))
+                // The token at each connection: the host keeps the last one given.
+                // None yet (Firebase could not give one at start): asked again.
+                when (val token = PushTokens.current(getApplication())) {
+                    null -> PushSetup.askToken(getApplication())
+                    else -> pushToken(host.name, token)
+                }
             }
             // A usage window this phone asked for.
             "usage.report" -> {
@@ -1861,6 +1907,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections.remove(name)?.close()
         failures.remove(name)
         hosts.remove(name)
+        Notifier.forget(getApplication(), name)
         // The Keystore off the main thread; should it fail, the next start's sweep deletes the key.
         saving.execute {
             try {
@@ -2017,6 +2064,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        PushTokens.changed = null
         agentImages.close()
         connections.values.forEach { it.close() }
         work.shutdown()
