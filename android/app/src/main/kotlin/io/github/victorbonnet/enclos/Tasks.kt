@@ -49,6 +49,12 @@ data class AgentTask(
      * card stays where it appeared.
      */
     val placed: Long = since,
+    /**
+     * How many comments it has, from a runtime that keeps comments; none
+     * when it says nothing. A change has an open task sheet ask for the
+     * task's detail again ([TaskDetails.updated]).
+     */
+    val comments: Int? = null,
 ) {
     val sandbox: String get() = assignee.substringBefore('/')
     val key: TaskKey get() = TaskKey(host, sandbox, id)
@@ -59,7 +65,7 @@ data class AgentTask(
     fun json(): JSONObject = JSONObject()
         .put("host", host).put("id", id).put("title", title).put("assignee", assignee)
         .put("asked_by", askedBy).put("conversation", conversation).put("state", state.wire)
-        .put("since", since).put("summary", summary).put("placed", placed)
+        .put("since", since).put("summary", summary).put("placed", placed).put("comments", comments)
 
     companion object {
         /** The most characters of a title shown, as the bridge cuts it. */
@@ -102,14 +108,22 @@ data class AgentTask(
                 since = since,
                 summary = (t.opt("summary") as? String)?.let { oneLine(it, MAX_SUMMARY) }?.ifEmpty { null },
                 placed = placed ?: since,
+                comments = count(t.opt("comments")),
             )
         }
 
         /** `sandbox/agent`, each part an id; none otherwise. */
-        private fun agentName(value: Any?): String? = protocolId(value)?.takeIf {
+        internal fun agentName(value: Any?): String? = protocolId(value)?.takeIf {
             val parts = it.split('/')
             parts.size == 2 && parts.all(String::isNotBlank)
         }
+
+        /** A count as JSON gives one: a whole number, at least 0; none otherwise. */
+        internal fun count(value: Any?): Int? = when (value) {
+            is Int -> value
+            is Long -> value.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            else -> null
+        }?.takeIf { it >= 0 }
     }
 }
 
@@ -136,6 +150,9 @@ class TaskCache(private val into: MutableMap<TaskKey, AgentTask> = mutableMapOf(
 
     /** Every task kept. */
     val all: Collection<AgentTask> get() = into.values
+
+    /** The task kept under [key], if any. */
+    operator fun get(key: TaskKey): AgentTask? = into[key]
 
     /** Tasks the phone kept, at start, before any connection. */
     fun load(kept: Collection<AgentTask>) = kept.forEach { into[it.key] = it }

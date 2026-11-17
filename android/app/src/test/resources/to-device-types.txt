@@ -5,7 +5,8 @@
 # of the crate core-ffi pins (core-ffi's tests). Update it from enclos when the
 # pin moves. held_task and held_task.result come from enclos#287 (held tasks,
 # ADR 0066), ahead of the pin: the app reads them in Kotlin, so no core-ffi
-# change needs them.
+# change needs them. task.detail comes from the enclos PR for #318 (task
+# details), ahead of the pin, read in Kotlin the same way.
 ack
 agent.activity
 agent.avatar
@@ -38,6 +39,7 @@ sandbox.policy.preview
 sandboxes.list
 synced
 task
+task.detail
 task.removed
 tool
 typing

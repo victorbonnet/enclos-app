@@ -18,7 +18,7 @@ internal val BRIDGE_TYPES: Set<String> = setOf(
     "authenticated", "commands", "conversation", "conversation.deleted", "error", "group.state", "held_task", "held_task.result", "message",
     "operation.progress", "pair.accepted", "pair.refused", "question", "question.result", "routine.response",
     "runtime.installed", "runtimes.list", "sandbox.created", "sandbox.policy", "sandbox.policy.preview",
-    "sandboxes.list", "synced", "task", "task.removed", "tool", "typing", "usage", "usage.report",
+    "sandboxes.list", "synced", "task", "task.detail", "task.removed", "tool", "typing", "usage", "usage.report",
 )
 
 /** Why the app skipped a message of its bridge, as the host's screens show it ([unreadableShown]), and whether it was a history `message`. */

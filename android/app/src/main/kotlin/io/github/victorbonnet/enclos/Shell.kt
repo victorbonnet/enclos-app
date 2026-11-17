@@ -232,6 +232,7 @@ private fun can(capability: String): String? = when (capability) {
     "attachments" -> "sends files"
     "activity" -> "says what it is doing"
     "tasks" -> "reports its tasks"
+    "task_details" -> "shares its tasks' details"
     else -> null
 }
 
@@ -291,7 +292,10 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 Text(agent.label, style = Type.heading, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(agent.address, style = Type.code, color = p.textFaint)
                 activity?.label?.let { doing ->
-                    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Working on a task the phone keeps: tapping opens its sheet.
+                    val task = model.activeTask(agent.address)
+                    val open = if (task != null) Modifier.clickable(onClickLabel = "Open the task") { model.taskDetails.show(task.key) } else Modifier
+                    Row(Modifier.padding(top = 6.dp).then(open), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         WorkingWave(square = 4.dp, lift = 3.dp)
                         Text(doing, style = Type.small, color = p.accent)
                     }
@@ -330,7 +334,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 }
             }
             AgentUsageSection(model, agent)
-            if (model.offersTasks(agent.address)) AgentTasks(model, agent, openChat)
+            if (model.offersTasks(agent.address)) AgentTasks(model, agent)
             if (agent.offersRoutines) {
                 Section("Routines") {
                     SettingRow(Modifier.clickable(onClickLabel = "Manage routines", onClick = openRoutines)) {
@@ -430,11 +434,11 @@ private const val ENDED_SHOWN = 5
  * An agent's tasks, on its page: those still going (queued, running,
  * blocked) first, then those that ended, the five most recent before Show
  * all. Each its mark, its title on one line, where it is and who asked for
- * it, and its summary once ended; one asked for in a conversation this
- * phone holds opens it. Every text is the sandbox's, drawn as plain text.
+ * it, and its summary once ended; each opens its [task sheet][TaskSheet].
+ * Every text is the sandbox's, drawn as plain text.
  */
 @Composable
-private fun AgentTasks(model: AppModel, agent: Agent, openChat: (String) -> Unit) {
+private fun AgentTasks(model: AppModel, agent: Agent) {
     val p = palette
     val tasks = model.tasksOf(agent.address)
     val current = tasks.filter { !it.state.ended }
@@ -454,8 +458,7 @@ private fun AgentTasks(model: AppModel, agent: Agent, openChat: (String) -> Unit
             }
         }
         (current + if (allEnded) ended else ended.take(ENDED_SHOWN)).forEach { task ->
-            val asked = task.conversation?.takeIf { id -> model.conversations.any { it.host == task.host && it.id == id } }
-            SettingRow(if (asked != null) Modifier.clickable(onClickLabel = "Open the conversation it was asked in") { openChat(asked) } else Modifier) {
+            SettingRow(Modifier.clickable(onClickLabel = "Open the task") { model.taskDetails.show(task.key) }) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) { TaskMark(task.state) }
                     Column(Modifier.weight(1f)) {
@@ -466,7 +469,7 @@ private fun AgentTasks(model: AppModel, agent: Agent, openChat: (String) -> Unit
                             Text(it, style = Type.small, color = p.textMuted, maxLines = 3, overflow = TextOverflow.Ellipsis)
                         }
                     }
-                    if (asked != null) Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+                    Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
                 }
             }
         }

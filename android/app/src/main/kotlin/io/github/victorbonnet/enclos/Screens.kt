@@ -1487,8 +1487,11 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 )
                 val doing = activity?.label
                 if (doing != null) {
-                    // The agent at work, wherever: the wave and what it does, in place of its address.
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // The agent at work, wherever: the wave and what it does, in place of its address;
+                    // working on a task the phone keeps, tapping it opens the task's sheet.
+                    val task = model.activeTask(scope)
+                    val open = if (task != null) Modifier.clickable(onClickLabel = "Open the task") { model.taskDetails.show(task.key) } else Modifier
+                    Row(open, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         WorkingWave(square = 4.dp, lift = 3.dp)
                         Text(
                             if (conversation.title != null) "$agent · $doing" else doing,
@@ -1568,7 +1571,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             // A task card after the message it follows in time, newest lowest, as the list is drawn bottom-up.
             fun cardsAt(index: Int) = cardsAfter[index].orEmpty().reversed().forEach { task ->
                 item(key = "task-${task.sandbox}/${task.id}") {
-                    Arriving { TaskCard(task, model.agentLabel(task.assigneeAddress), now) }
+                    Arriving { TaskCard(task, model.agentLabel(task.assigneeAddress), now) { model.taskDetails.show(task.key) } }
                 }
             }
             for (i in lines.indices.reversed()) {
