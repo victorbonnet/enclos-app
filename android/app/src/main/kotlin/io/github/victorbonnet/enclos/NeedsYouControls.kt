@@ -19,7 +19,7 @@ fun NeedsYouRow(item: OpenItem, label: String, online: Boolean, photo: PhotoKey?
             photo = photo)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(label + if (item.expired) " · Expired" else "", style = Type.name, color = palette.accent)
-            Text(item.summary, style = Type.body, color = palette.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(item.summary, style = Type.small, color = palette.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(item.host + if (online) "" else " · Offline, cached request", style = Type.small, color = palette.textMuted)
         }
         Glyph(Glyphs.chevron, palette.textFaint, size = 16.dp)
