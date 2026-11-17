@@ -1028,11 +1028,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             bridgeKey = host.bridgeKey,
             noisePrivate = { Keys.unwrap(host.noiseKeyWrapped) },
             first = { session ->
-                message(
-                    "auth",
-                    "device" to host.deviceId,
-                    "sig" to encodeBytes(Keys.sign(host.keyAlias, authSignatureMessage(session.handshakeHash()))),
-                )
+                val signature = Keys.sign(host.keyAlias, authSignatureMessage(session.handshakeHash()))
+                message("auth", *authFields(host.deviceId, encodeBytes(signature)))
             },
             // A message the app cannot read is answered `bad_message` and
             // skipped; the connection goes on (enclos docs/protocol.md,
