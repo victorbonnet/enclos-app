@@ -408,6 +408,8 @@ private fun Screens(model: AppModel, ask: Ask) {
                 }
             }
         }
+        // A task opened from any screen: its sheet over it.
+        TaskSheet(model, openChat = { go(Route.Chat(it)) })
     }
 }
 

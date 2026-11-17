@@ -22,8 +22,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.AgentTask
@@ -36,18 +40,23 @@ import io.github.victorbonnet.enclos.taskStatus
  * ([assignee], as the app names it), its title and where it is (`running
  * 12 min`), then its summary once it ended. It is not a message: a framed
  * line among them, never a bubble. Every text is the sandbox's, drawn as
- * plain text, the title on one line.
+ * plain text, the title on one line. Tapping it opens the task ([open]).
  */
 @Composable
-fun TaskCard(task: AgentTask, assignee: String, now: Long) {
+fun TaskCard(task: AgentTask, assignee: String, now: Long, open: () -> Unit) {
     val p = palette
     val line = taskLine(assignee, task, now)
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Column(
             Modifier.widthIn(max = 340.dp).fillMaxWidth().clip(Shapes.control)
                 .border(1.dp, p.lineStrong, Shapes.control).background(p.surface)
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                .clearAndSetSemantics { contentDescription = "Task: $line" + (task.summary?.takeIf { task.state.ended }?.let { ". $it" } ?: "") },
+                .clearAndSetSemantics {
+                    contentDescription = "Task: $line" + (task.summary?.takeIf { task.state.ended }?.let { ". $it" } ?: "")
+                    role = Role.Button
+                    onClick("Open the task") { open(); true }
+                }
+                .clickable(onClick = open)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { TaskMark(task.state) }

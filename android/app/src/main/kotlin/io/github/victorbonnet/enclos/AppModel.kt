@@ -311,6 +311,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         changed = ::applyAgentName,
         later = { wait, action -> main.postDelayed({ action() }, wait) },
     )
+    /** The task sheet: which task it shows, and that task's detail, fetched from its host while it shows. */
+    val taskDetails = TaskDetails(
+        send = { host, command -> connections[host]?.send(command) == true },
+        task = { key -> tasks[key] },
+        available = { task -> connected(task.host) && offersTaskDetails(task.assigneeAddress) },
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+    )
     val routines = RoutineClient(
         send = { host, command -> connections[host]?.send(command) == true },
         connected = ::connected,
@@ -712,6 +719,17 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun taskCards(conversation: Conversation): List<AgentTask> =
         tasks.askedIn(conversation.host, conversation.id).filter { offersTasks(it.assigneeAddress) }
 
+    /** Whether the agent at [address] (`host/sandbox/agent`) shares its tasks' details: its channel has the `task_details` capability. */
+    fun offersTaskDetails(address: String) = agents.any { it.address == address && "task_details" in it.capabilities }
+
+    /** The task the agent at [address] (`host/sandbox/agent`) is working on, as its activity names it, when the phone keeps that task. */
+    fun activeTask(address: String): AgentTask? {
+        if (!offersTasks(address)) return null
+        val sandbox = address.substringAfter('/').substringBefore('/')
+        return activityOf(address)?.doing?.filterIsInstance<Doing.Task>()
+            ?.firstNotNullOfOrNull { tasks[TaskKey(address.substringBefore('/'), sandbox, it.task)] }
+    }
+
     /** The key a task is kept under on the phone. */
     private fun taskKey(key: TaskKey) = "${key.host}/${key.sandbox}/${key.id}"
 
@@ -967,6 +985,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // What the agents were doing comes again after `agents.list`; a sync the old connection began drops nothing.
         activities.ended(host.name)
         tasks.ended(host.name)
+        taskDetails.ended(host.name)
         // A connection replaced says nothing more ([ended] is not called): what went over it may be lost.
         connections.remove(host.name)?.let {
             it.close()
@@ -1044,6 +1063,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // What its agents were doing is live state: unknown until the next connection says it.
         activities.ended(host.name)
         tasks.ended(host.name)
+        taskDetails.ended(host.name)
         // Files being fetched from it stop; asked again, they go on from where they were.
         fetching.filterValues { it.host == host.name }.keys.forEach {
             fetching.remove(it)
@@ -1097,6 +1117,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (m.optString("type") in setOf("held_task", "held_task.result", "error") && heldTasks.received(host.name, m)) return
         if (m.optString("type") in setOf("agent.name", "error") && agentNames.received(host.name, m)) return
         if (m.optString("type") in setOf("routine.response", "error") && routines.received(host.name, m)) return
+        if (m.optString("type") in setOf("task.detail", "error") && taskDetails.received(host.name, m)) return
         when (m.optString("type")) {
             "sandbox.policy", "sandbox.policy.preview" -> {
                 val of = m.optString("of")
@@ -1202,7 +1223,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "agent.activity" -> activities.received(host.name, m)
             // A task, new or changed: at each sync and whenever it changes, to the host's person only.
-            "task" -> keepTask(tasks.received(AgentTask.from(host.name, m)))
+            // An open sheet on it asks for its detail again when its state or comments changed.
+            "task" -> {
+                val incoming = AgentTask.from(host.name, m)
+                val before = tasks[incoming.key]
+                val kept = tasks.received(incoming)
+                keepTask(kept)
+                taskDetails.updated(before, kept)
+            }
             "task.removed" -> tasks.removed(host.name, m.getString("agent"), m.getString("task"))?.let { dropTasks(listOf(it)) }
             // A conversation and its name: at each sync (so an empty one is
             // known too), when one starts, and when its name changes.
@@ -1991,6 +2019,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         saving.execute { approvalCache.edit { clear() } }
         activities.clear()
         tasks.clear()
+        taskDetails.close()
         saving.execute { taskCache.edit { clear() } }
         conversations.clear()
         // What was written goes too: its conversations are gone, and drafts do not come back.
@@ -2052,6 +2081,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         forgetPolicy(host)
         activities.ended(host)
         tasks.forget(host)
+        taskDetails.forget(host)
         saving.execute { taskCache.edit { taskCache.all.keys.filter { it.startsWith("$host/") }.forEach { remove(it) } } }
         val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
         conversations.removeAll { it.host == host }
