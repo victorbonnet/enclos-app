@@ -413,6 +413,7 @@ fun InboxScreen(
                         if (agentsShown) agents.forEach { entry ->
                             val expanded = entry.address in model.unfolded
                             val rows = entry.under
+                            val task = if (!narrowed) model.activeTask(entry.address) else null
                             // Searching shows everything found: no "more" then.
                             val hidden = entry.others - rows.size
                             val more = !narrowed && (hidden > 0 || (expanded && entry.others > RECENT))
@@ -426,7 +427,8 @@ fun InboxScreen(
                                         query,
                                         now,
                                         archivedOnly,
-                                        branches = rows.isNotEmpty() || more,
+                                        branches = task != null || rows.isNotEmpty() || more,
+                                        taskShown = task != null,
                                         menu = AgentMenu(
                                             start = agent?.let { { start(it) } },
                                             all = if (more) toggle else null,
@@ -437,6 +439,13 @@ fun InboxScreen(
                                         ),
                                         onOpen = entry.home?.let { home -> { open(home.id) } } ?: if (more) toggle else null,
                                     )
+                                }
+                            }
+                            if (task != null) {
+                                item(key = "active-task:${entry.address}") {
+                                    Arriving {
+                                        TaskBranch(task, now, last = rows.isEmpty() && !more) { model.taskDetails.show(task.key) }
+                                    }
                                 }
                             }
                             items(rows.size, key = { rows[it].conversation.id }) { i ->
@@ -530,12 +539,12 @@ private fun Modifier.branch(color: Color, last: Boolean) = drawBehind {
  * An agent in the inbox: its initial (pulsing while it works), its name,
  * then working (the wave) or how long ago it last said something, and a
  * chevron; under the name, its Home's last message on one line (or, while
- * it works, what it does), and Home's unread count. Tapping it opens its
- * Home; a long press opens its [menu]. With conversations under it, the
- * tree's trunk starts below the initial.
+ * it works, what it does unless its task has a branch), and Home's unread
+ * count. Tapping it opens its Home; a long press opens its [menu]. With
+ * conversations under it, the tree's trunk starts below the initial.
  */
 @Composable
-private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Long, archived: Boolean, branches: Boolean, menu: AgentMenu, onOpen: (() -> Unit)?) {
+private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Long, archived: Boolean, branches: Boolean, taskShown: Boolean, menu: AgentMenu, onOpen: (() -> Unit)?) {
     val p = palette
     val name = model.agentLabel(entry.address)
     val haptics = LocalHapticFeedback.current
@@ -597,7 +606,7 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
                 val shown = entry.homeMatch ?: last
                 val text = when {
                     at != null && entry.homeMatch == null -> model.doing(at.id) ?: "working"
-                    activity != null && entry.homeMatch == null -> activity.label ?: "working"
+                    activity != null && entry.homeMatch == null && !taskShown -> activity.label ?: "working"
                     shown == null -> if (home != null) "Cron jobs and the agent's notices come here." else ""
                     shown.from == "agent" -> remember(shown.text) { words(shown) }
                     else -> "You: ${shown.text}"
@@ -819,6 +828,31 @@ private fun TreeRow(model: AppModel, c: Conversation, match: Line?, query: Strin
             }
             if (match != null) Preview(match, true, query, false, "", model.statusSource(c), Modifier.padding(top = 2.dp))
         }
+    }
+}
+
+/** The task the agent is working on, as a branch before its conversations; tapping opens its sheet. */
+@Composable
+private fun TaskBranch(task: AgentTask, now: Long, last: Boolean, open: () -> Unit) {
+    val p = palette
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(onClickLabel = "Open task: ${task.title}", role = Role.Button, onClick = open)
+            .branch(p.lineStrong, last)
+            .padding(start = 60.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            task.title,
+            style = Type.name.copy(fontSize = 15.sp, fontWeight = FontWeight.Normal),
+            color = p.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text("Task · ${taskStatus(task, now)}", style = Type.small, color = p.accent, maxLines = 1)
+        Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
     }
 }
 
