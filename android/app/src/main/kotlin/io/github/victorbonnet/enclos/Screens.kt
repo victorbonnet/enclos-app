@@ -1202,41 +1202,21 @@ internal fun RecentUsageRefresh(model: AppModel, hosts: List<String>) {
     }
 }
 
-/** An agent, as the conversations view shows it, without its conversations: tapping it opens its page. */
+/** The Agents list and sandbox pages share current activity, attention and usage. */
 @Composable
 internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () -> Unit) {
-    val p = palette
     val working = model.workingOn(agent)
     val activity = model.activityOf(agent.address)
-    Row(
-        Modifier.fillMaxWidth().clickable(onClickLabel = "Open ${agent.label}", onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        AgentInitial(agent.label, working.isNotEmpty() || activity != null, side = 32.dp, photo = agent.photoKey)
-        Column(Modifier.weight(1f)) {
-            Text(agent.label, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (working.isNotEmpty() || activity != null) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    WorkingWave(square = 4.dp, lift = 3.dp)
-                    val doing = working.firstOrNull()?.let { model.doing(it.id) } ?: activity?.label ?: "working"
-                    Text(doing, style = Type.small, color = p.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            } else {
-                val last = model.lastActive(agent)
-                Text(if (last != null) "active ${Times.ago(last, now)}" else "no message yet", style = Type.small, color = p.textMuted)
-            }
-        }
-        // What it used over the last day, so an agent using a lot stands out; nothing when none.
-        model.recentUsage[agent.host]?.of(agent.name)?.total?.let(::recentUsageText)?.let { used ->
-            Text(used, style = Type.small, color = p.textMuted, maxLines = 1)
-        }
-        model.attentionItems().count { it.agent != null && "${it.host}/${it.agent}" == agent.address }.takeIf { it > 0 }?.let { count ->
-            Text("$count needs you", style = Type.small, color = p.accent)
-        }
-        Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
-    }
+    val busy = working.isNotEmpty() || activity != null
+    val last = model.lastActive(agent)
+    AgentListRow(
+        agent = agent, busy = busy,
+        status = if (busy) working.firstOrNull()?.let { model.doing(it.id) } ?: activity?.label ?: "working"
+            else if (last != null) "active ${Times.ago(last, now)}" else "no message yet",
+        usage = model.recentUsage[agent.host]?.of(agent.name)?.total?.let(::recentUsageText),
+        needsYou = model.attentionItems().count { it.agent != null && "${it.host}/${it.agent}" == agent.address },
+        onClick = onClick,
+    )
 }
 
 /**
