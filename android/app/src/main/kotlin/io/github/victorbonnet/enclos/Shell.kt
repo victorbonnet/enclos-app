@@ -827,8 +827,6 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
 internal fun ForgetAgentSection(model: AppModel, key: AgentKey, label: String) {
     if (!model.forgetting.offers(key)) return
     val p = palette
-    var asking by remember { mutableStateOf(false) }
-    val unavailable = model.forgetting.unavailable(key)
     Section("Removed agent") {
         SettingRow {
             Text(
@@ -836,14 +834,24 @@ internal fun ForgetAgentSection(model: AppModel, key: AgentKey, label: String) {
                 style = Type.small, color = p.textMuted,
             )
         }
-        SettingRow(Modifier.clickable(enabled = unavailable == null, onClickLabel = "Forget $label") { asking = true }) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Glyph(Glyphs.delete, if (unavailable == null) p.text else p.textFaint, size = 20.dp)
-                Column {
-                    Text("Forget $label", style = Type.label, color = if (unavailable == null) p.text else p.textFaint)
-                    (if (key in model.forgetting.pending) "Forgetting agent…" else model.forgetting.errors[key] ?: unavailable)
-                        ?.let { Text(it, style = Type.small, color = p.textMuted) }
-                }
+        ForgetAgentAction(model, key, label)
+    }
+}
+
+/** One confirmation and action, shared by agent and host pages. */
+@Composable
+internal fun ForgetAgentAction(model: AppModel, key: AgentKey, label: String) {
+    if (!model.forgetting.offers(key)) return
+    val p = palette
+    var asking by remember(key) { mutableStateOf(false) }
+    val unavailable = model.forgetting.unavailable(key)
+    SettingRow(Modifier.clickable(enabled = unavailable == null, onClickLabel = "Forget $label") { asking = true }) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Glyph(Glyphs.delete, if (unavailable == null) p.text else p.textFaint, size = 20.dp)
+            Column {
+                Text("Forget $label", style = Type.label, color = if (unavailable == null) p.text else p.textFaint)
+                (if (key in model.forgetting.pending) "Forgetting agent…" else model.forgetting.errors[key] ?: unavailable)
+                    ?.let { Text(it, style = Type.small, color = p.textMuted) }
             }
         }
     }

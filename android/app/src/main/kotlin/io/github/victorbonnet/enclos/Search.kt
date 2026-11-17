@@ -13,6 +13,13 @@ sealed interface InboxFilter {
 /** A conversation the inbox shows, and the message that matched, when only a message did. */
 data class Found(val conversation: Conversation, val match: Line?)
 
+/** Results kept on screen while the next background search completes. */
+fun inboxSearchResults(query: String, listed: List<Found>, searched: List<Found>?): List<Found> {
+    if (query.isBlank()) return listed
+    val keys = listed.mapTo(HashSet()) { ConversationKey(it.conversation.host, it.conversation.id) }
+    return searched.orEmpty().filter { ConversationKey(it.conversation.host, it.conversation.id) in keys }
+}
+
 /** The inbox's two independent, restorable views; neither drops any history or read state. */
 fun inboxConversations(conversations: List<Conversation>, archived: Boolean = false): List<Conversation> =
     conversations.filter { it.archived == archived }

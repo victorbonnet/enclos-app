@@ -231,11 +231,11 @@ val Line.status: Boolean get() = kind == "status"
 /** The agent's messages among [lines] after [read]; a status line never counts. */
 internal fun unreadAmong(lines: List<Line>, read: Long): Int = lines.count { it.from == "agent" && !it.status && it.seq > read }
 
-/** The inbox uses the host's last saved agent inventory, including offline. Hidden history stays saved. */
-internal fun listedWith(conversation: Conversation, lines: List<Line>, agents: List<Agent>): Boolean {
+/** Missing channels keep their history visible; only a host-confirmed removal can hide it. */
+internal fun listedWith(conversation: Conversation, lines: List<Line>, agents: List<Agent>, confirmedRemoved: Boolean = false): Boolean {
     if (conversation.group) return true
-    return agents.any { it.host == conversation.host && it.name == conversation.agent } &&
-        (conversation.home || lines.isNotEmpty())
+    return (conversation.home || lines.isNotEmpty()) &&
+        (!confirmedRemoved || agents.any { it.host == conversation.host && it.name == conversation.agent })
 }
 
 /** The pairing in progress: what the link said, and how far it went. */
@@ -1196,6 +1196,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val listed = agents.filter { it.host == host.name }
                 agentImages.listed(host.name, listed)
                 save { agents(host.name, listed) }
+                forgetting.listed(host.name, listed.mapTo(HashSet()) { it.name })
                 // The bridge sends what each agent not idle is doing right after its list.
                 activities.listed(host.name)
             }
@@ -1446,8 +1447,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         conversations.removeAll { it.id == conversation }
     }
 
-    /** Whether the inbox lists [conversation] with the host's latest saved agents and its messages. */
-    fun listed(conversation: Conversation) = listedWith(conversation, lines[conversation.id].orEmpty(), agents)
+    /** Whether the inbox lists [conversation] with its host's current removal confirmation. */
+    fun listed(conversation: Conversation) = listedWith(conversation, lines[conversation.id].orEmpty(), agents,
+        forgetting.isRemoved(AgentKey(conversation.host, conversation.agent)))
 
     /** Who a status line of [conversation] is from: its agent's runtime, else the agent. */
     fun statusSource(conversation: Conversation): String =

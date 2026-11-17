@@ -93,11 +93,15 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
                     Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
                 }
             }
-            items(removed, key = { "removed:${it.name}" }) { agent ->
-                Column {
-                    Text(agent.name, style = Type.code, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp))
-                    ForgetAgentSection(model, agent, agent.name.substringAfterLast('/'))
+            if (removed.isNotEmpty()) item {
+                Section("Removed agents") {
+                    SettingRow {
+                        Text("Their Home and your conversations stay saved until you forget them. Group conversations stay.", style = Type.small, color = p.textMuted)
+                    }
                 }
+            }
+            items(removed, key = { "removed:${it.name}" }) { agent ->
+                ForgetAgentAction(model, agent, agent.name)
             }
             item {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

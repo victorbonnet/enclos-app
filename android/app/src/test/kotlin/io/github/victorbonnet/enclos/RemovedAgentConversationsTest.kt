@@ -21,7 +21,8 @@ class RemovedAgentConversationsTest {
             Conversation("mac", "lab/coder", "coder-archived", archived = true),
             Conversation("mac", "lab/director", "director-chat"),
             Conversation("pi", "lab/main", "pi-chat"))
-        fun visible(agents: List<Agent>) = saved.filter { listedWith(it, history, agents) }
+        val removed = setOf(AgentKey("mac", "lab/main"), AgentKey("mac", "lab/coder"))
+        fun visible(agents: List<Agent>) = saved.filter { listedWith(it, history, agents, AgentKey(it.host, it.agent) in removed) }
         assertEquals(saved, visible(listOf(main, coder, director, piMain)))
 
         val remaining = visible(listOf(director, piMain))
@@ -37,10 +38,15 @@ class RemovedAgentConversationsTest {
     }
 
     @Test
-    fun cached_agents_keep_conversations_visible_offline_but_an_empty_inventory_hides_them() {
+    fun missing_channels_tokens_and_kept_data_do_not_hide_saved_history() {
         assertTrue(listedWith(home, emptyList(), listOf(main)))
-        assertFalse(listedWith(home, history, emptyList()))
-        assertFalse(listedWith(home, history, listOf(piMain)))
+        assertTrue(listedWith(home, history, emptyList()))
+        assertTrue(listedWith(home, history, listOf(piMain)))
+        val direct = home.copy(id = "ordinary", home = false, archived = true)
+        assertTrue(listedWith(direct, history, emptyList()))
+        assertFalse(listedWith(home, history, emptyList(), confirmedRemoved = true))
+        // A fresh served inventory overrides a removal confirmation from before recreation.
+        assertTrue(listedWith(home, history, listOf(main), confirmedRemoved = true))
     }
 
     @Test

@@ -25,6 +25,32 @@ class AgentForgettingTest {
         assertEquals("mac/lab/coder", AgentKey("mac", "lab/coder").address)
     }
 
+    @Test fun an_agent_recreated_after_a_host_page_forget_has_no_page_close_flag() {
+        val f = Fixture()
+        f.listed("mac", "gone/coder")
+        f.listed("pi", "gone/coder")
+        assertTrue(f.client.forget(f.coder))
+        f.receipt("ack")
+        // No AgentScreen is open to consume the flag.
+        assertTrue(f.client.forgotten[f.coder] == true)
+        f.client.forgotten[AgentKey("pi", "gone/coder")] = true
+        f.client.listed("mac", setOf("gone/coder"))
+        assertFalse(f.coder in f.client.forgotten)
+        assertTrue(f.client.forgotten[AgentKey("pi", "gone/coder")] == true)
+        assertFalse(f.client.isRemoved(f.coder))
+    }
+
+    @Test fun a_live_inventory_refreshes_removal_checks_and_reappearing_agents_are_not_removed() {
+        val f = Fixture()
+        f.listed("mac", "gone/coder")
+        f.client.listed("mac", setOf("gone/coder"))
+        assertFalse(f.client.isRemoved(f.coder))
+        assertEquals("agents.removed", f.sent.single().second.getString("type"))
+        f.listed("mac")
+        f.client.listed("mac", emptySet())
+        assertEquals(2, f.sent.size)
+    }
+
     @Test fun the_host_page_keeps_its_removed_and_failed_actions_reachable() {
         val f = Fixture()
         f.listed("mac", "gone/coder")
