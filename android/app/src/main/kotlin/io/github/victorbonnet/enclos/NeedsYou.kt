@@ -114,7 +114,20 @@ fun questionReplyDraft(question: QuestionInfo, answer: QuestionAnswer): String? 
     return "Reply to your earlier question:\n${question.text}\n\nAnswer: $text"
 }
 
-/** Older bridges still contribute their existing sandbox requests. */
-fun AppModel.attentionItems(): List<OpenItem> = (needsYou.items.values + approvals.values.filter { it.attention }.map { a ->
-    OpenItem(a.host, a.id, "policy_request", a.agent.takeIf { it.isNotBlank() }?.let { if ('/' in it) it else "${a.sandbox}/$it" }, a.conversation, a.title, a.time, false)
-}).distinctBy { it.key }.sortedWith(compareByDescending<OpenItem> { it.since }.thenBy { it.key })
+/** Policy rows retain the host-resolved target, including while the discovery index catches up. */
+fun attentionItems(items: Collection<OpenItem>, policies: Collection<PolicyRequest>): List<OpenItem> {
+    val canonical = policies.associateBy { it.key }
+    fun policyItem(a: PolicyRequest) = OpenItem(a.host, a.id, "policy_request",
+        a.agent.takeIf { it.isNotBlank() }?.let { if ('/' in it) it else "${a.sandbox}/$it" },
+        a.conversation, a.title, a.time, false)
+    val projected = items.mapNotNull { item ->
+        if (item.kind != "policy_request") item
+        else canonical["${item.host}/${item.id}"]?.let { if (it.attention) policyItem(it) else null }
+            ?: item.takeIf { "${it.host}/${it.id}" !in canonical }
+    }
+    // Older bridges contribute their existing requests without the optional projection.
+    return (projected + policies.filter { it.attention }.map(::policyItem))
+        .distinctBy { it.key }.sortedWith(compareByDescending<OpenItem> { it.since }.thenBy { it.key })
+}
+
+fun AppModel.attentionItems(): List<OpenItem> = attentionItems(needsYou.items.values, approvals.values)

@@ -89,4 +89,16 @@ class NeedsYouTest {
         assertEquals(QuestionState.Expired, expired.state)
     }
 
+    @Test fun policy_rows_lead_with_the_host_resolved_target_and_never_duplicate_or_reopen() {
+        val request = PolicyRequest("host", "p", "lab", "lab/main", "home", "write", "/input",
+            false, "Allow the download?", 2, "pending", "", false, "r", true, null, "/resolved/private")
+        val projected = OpenItem("host", "p", "policy_request", null, "home", request.action, 2, false)
+        val shown = attentionItems(listOf(projected), listOf(request))
+        assertEquals(1, shown.size)
+        assertEquals("Write to /resolved/private", shown.single().summary)
+        assertEquals("lab/main", shown.single().agent)
+        assertTrue(attentionItems(listOf(projected), listOf(request.copy(state = "closed"))).isEmpty())
+        assertEquals(shown, attentionItems(emptyList(), listOf(request)))
+    }
+
 }
