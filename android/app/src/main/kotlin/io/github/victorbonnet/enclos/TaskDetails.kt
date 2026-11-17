@@ -300,6 +300,7 @@ class TaskDetails(
             if (pending == request) {
                 finish()
                 error = "The host did not reply. Try again."
+                askAgainIfChanged()
             }
         }
         if (!send(shown.host, command)) {
@@ -314,6 +315,18 @@ class TaskDetails(
     private fun finish() {
         pending = null
         loading = false
+    }
+
+    /**
+     * Once a request is answered, however it is: when the task changed
+     * while it waited, the newer task's detail is asked for. A request
+     * that failed with no such change waits for the person's Retry.
+     */
+    private fun askAgainIfChanged() {
+        if (again && pending == null) {
+            again = false
+            fetch()
+        }
     }
 
     /** A task came from a bridge, [before] being what the phone kept of it: an open sheet on it asks again when it changed ([asksAgain]). */
@@ -335,17 +348,14 @@ class TaskDetails(
             if (pending != request) return true
             finish()
             error = oneLine(m.optString("message"), MAX_ERROR_CHARS).ifEmpty { "The host could not get this task's details." }
-            again = false
+            askAgainIfChanged()
             return true
         }
         if (m.optString("agent") != request.agent || m.optString("task") != request.task) return true
         if (pending == request) finish()
         detail = TaskDetail.from(m.optJSONObject("detail"))
         error = null
-        if (again && pending == null) {
-            again = false
-            fetch()
-        }
+        askAgainIfChanged()
         return true
     }
 

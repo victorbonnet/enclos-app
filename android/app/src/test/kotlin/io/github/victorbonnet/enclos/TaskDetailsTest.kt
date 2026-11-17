@@ -191,6 +191,34 @@ class TaskDetailsTest {
     }
 
     @Test
+    fun a_change_while_a_request_waits_is_asked_for_even_when_that_request_fails() {
+        val h = Harness(task(comments = 1))
+        h.client.show(task().key)
+        h.client.fetch()
+        h.answer()
+        h.client.updated(task(comments = 1), task(comments = 2))
+        assertEquals(2, h.sent.size)
+        // A change while it waits, then the bridge's error: the newer task is asked for.
+        h.client.updated(task(comments = 2), task(comments = 3))
+        h.answer(type = "error", extra = ""","code":"agent_unavailable","message":"The agent's channel closed before it answered."""")
+        assertEquals(3, h.sent.size)
+        assertTrue(h.client.loading)
+        assertNull(h.client.error)
+        // The same when the request gets no answer at all.
+        h.client.updated(task(comments = 3), task(state = "done", comments = 3))
+        h.waits.last()()
+        assertEquals(4, h.sent.size)
+        assertTrue(h.client.loading)
+        // A failure with no change waits for Retry.
+        h.answer(type = "error", extra = ""","code":"internal"""")
+        assertEquals("The host could not get this task's details.", h.client.error)
+        assertEquals(4, h.sent.size)
+        assertFalse(h.client.loading)
+        // The displayed detail stays until a newer one comes.
+        assertEquals("Do it", h.client.detail?.body)
+    }
+
+    @Test
     fun an_error_shows_its_message_and_retry_asks_again() {
         val h = Harness(task())
         h.client.show(task().key)
