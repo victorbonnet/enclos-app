@@ -83,11 +83,17 @@ enum class View { Conversations, Agents }
  * and the agents, then conversation filters and Settings; the
  * view, swiped sideways between the two; and over its end, the search and
  * compose button, which starts a conversation with an agent the person picks.
+ * The Inbox filters ([unreadOnly], [archivedOnly]) are kept by the caller,
+ * outside the routes, so a full screen opened over this one leaves them.
  */
 @Composable
 fun HomeShell(
     model: AppModel,
     views: PagerState,
+    unreadOnly: Boolean,
+    archivedOnly: Boolean,
+    onUnreadOnly: (Boolean) -> Unit,
+    onArchivedOnly: (Boolean) -> Unit,
     onView: (View) -> Unit,
     openChat: (String) -> Unit,
     openAgent: (String) -> Unit,
@@ -106,8 +112,6 @@ fun HomeShell(
     // change once a swipe ends, not half way through it.
     val view = View.entries[views.settledPage]
     var query by rememberSaveable { mutableStateOf("") }
-    var unreadOnly by rememberSaveable { mutableStateOf(false) }
-    var archivedOnly by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
@@ -120,8 +124,8 @@ fun HomeShell(
                 ConversationFilters(
                     unreadOnly = unreadOnly,
                     archivedOnly = archivedOnly,
-                    onUnreadChange = { unreadOnly = it },
-                    onArchivedChange = { archivedOnly = it },
+                    onUnreadChange = onUnreadOnly,
+                    onArchivedChange = onArchivedOnly,
                 )
             }
             IconButton(Glyphs.settings, "Settings", settings, tint = p.textMuted)

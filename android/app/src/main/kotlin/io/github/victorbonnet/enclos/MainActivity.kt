@@ -269,6 +269,10 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun Screens(model: AppModel, ask: Ask) {
     var saved by rememberSaveable { mutableStateOf("tabs") }
+    // The Inbox filters, kept here, outside the routes' transition: the first
+    // screen is not composed while a full screen shows, and they outlive it.
+    var unreadOnly by rememberSaveable { mutableStateOf(false) }
+    var archivedOnly by rememberSaveable { mutableStateOf(false) }
     val views = rememberPagerState(pageCount = { View.entries.size })
     val routes = remember { SeekableTransitionState(Route.restore(saved)) }
     val transition = rememberTransition(routes, label = "route")
@@ -392,6 +396,10 @@ private fun Screens(model: AppModel, ask: Ask) {
                     Route.Tabs -> HomeShell(
                         model,
                         views,
+                        unreadOnly = unreadOnly,
+                        archivedOnly = archivedOnly,
+                        onUnreadOnly = { unreadOnly = it },
+                        onArchivedOnly = { archivedOnly = it },
                         onView = onView,
                         openChat = { go(Route.Chat(it)) },
                         openAgent = { go(Route.AgentPage(it)) },
