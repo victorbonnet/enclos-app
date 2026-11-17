@@ -78,17 +78,6 @@ class NeedsYouTest {
         assertEquals(2, persisted.size)
     }
 
-    @Test fun an_expired_answer_is_only_a_contextual_draft_not_a_native_resolution() {
-        val expired = QuestionInfo("host", "q", "Allow a fix?", listOf("Fix it", "Pause"), false,
-            "home", "lab/main", QuestionState.Expired, 1)
-        assertEquals("Reply to your earlier question:\nAllow a fix?\n\nAnswer: Fix it",
-            questionReplyDraft(expired, QuestionAnswer.Choices(listOf(0))))
-        assertNull(questionReplyDraft(expired, QuestionAnswer.Skip))
-        assertNull(questionReplyDraft(expired, QuestionAnswer.Choices(listOf(99))))
-        assertNull(questionReplyDraft(expired.copy(state = QuestionState.Pending), QuestionAnswer.Text("Yes")))
-        assertEquals(QuestionState.Expired, expired.state)
-    }
-
     @Test fun policy_rows_lead_with_the_host_resolved_target_and_never_duplicate_or_reopen() {
         val request = PolicyRequest("host", "p", "lab", "lab/main", "home", "write", "/input",
             false, "Allow the download?", 2, "pending", "", false, "r", true, null, "/resolved/private")

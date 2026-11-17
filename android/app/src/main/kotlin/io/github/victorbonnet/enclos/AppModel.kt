@@ -1486,22 +1486,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     private val drafts = mutableSetOf<String>()
 
-    /** A fresh draft, so replying to an old question never touches a newer native waiter. */
-    fun draftQuestionReply(question: QuestionInfo, answer: QuestionAnswer): Boolean {
-        if (question.state != QuestionState.Expired || question.approval != null) return false
-        val agent = agents.firstOrNull { it.host == question.host && it.name == question.agent }
-        if (conversations.none(question::belongsTo) || agent == null) {
-            questions.errors[question.key] = "The agent or its conversation is unavailable. Reconnect to refresh."
-            return false
-        }
-        val text = questionReplyDraft(question, answer) ?: return false
-        val id = newConversation(agent)
-        outgoing.write(id, text)
-        focusedRequest = null
-        openedConversation.value = ConversationKey(agent.host, id)
-        return true
-    }
-
     /** Starts a conversation with [agent], a draft until its first message; returns its id. */
     fun newConversation(agent: Agent): String {
         val id = UUID.randomUUID().toString()

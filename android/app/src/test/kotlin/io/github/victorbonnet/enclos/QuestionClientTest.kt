@@ -289,4 +289,21 @@ class QuestionClientTest {
         assertNull(client.errors[q.key])
     }
 
+    @Test fun an_expired_question_has_no_answer_or_skip_path_even_after_reconnection() {
+        val f = Fixture()
+        val expired = question.copy(state = QuestionState.Expired, revision = 1)
+        f.ready(expired)
+        repeat(2) {
+            assertFalse(f.client.offersAnswer(expired))
+            for (answer in listOf(QuestionAnswer.Choices(listOf(0)), QuestionAnswer.Text("Yes"), QuestionAnswer.Skip)) {
+                assertNull(f.client.submit(expired, answer))
+                assertNull(f.client.submit(question, answer))
+            }
+            f.ready(expired)
+        }
+        assertEquals(expired, f.client.questions[expired.key])
+        assertTrue(f.sent.isEmpty())
+        assertTrue(f.timers.isEmpty())
+    }
+
 }

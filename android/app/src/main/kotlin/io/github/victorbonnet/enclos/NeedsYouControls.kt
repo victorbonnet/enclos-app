@@ -72,7 +72,7 @@ fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (St
                         Text(current.summary, style = Type.small, color = palette.text)
                         Text("Open the conversation to review this request.", style = Type.small, color = palette.textMuted)
                     } else if (question.approval != null) RuntimeApprovalCard(model.questions, question)
-                    else QuestionCard(model.questions, question, showClose = false) { model.draftQuestionReply(question, it) }
+                    else QuestionCard(model.questions, question, showClose = false)
                 }
                 "policy_request" -> {
                     Text(current.summary, style = Type.small, color = palette.text)

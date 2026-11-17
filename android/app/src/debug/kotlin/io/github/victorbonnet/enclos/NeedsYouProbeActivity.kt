@@ -18,14 +18,15 @@ import io.github.victorbonnet.enclos.ui.*
 class NeedsYouProbeActivity : ComponentActivity() {
     var submitted: QuestionAnswer? = null
     var reply: String? = null
-    var drafted: String? = null
     var closedRequest: String? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val expired = intent.getBooleanExtra("expired", false)
+        val runtimeApproval = intent.getBooleanExtra("runtime_approval", false)
         val q = QuestionInfo("Ubuntu", "q", "Inbox filters reset when you return from an agent. Allow a fix and independent testing?",
-            listOf("Fix Inbox filters", "Keep paused"), false, "home", "lab/director",
-            if (expired) QuestionState.Expired else QuestionState.Pending, if (expired) 1 else 0)
+            if (runtimeApproval) emptyList() else listOf("Fix Inbox filters", "Keep paused"), false, "home", "lab/director",
+            if (expired) QuestionState.Expired else QuestionState.Pending, if (expired) 1 else 0,
+            approval = if (runtimeApproval) RuntimeApprovalDefinition("printf test", "Run a test", RuntimeApprovalAction.entries, patterns = listOf("printf test")) else null)
         lateinit var client: QuestionClient
         client = QuestionClient(send = { request ->
             submitted = request.answer
@@ -51,7 +52,8 @@ class NeedsYouProbeActivity : ComponentActivity() {
                             Text("Conversations", style = Type.heading, color = palette.text)
                             Text("Ordinary messages stay below requests.", style = Type.body, color = palette.textMuted)
                         } else {
-                            QuestionCard(client, client.questions[q.key]!!) { answer -> drafted = questionReplyDraft(q, answer) }
+                            if (runtimeApproval) RuntimeApprovalCard(client, client.questions[q.key]!!)
+                            else QuestionCard(client, client.questions[q.key]!!)
                             Text("Suggested replies", style = Type.label, color = palette.textMuted)
                             ReplyChoices(listOf("Fix Inbox filters", "Keep paused"), intent.getBooleanExtra("online", true)) { reply = it }
                         }

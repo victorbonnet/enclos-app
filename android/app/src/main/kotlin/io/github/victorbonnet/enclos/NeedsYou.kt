@@ -121,18 +121,6 @@ fun offeredReplies(line: Line, history: List<Line>): List<String> = line.suggest
     line.from == "agent" && history.none { other -> other.seq > line.seq && other.from != "agent" && !other.status }
 }.orEmpty()
 
-/** A draft only. Its fresh conversation identity keeps older/newer native waiters separate. */
-fun questionReplyDraft(question: QuestionInfo, answer: QuestionAnswer): String? {
-    if (question.state != QuestionState.Expired || question.approval != null || answer == QuestionAnswer.Skip) return null
-    if (runCatching { question.validateAnswer(answer) }.isFailure) return null
-    val text = when (answer) {
-        is QuestionAnswer.Choices -> answer.indices.joinToString("; ") { question.choices[it] }
-        is QuestionAnswer.Text -> answer.text
-        else -> return null
-    }
-    return "Reply to your earlier question:\n${question.text}\n\nAnswer: $text"
-}
-
 /** Policy rows retain the host-resolved target, including while the discovery index catches up. */
 fun attentionItems(items: Collection<OpenItem>, policies: Collection<PolicyRequest>, indexedHosts: Set<String> = emptySet()): List<OpenItem> {
     val canonical = policies.associateBy { it.key }

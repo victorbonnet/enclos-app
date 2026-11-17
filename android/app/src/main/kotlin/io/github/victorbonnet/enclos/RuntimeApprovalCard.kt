@@ -58,12 +58,12 @@ fun RuntimeApprovalCard(client: QuestionClient, question: QuestionInfo) {
         if (approval.outsideAscii) Text(OUTSIDE_ASCII_NOTICE, style = Type.small, color = p.text)
         SelectionContainer { Text(Visible.revealed(approval.reason), style = Type.body, color = p.text) }
         runtimeApprovalScopeNotes(approval).forEach { Text(it, style = Type.small, color = p.textMuted) }
-        if (approval.smartDenied) {
+        if (!terminal && approval.smartDenied) {
             Text(if (approval.actions == listOf(RuntimeApprovalAction.Deny)) "Only Deny is available for this request." else "Only Allow once or Deny is available for this request.", style = Type.small, color = p.textMuted)
         }
         Text("Existing sandbox policy still applies. Execution is reported separately.", style = Type.small, color = p.textMuted)
         if (!terminal) commandLengthNote(approval, startSeen)?.let { Text(it, style = Type.small, color = p.text) }
-        approval.actions.forEach { action ->
+        if (!terminal) approval.actions.forEach { action ->
             val ready = enabled && actionReady(action, startSeen)
             ActionButton(action.label, modifier = Modifier.fillMaxWidth().border(1.dp, if (ready) p.lineStrong else p.line, Shapes.control), enabled = ready) {
                 // A grant beyond this one command is confirmed first; Once and Deny are one explicit tap.
@@ -84,7 +84,7 @@ fun RuntimeApprovalCard(client: QuestionClient, question: QuestionInfo) {
         }
         client.errors[question.key]?.let { Text(it, style = Type.small, color = p.textMuted) }
     }
-    val action = confirming
+    val action = confirming.takeUnless { terminal }
     val text = action?.let { grantConfirmation(approval, it) }
     if (action != null && text != null) {
         ConfirmDialog("${action.label}?", text, action.label, onDismiss = { confirming = null }, enabled = enabled) {

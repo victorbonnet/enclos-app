@@ -1620,7 +1620,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                                 { Files(attached, model.files) { model.fetch(conversation.host, it) } }
                             },
                             content = question?.let { known -> {
-                                if (known.approval != null) RuntimeApprovalCard(model.questions, known) else QuestionCard(model.questions, known) { model.draftQuestionReply(known, it) }
+                                if (known.approval != null) RuntimeApprovalCard(model.questions, known) else QuestionCard(model.questions, known)
                             } } ?: held?.let { card -> { HeldTaskCard(model.heldTasks, card, onViewTask = { model.taskDetails.showHeld(card) }) } },
                         )
                         SuggestedReplyButtons(model, conversation, line, lines)
