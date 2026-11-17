@@ -327,7 +327,8 @@ fun InboxScreen(
         search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, "", filter, archived = archivedOnly, agentNames = { names[it.id].orEmpty() })
     }
     // A query reads every message: searched off the main thread, each
-    // message folded once (model.folds); the last result stays meanwhile.
+    // message folded once (model.folds). Keep previous matches while it runs,
+    // filtering them against the conversations still eligible for this view.
     var searched by remember { mutableStateOf<List<Found>?>(null) }
     LaunchedEffect(sorted, said, unread, names, query, filter, archivedOnly) {
         searched = if (query.isBlank()) {
@@ -338,7 +339,7 @@ fun InboxScreen(
             }
         }
     }
-    val found = if (query.isBlank()) listed else searched ?: listed
+    val found = inboxSearchResults(query, listed, searched)
     val requests = model.approvals.values.filter { a -> !archivedOnly && a.attention && (query.isBlank() || "${a.title} ${a.sandbox} ${a.host}".contains(query, ignoreCase = true)) }.sortedByDescending { it.time }
     val narrowed = archivedOnly || query.isNotBlank() || filter != InboxFilter.All
     // Groups have their own section; the agents' trees hold one-to-one conversations.
@@ -1371,7 +1372,7 @@ fun SettingsScreen(model: AppModel, pair: () -> Unit, ask: Ask, openHost: (Strin
             // What the phone keeps: synced again from the hosts when cleared.
             Section("On this phone") {
                 SettingRow {
-                    val count = model.conversations.count(model::listed)
+                    val count = model.conversations.size
                     Text(
                         "$count ${if (count == 1) "conversation" else "conversations"} and the files shown in them, kept to open at once.",
                         style = Type.small,
