@@ -95,4 +95,12 @@ class ReceivedTest {
         assertEquals("lab/coder is unreachable", s.reason)
         assertTrue(s.turns.isEmpty())
     }
+    @Test fun stopped_group_displays_the_runtime_continuation_notice() {
+        val reason = "The run continues in the runtime. Its reply will be dropped."
+        val frame = JSONObject("""{"state":"stopped","reason":"$reason"}""")
+        assertEquals(reason, groupStatusOf("host", frame).label(null))
+        frame.remove("reason")
+        assertEquals("Stopped", groupStatusOf("host", frame).label(null))
+    }
+
 }

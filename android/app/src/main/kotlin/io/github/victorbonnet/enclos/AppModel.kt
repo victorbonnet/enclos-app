@@ -196,7 +196,16 @@ data class GroupStatus(
     val maxRounds: Int,
     val turns: List<Pair<String, String?>>,
     val reason: String?,
-)
+) {
+    fun label(turnOf: String?): String? = when (state) {
+        "working" -> if (turnOf != null) "$turnOf is answering · round ${round + 1} of $maxRounds" else "Working"
+        "settled" -> "Settled"
+        "bounded" -> if (reason == "max_replies") "Paused: reply limit reached" else "Paused after $maxRounds rounds"
+        "stopped" -> reason?.let { Visible.stripped(it) }?.takeIf(String::isNotBlank) ?: "Stopped"
+        "failed" -> "Failed" + (reason?.let { ": $it" } ?: "")
+        else -> null
+    }
+}
 
 /**
  * A conversation's name as the bridge sent it, ready to show: without the
