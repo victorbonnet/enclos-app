@@ -36,7 +36,7 @@ internal fun questionStatus(question: QuestionInfo): String {
 
 /** Typed native questions only; readable history stays the fallback for older hosts. */
 @Composable
-fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
+fun QuestionCard(client: QuestionClient, question: QuestionInfo, onFollowup: ((QuestionAnswer) -> Unit)? = null) {
     if (question.approval != null) return
     val p = palette
     var selected by rememberSaveable(question.host, question.id) { mutableStateOf(emptyList<Int>()) }
@@ -44,8 +44,9 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
     var text by rememberSaveable(question.host, question.id) { mutableStateOf("") }
     val selection = QuestionSelection(selected.toSet(), other, text)
     val change: (QuestionSelection) -> Unit = { selected = it.indices.toList(); other = it.other; text = it.text }
-    val terminal = question.state != QuestionState.Pending
-    val unavailable = client.unavailable(question)
+    val followup = question.state == QuestionState.Expired && question.approval == null && onFollowup != null && client.closed[question.key] != true
+    val terminal = !followup && !client.offersAnswer(question)
+    val unavailable = if (followup) null else client.unavailable(question)
     val enabled = unavailable == null
     val confirmed = question.answer
     val indices = if (terminal) (confirmed as? QuestionAnswer.Choices)?.indices.orEmpty().toSet() else selection.indices
@@ -76,7 +77,7 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
             )
         }
         if (terminal) {
-            Text(questionStatus(question), style = Type.small, color = p.textMuted)
+            Text(if (client.closed[question.key] == true) "Request closed · the live question stays expired" else questionStatus(question), style = Type.small, color = p.textMuted)
             if (confirmed is QuestionAnswer.Choices) {
                 Text("Selected: ${confirmed.indices.joinToString("; ") { question.choices[it] }}", style = Type.body, color = p.text)
             }
@@ -88,11 +89,18 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
             if (answer == null && (custom || question.choices.isEmpty()) && text.isNotBlank()) {
                 Text("Remove tabs or hidden characters to submit.", style = Type.small, color = p.textMuted)
             }
-            PrimaryButton("Submit", enabled = enabled && answer != null) { answer?.let { client.submit(question, it) } }
-            ActionButton("Skip", enabled = enabled) { client.submit(question, QuestionAnswer.Skip) }
+            if (followup) Text("The live question expired. Open your answer in a new conversation, then press Send. Newer questions stay untouched; close this request separately when you are done.", style = Type.small, color = p.textMuted)
+            PrimaryButton(if (followup) "Open reply conversation" else "Submit", enabled = enabled && answer != null) {
+                answer?.let { if (followup) onFollowup?.invoke(it) else client.submit(question, it) }
+            }
+            if (!followup) ActionButton("Skip", enabled = enabled) { client.submit(question, QuestionAnswer.Skip) }
             unavailable?.let { Text(it, style = Type.small, color = p.textMuted) }
             // An unconfirmed outcome is settled by a fresh sync, not by reconnecting.
             if (client.canCheckAgain(question)) ActionButton("Check again") { client.checkAgain(question) }
+        }
+        if (client.offersClose(question) && client.closed[question.key] != true) {
+            ActionButton(if (question.key in client.closing) "Closing…" else "Close request", enabled = client.closeUnavailable(question) == null) { client.close(question) }
+            client.closeUnavailable(question)?.let { Text(it, style = Type.small, color = p.textMuted) }
         }
         client.errors[question.key]?.let { Text(it, style = Type.small, color = p.textMuted) }
     }

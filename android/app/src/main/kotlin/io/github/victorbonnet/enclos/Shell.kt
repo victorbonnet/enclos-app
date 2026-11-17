@@ -112,7 +112,7 @@ fun HomeShell(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // The switch follows the finger: the view a swipe would settle on.
-            ViewSwitch(View.entries[views.targetPage], onView)
+            ViewSwitch(View.entries[views.targetPage], model.attentionItems().size, onView)
             Spacer(Modifier.weight(1f))
             if (view == View.Conversations && model.paired.isNotEmpty()) {
                 ConversationFilters(
@@ -154,7 +154,7 @@ fun HomeShell(
  * in `text-muted`.
  */
 @Composable
-private fun ViewSwitch(view: View, onView: (View) -> Unit) {
+private fun ViewSwitch(view: View, waiting: Int, onView: (View) -> Unit) {
     val p = palette
     Row(
         Modifier.clip(Shapes.pill).border(1.dp, p.line, Shapes.pill).padding(4.dp),
@@ -163,12 +163,15 @@ private fun ViewSwitch(view: View, onView: (View) -> Unit) {
         listOf(View.Conversations to Glyphs.inbox, View.Agents to Glyphs.agents).forEach { (option, icon) ->
             val on = option == view
             Box(
-                Modifier.size(width = 52.dp, height = 40.dp).clip(Shapes.pill)
+                Modifier.widthIn(min = 52.dp).heightIn(min = 48.dp).clip(Shapes.pill)
                     .background(if (on) p.surface else Color.Transparent)
                     .selectable(selected = on, role = Role.Tab) { onView(option) }
-                    .semantics { contentDescription = if (option == View.Conversations) "Conversations" else "Agents" },
+                    .semantics { contentDescription = if (option == View.Conversations) "Conversations" + if (waiting > 0) ", $waiting needs you" else "" else "Agents" },
                 contentAlignment = Alignment.Center,
-            ) { Glyph(icon, if (on) p.text else p.textMuted, size = 22.dp) }
+            ) { Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                Glyph(icon, if (on) p.text else p.textMuted, size = 22.dp)
+                if (option == View.Conversations && waiting > 0) Text(if (waiting > 99) "99+" else waiting.toString(), style = Type.small, color = p.accent)
+            } }
         }
     }
 }

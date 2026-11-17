@@ -260,4 +260,33 @@ class QuestionClientTest {
         assertTrue(f.client.questions.isEmpty())
         assertTrue(f.client.pending.isEmpty())
     }
+    @Test fun close_requires_fresh_owned_metadata_and_an_exact_receipt_without_answering() {
+        val q = question.copy(state = QuestionState.Expired, revision = 1)
+        val sent = mutableListOf<Pair<QuestionInfo, String>>()
+        var online = true
+        var fresh = true
+        val timers = mutableListOf<() -> Unit>()
+        val client = QuestionClient(send = { fail("No native answer is sent"); false }, connected = { online },
+            accepts = { it.host == "mac" }, changed = {}, later = { _, fn -> timers += fn },
+            closeSupported = { true }, sendClose = { current, id -> sent += current to id; true },
+            projectionFresh = { fresh })
+        client.merge(q, cached = true)
+        assertFalse(client.close(q))
+        client.authenticated("mac"); client.merge(q); client.synced("mac")
+        online = false; assertFalse(client.close(q))
+        online = true; fresh = false; assertFalse(client.close(q))
+        fresh = true; assertTrue(client.close(q))
+        assertFalse(client.close(q))
+        val id = sent.single().second
+        client.received("other", message("question.closed", "of" to id, "question" to q.id))
+        assertFalse(client.closed[q.key] == true)
+        client.received("mac", message("question.closed", "of" to id, "question" to "another"))
+        assertFalse(client.closed[q.key] == true)
+        client.received("mac", message("question.closed", "of" to id, "question" to q.id))
+        assertTrue(client.closed[q.key] == true)
+        assertEquals(q, client.questions[q.key])
+        timers.forEach { it() }
+        assertNull(client.errors[q.key])
+    }
+
 }

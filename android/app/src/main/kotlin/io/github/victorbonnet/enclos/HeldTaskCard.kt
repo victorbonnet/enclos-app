@@ -35,13 +35,18 @@ const val HELD_TASK_FRAME = "Held task · the runtime keeps it; resuming changes
 @Composable
 fun HeldTaskCard(client: HeldTaskClient, card: HeldTask) {
     val p = palette
+    var reasonUnfolded by rememberSaveable(card.host, card.agent, card.task) { mutableStateOf(false) }
     var unfolded by rememberSaveable(card.host, card.agent, card.task) { mutableStateOf(false) }
     val unavailable = client.unavailable(card)
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // The runtime wrote all that follows; this line is the app's.
         Text(if (card.resumable) HELD_TASK_FRAME else "Held task", style = Type.small, color = p.textMuted)
         SelectionContainer { Text(card.title, style = Type.name, color = p.text) }
-        SelectionContainer { Text(card.reason, style = Type.body, color = p.text) }
+        SelectionContainer { Text(card.reason, style = Type.body, color = p.text,
+            maxLines = if (reasonUnfolded || (card.reason.length <= 180 && card.reason.count { it == '\n' } < 3)) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis) }
+        if (card.reason.length > 180 || card.reason.count { it == '\n' } >= 3) {
+            TextLink(if (reasonUnfolded) "Show less" else "Show details") { reasonUnfolded = !reasonUnfolded }
+        }
         card.lastError?.let { error ->
             val folds = foldsError(error)
             Text("Last error", style = Type.small, color = p.textMuted)

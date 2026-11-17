@@ -71,6 +71,7 @@ data class Line(
     val question: String? = null,
     /** The held task this message is about (a card of the same agent), whose card comes before it. */
     val heldTask: String? = null,
+    val suggestedReplies: List<String> = emptyList(),
 )
 
 /** A file of a message, fetched from the bridge when it is shown. */
@@ -332,14 +333,20 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     )
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
+    val needsYou = NeedsYou { host, items -> save { openItems(host, items) } }
+    var focusedRequest by mutableStateOf<OpenItem?>(null)
+
     val questions = QuestionClient(
         send = { request -> connections[request.question.host]?.send(request.command()) == true },
         connected = ::connected,
         accepts = { question -> paired.any { it.name == question.host } && conversations.any(question::belongsTo) },
         changed = { question -> save { question(question) } },
         later = { wait, action -> main.postDelayed({ action() }, wait) },
-        resync = { host -> connections[host]?.send(message("sync", "since" to since(host))) == true },
+        resync = { host -> connections[host]?.send(message("sync", "since" to since(host), "open_items" to true)) == true },
         dropped = { why -> android.util.Log.d("enclos", "question not shown: $why") },
+        projectionFresh = { host -> needsYou.staleHosts[host] != true },
+        closeSupported = { host -> hostSupports(host, "question.close") },
+        sendClose = { question, id -> connections[question.host]?.send(message("question.close", "question" to question.id, "revision" to question.revision).put("id", id)) == true },
     )
     val heldTasks = HeldTaskClient(
         send = { request -> connections[request.card.host]?.send(request.command()) == true },
@@ -348,7 +355,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         accepts = { card -> paired.any { it.name == card.host } && ConversationKey(card.host, card.conversation) !in deletion.deleted },
         changed = { card -> save { heldTask(card) } },
         later = { wait, action -> main.postDelayed({ action() }, wait) },
-        resync = { host -> connections[host]?.send(message("sync", "since" to since(host))) == true },
+        resync = { host -> connections[host]?.send(message("sync", "since" to since(host), "open_items" to true)) == true },
         dropped = { why -> android.util.Log.d("enclos", "held task not shown: $why") },
     )
     val deletion = ConversationDeletion(
@@ -414,6 +421,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     deletion.deleted.putAll(recent.deleted.associateWith { true })
                     conversations.addAll(recent.conversations.filter { ConversationKey(it.host, it.id) !in deletion.deleted })
                     recent.questions.forEach { questions.merge(it, cached = true) }
+                    needsYou.restore(recent.openItems)
                     recent.heldTasks.forEach { heldTasks.merge(it, cached = true) }
                     lines.putAll(recent.lines)
                     kept.putAll(recent.kept)
@@ -981,6 +989,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         agentNames.ended(host.name)
         routines.ended(host.name)
         questions.ended(host.name)
+        needsYou.ended(host.name)
         heldTasks.ended(host.name)
         // What the agents were doing comes again after `agents.list`; a sync the old connection began drops nothing.
         activities.ended(host.name)
@@ -1043,6 +1052,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         routines.ended(host.name)
         questions.ended(host.name)
+        needsYou.ended(host.name)
         heldTasks.ended(host.name)
         agentNames.ended(host.name)
         agentImages.ended(host.name)
@@ -1113,7 +1123,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (about != null && leftOutForClash(conversations, host.name, m.optString("type"), about)) {
             return refusedClash(host.name, about, m.optString("agent").ifBlank { null })
         }
-        if (m.optString("type") in setOf("question", "question.result", "error") && questions.received(host.name, m)) return
+        if (m.optString("type") == "open_items") { needsYou.received(host.name, m); return }
+        if (m.optString("type") in setOf("question", "question.result", "question.closed", "error") && questions.received(host.name, m)) return
         if (m.optString("type") in setOf("held_task", "held_task.result", "error") && heldTasks.received(host.name, m)) return
         if (m.optString("type") in setOf("agent.name", "error") && agentNames.received(host.name, m)) return
         if (m.optString("type") in setOf("routine.response", "error") && routines.received(host.name, m)) return
@@ -1152,6 +1163,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "authenticated" -> {
                 questions.authenticated(host.name)
+                needsYou.authenticated(host.name)
                 heldTasks.authenticated(host.name)
                 approvalsFresh[host.name] = false
                 // A connection that replaced another without ending it: what the old one said is not fresh.
@@ -1173,7 +1185,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 tasks.syncing(host.name)
                 forgetting.authenticated(host.name)
                 // What is on the phone is kept: only what is newer comes.
-                connections[host.name]?.send(message("sync", "since" to since(host.name)))
+                connections[host.name]?.send(message("sync", "since" to since(host.name), "open_items" to true))
                 // The token at each connection: the host keeps the last one given.
                 // None yet (Firebase could not give one at start): asked again.
                 when (val token = PushTokens.current(getApplication())) {
@@ -1459,6 +1471,22 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * opened and left leaves nothing behind.
      */
     private val drafts = mutableSetOf<String>()
+
+    /** A fresh draft, so replying to an old question never touches a newer native waiter. */
+    fun draftQuestionReply(question: QuestionInfo, answer: QuestionAnswer): Boolean {
+        if (question.state != QuestionState.Expired || question.approval != null) return false
+        val agent = agents.firstOrNull { it.host == question.host && it.name == question.agent }
+        if (conversations.none(question::belongsTo) || agent == null) {
+            questions.errors[question.key] = "The agent or its conversation is unavailable. Reconnect to refresh."
+            return false
+        }
+        val text = questionReplyDraft(question, answer) ?: return false
+        val id = newConversation(agent)
+        outgoing.write(id, text)
+        focusedRequest = null
+        openedConversation.value = ConversationKey(agent.host, id)
+        return true
+    }
 
     /** Starts a conversation with [agent], a draft until its first message; returns its id. */
     fun newConversation(agent: Agent): String {
@@ -1763,6 +1791,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Each message's folded words, for search, kept while the app runs. */
     val folds = Folds()
 
+    /** Buttons send exactly their label and keep any text already in the composer's draft. */
+    fun sendSuggested(conversation: Conversation, line: Line, reply: String): String? {
+        if (reply !in offeredReplies(line, lines[conversation.id].orEmpty()) || outgoing.waiting(conversation.id)) return "This reply is no longer available."
+        val draft = unsent[conversation.id]
+        val error = send(conversation, reply)
+        if (error == null && draft != null) outgoing.write(conversation.id, draft)
+        return error
+    }
+
     /**
      * Sends [text] in [conversation]; why it did not leave the field, or
      * `null` once it did. It goes only while the host is connected: the
@@ -1808,6 +1845,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val c = conversations.firstOrNull { it.host == key.host && it.id == key.id }
         val attached = if (c == null) emptyList() else lines[key.id].orEmpty().flatMap { it.attachments }
         questions.forgetConversation(key.host, key.id)
+        needsYou.forgetConversation(key.host, key.id)
         heldTasks.forgetConversation(key.host, key.id)
         if (c != null) {
             conversations.removeAll { it.host == key.host && it.id == key.id }
@@ -2002,7 +2040,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // Every host syncs again from the start: what was skipped comes again.
         unreadable.clear()
         paired.forEach { deletion.ended(it.name) }
-        paired.forEach { questions.forget(it.name) }
+        paired.forEach { questions.forget(it.name); needsYou.forget(it.name) }
         paired.forEach { heldTasks.forget(it.name) }
         paired.forEach { agentNames.forget(it.name) }
         paired.forEach { routines.forget(it.name) }
@@ -2070,6 +2108,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         clashes.remove(host)
         clashAgents.remove(host)
         questions.forget(host)
+        needsYou.forget(host)
         heldTasks.forget(host)
         deletion.forget(host)
         forgetting.clear(host)
@@ -2188,6 +2227,7 @@ fun lineIn(m: JSONObject): Line {
         question = (m.opt("question") as? String)?.takeIf { it.isNotBlank() },
         // A held task's id, without a hidden character, as the protocol carries one; anything else links no card.
         heldTask = protocolId(m.opt("held_task"))?.takeUnless { Visible.hasHidden(it) },
+        suggestedReplies = suggestedReplies(m.opt("suggested_replies")),
     )
 }
 

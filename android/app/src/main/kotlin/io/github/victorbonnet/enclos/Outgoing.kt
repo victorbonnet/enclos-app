@@ -24,7 +24,9 @@ class Outgoing {
     private data class Sent(val host: String, val id: String, val text: String, val back: Boolean = false)
 
     /** By conversation: what was sent and the bridge has not shown back yet, oldest first. */
-    private val sent = mutableMapOf<String, List<Sent>>()
+    private val sent = mutableStateMapOf<String, List<Sent>>()
+
+    fun waiting(conversation: String): Boolean = sent[conversation].orEmpty().isNotEmpty()
 
     /** The person wrote [text] in [conversation]'s field. */
     fun write(conversation: String, text: String) {
