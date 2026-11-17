@@ -340,7 +340,7 @@ fun InboxScreen(
         }
     }
     val found = inboxSearchResults(query, listed, searched)
-    val requests = model.approvals.values.filter { a -> !archivedOnly && a.attention && (query.isBlank() || "${a.title} ${a.sandbox} ${a.host}".contains(query, ignoreCase = true)) }.sortedByDescending { it.time }
+    val requests = model.attentionItems().filter { query.isBlank() || "${it.summary} ${it.agent.orEmpty()} ${it.host}".contains(query, ignoreCase = true) }
     val narrowed = archivedOnly || query.isNotBlank() || filter != InboxFilter.All
     // Groups have their own section; the agents' trees hold one-to-one conversations.
     val groupsFound = found.filter { it.conversation.group }
@@ -357,7 +357,7 @@ fun InboxScreen(
                     "Pair a host →",
                     pair,
                 )
-                sorted.isEmpty() && requests.isEmpty() -> Empty(
+                sorted.isEmpty() && requests.isEmpty() && model.needsYou.staleHosts.isEmpty() && model.reminderDismissals.errors.isEmpty() -> Empty(
                     if (archivedOnly) "No archived conversation." else "No active conversation yet.",
                     if (archivedOnly) "Archived conversations stay here until you unarchive them." else "Start one below, or find archived conversations with the archive filter above.",
                 )
@@ -366,17 +366,20 @@ fun InboxScreen(
                         if (archivedOnly) item(key = "archive-view") {
                             Text("Archived conversations", style = Type.meta, color = palette.accent, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
                         }
-                        if (requests.isNotEmpty()) {
-                            val requestsShown = shown(InboxSection.Requests)
-                            item(key = "policy-requests") {
-                                FoldHeading("Sandbox requests", requestsShown, if (requestsShown) 0 else requests.size, query.isBlank()) { model.fold(InboxSection.Requests.name) }
+                        if (requests.isNotEmpty() || model.needsYou.staleHosts.isNotEmpty() || model.reminderDismissals.errors.isNotEmpty()) {
+                            item(key = "needs-you") { FoldHeading("Needs you", true, requests.size, false) {} }
+                            if (model.needsYou.staleHosts.isNotEmpty()) item(key = "requests-unavailable") {
+                                Text("Requests could not be refreshed on ${model.needsYou.staleHosts.keys.joinToString()}. Showing the last known requests.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                             }
-                            if (requestsShown) {
-                                items(requests, key = { "policy:${it.key}" }) { a ->
-                                    Arriving { PolicyRequestRow(a, agentLabel = model::agentLabel) { openApproval(a.key) } }
-                                }
-                                item(key = "policy-gap") { Gap(8.dp) }
+                            if (model.reminderDismissals.errors.isNotEmpty()) item(key = "dismiss-errors") {
+                                Text("Some reminders could not be dismissed. Open a request to check.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                             }
+                            items(requests, key = { "request:${it.key}" }) { request ->
+                                Arriving { NeedsYouRow(request, request.agent?.let { model.agentLabel("${request.host}/$it") } ?: "Policy request", model.connected(request.host), request.agent?.let { PhotoKey(request.host, it) }, now = now) {
+                                    model.focusedRequest = request
+                                } }
+                            }
+                            item(key = "needs-you-gap") { Gap(8.dp) }
                         }
                         val groupsShown = shown(InboxSection.Groups)
                         val agentsShown = shown(InboxSection.Agents)
@@ -1197,38 +1200,21 @@ internal fun RecentUsageRefresh(model: AppModel, hosts: List<String>) {
     }
 }
 
-/** An agent, as the conversations view shows it, without its conversations: tapping it opens its page. */
+/** The Agents list and sandbox pages share current activity, attention and usage. */
 @Composable
 internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () -> Unit) {
-    val p = palette
     val working = model.workingOn(agent)
     val activity = model.activityOf(agent.address)
-    Row(
-        Modifier.fillMaxWidth().clickable(onClickLabel = "Open ${agent.label}", onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        AgentInitial(agent.label, working.isNotEmpty() || activity != null, side = 32.dp, photo = agent.photoKey)
-        Column(Modifier.weight(1f)) {
-            Text(agent.label, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (working.isNotEmpty() || activity != null) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    WorkingWave(square = 4.dp, lift = 3.dp)
-                    val doing = working.firstOrNull()?.let { model.doing(it.id) } ?: activity?.label ?: "working"
-                    Text(doing, style = Type.small, color = p.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            } else {
-                val last = model.lastActive(agent)
-                Text(if (last != null) "active ${Times.ago(last, now)}" else "no message yet", style = Type.small, color = p.textMuted)
-            }
-        }
-        // What it used over the last day, so an agent using a lot stands out; nothing when none.
-        model.recentUsage[agent.host]?.of(agent.name)?.total?.let(::recentUsageText)?.let { used ->
-            Text(used, style = Type.small, color = p.textMuted, maxLines = 1)
-        }
-        Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
-    }
+    val busy = working.isNotEmpty() || activity != null
+    val last = model.lastActive(agent)
+    AgentListRow(
+        agent = agent, busy = busy,
+        status = if (busy) working.firstOrNull()?.let { model.doing(it.id) } ?: activity?.label ?: "working"
+            else if (last != null) "active ${Times.ago(last, now)}" else "no message yet",
+        usage = model.recentUsage[agent.host]?.of(agent.name)?.total?.let(::recentUsageText),
+        needsYou = model.attentionCount(agent.address),
+        onClick = onClick,
+    )
 }
 
 /**
@@ -1415,6 +1401,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         return
     }
     val lines = model.lines[id].orEmpty()
+    val notices = remember(lines) { statusRuns(lines) }
+    val statusExpanded = remember(id) { mutableStateMapOf<Long, Boolean>() }
     // Where each held task's card is drawn: the newest message that introduced it.
     val introductions = remember(lines) { heldTaskIntroductions(lines) }
     val scope = "${conversation.host}/${conversation.agent}"
@@ -1564,7 +1552,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             model.heldTasks.unlinked(conversation, introductions.keys).asReversed().forEach { card ->
                 item(key = "held-${card.agent}/${card.task}") {
                     Arriving {
-                        Bubble(text = "", time = Times.clock(card.since), outgoing = false, content = { HeldTaskCard(model.heldTasks, card) })
+                        Bubble(text = "", time = Times.clock(card.since), outgoing = false, content = { HeldTaskCard(model.heldTasks, card, onViewTask = { model.taskDetails.showHeld(card) }) })
                     }
                 }
             }
@@ -1583,7 +1571,13 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                     // The runtime about itself: a quiet line, not a bubble.
                     // One with files is drawn as a message, so they show.
                     if (line.status && line.attachments.isEmpty()) {
-                        Arriving { StatusLine(runtime, line.text, Times.clock(line.time)) }
+                        val group = notices[line.seq]
+                        if (group != null) Arriving {
+                            Column {
+                                if (group.size > 1) TextLink("${group.size} runtime updates") { statusExpanded[line.seq] = statusExpanded[line.seq] != true }
+                                (if (statusExpanded[line.seq] == true) group else listOf(line)).forEach { notice -> StatusLine(runtime, notice.text, Times.clock(notice.time)) }
+                            }
+                        }
                         return@item
                     }
                     Arriving {
@@ -1591,6 +1585,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                         // A held task's card, at the newest message that introduced it, in its current state.
                         val held = line.heldTask?.takeIf { question == null && introductions[it] == line.seq }
                             ?.let { model.heldTasks.current(conversation, it) }
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Bubble(
                             text = line.text,
                             time = Times.clock(line.time),
@@ -1604,8 +1599,10 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             },
                             content = question?.let { known -> {
                                 if (known.approval != null) RuntimeApprovalCard(model.questions, known) else QuestionCard(model.questions, known)
-                            } } ?: held?.let { card -> { HeldTaskCard(model.heldTasks, card) } },
+                            } } ?: held?.let { card -> { HeldTaskCard(model.heldTasks, card, onViewTask = { model.taskDetails.showHeld(card) }) } },
                         )
+                        SuggestedReplyButtons(model, conversation, line, lines)
+                        }
                     }
                 }
                 // The steps that led to an answer, folded above it.

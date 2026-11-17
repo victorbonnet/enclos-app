@@ -27,7 +27,7 @@ internal fun questionStatus(question: QuestionInfo): String {
     return when (question.state) {
         QuestionState.Answered -> "Answered$reported"
         QuestionState.Skipped -> "Skipped$reported"
-        QuestionState.Expired -> "Expired · ask the agent for a new question."
+        QuestionState.Expired -> "Expired · this request can no longer be answered."
         QuestionState.Cancelled -> "Cancelled"
         QuestionState.Resolved -> "Resolved in the runtime"
         QuestionState.Pending -> ""
@@ -44,29 +44,35 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
     var text by rememberSaveable(question.host, question.id) { mutableStateOf("") }
     val selection = QuestionSelection(selected.toSet(), other, text)
     val change: (QuestionSelection) -> Unit = { selected = it.indices.toList(); other = it.other; text = it.text }
-    val terminal = question.state != QuestionState.Pending
+    val terminal = !client.offersAnswer(question)
     val unavailable = client.unavailable(question)
     val enabled = unavailable == null
     val confirmed = question.answer
-    val indices = if (terminal) (confirmed as? QuestionAnswer.Choices)?.indices.orEmpty().toSet() else selection.indices
-    val custom = if (terminal) confirmed is QuestionAnswer.Text else other
+    val indices = selection.indices
+    val custom = other
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // The agent wrote all that follows; this line is the app's, so an agent's
         // question cannot pass for a sandbox access request.
         Text(QUESTION_FRAME, style = Type.small, color = p.textMuted)
         SelectionContainer { MarkdownText(question.text, p.text) }
         if (question.choices.isNotEmpty()) {
-            Text(if (question.multiple) "Choose one or more" else "Choose one", style = Type.small, color = p.textMuted)
-            question.choices.forEachIndexed { index, label ->
-                Choice(label, index in indices, enabled = enabled, multiple = question.multiple, wrap = true, modifier = Modifier.fillMaxWidth()) {
-                    change(selection.choose(index, question.multiple))
+            if (terminal) {
+                question.choices.forEachIndexed { index, label ->
+                    Text("${index + 1}. $label", style = Type.small, color = p.textMuted)
                 }
+            } else {
+                Text(if (question.multiple) "Choose one or more" else "Choose one", style = Type.small, color = p.textMuted)
+                question.choices.forEachIndexed { index, label ->
+                    Choice(label, index in indices, enabled = enabled, multiple = question.multiple, wrap = true, modifier = Modifier.fillMaxWidth()) {
+                        change(selection.choose(index, question.multiple))
+                    }
+                }
+                Choice("Other", custom, enabled = enabled, wrap = true, modifier = Modifier.fillMaxWidth()) { change(selection.chooseOther()) }
             }
-            Choice("Other", custom, enabled = enabled, wrap = true, modifier = Modifier.fillMaxWidth()) { change(selection.chooseOther()) }
         }
-        if (question.choices.isEmpty() || custom) {
+        if (!terminal && (question.choices.isEmpty() || custom)) {
             FormField(
-                if (terminal) (confirmed as? QuestionAnswer.Text)?.text.orEmpty() else text,
+                text,
                 { text = it },
                 label = if (question.choices.isEmpty()) "Answer" else "Other answer",
                 placeholder = "Write your answer",
@@ -77,6 +83,9 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
         }
         if (terminal) {
             Text(questionStatus(question), style = Type.small, color = p.textMuted)
+            if (confirmed is QuestionAnswer.Text) {
+                SelectionContainer { Text(confirmed.text, style = Type.small, color = p.text) }
+            }
             if (confirmed is QuestionAnswer.Choices) {
                 Text("Selected: ${confirmed.indices.joinToString("; ") { question.choices[it] }}", style = Type.body, color = p.text)
             }
@@ -88,8 +97,10 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
             if (answer == null && (custom || question.choices.isEmpty()) && text.isNotBlank()) {
                 Text("Remove tabs or hidden characters to submit.", style = Type.small, color = p.textMuted)
             }
-            PrimaryButton("Submit", enabled = enabled && answer != null) { answer?.let { client.submit(question, it) } }
-            ActionButton("Skip", enabled = enabled) { client.submit(question, QuestionAnswer.Skip) }
+            PrimaryButton("Send answer", enabled = enabled && answer != null) {
+                answer?.let { client.submit(question, it) }
+            }
+            RequestSecondaryButton("Skip question", enabled = enabled) { client.submit(question, QuestionAnswer.Skip) }
             unavailable?.let { Text(it, style = Type.small, color = p.textMuted) }
             // An unconfirmed outcome is settled by a fresh sync, not by reconnecting.
             if (client.canCheckAgain(question)) ActionButton("Check again") { client.checkAgain(question) }

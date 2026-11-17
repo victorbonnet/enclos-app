@@ -24,7 +24,22 @@ class Outgoing {
     private data class Sent(val host: String, val id: String, val text: String, val back: Boolean = false)
 
     /** By conversation: what was sent and the bridge has not shown back yet, oldest first. */
-    private val sent = mutableMapOf<String, List<Sent>>()
+    private val sent = mutableStateMapOf<String, List<Sent>>()
+
+    fun waiting(conversation: String): Boolean = sent[conversation].orEmpty().any { !it.back }
+
+    /** Literal reply path, rechecked at tap time; preserve drafts on both success and failure. */
+    fun sendSuggested(conversation: String, line: Line, reply: String, history: List<Line>, send: (String) -> String?): String? {
+        if (waiting(conversation) || reply !in offeredReplies(line, history)) return "This reply is no longer available."
+        val draft = unsent[conversation]
+        val error = send(reply)
+        if (error == null) {
+            if (draft != null) write(conversation, draft)
+        } else if (unsent[conversation] != reply) {
+            restore(conversation, listOf(reply), error)
+        } else notSent[conversation] = error
+        return error
+    }
 
     /** The person wrote [text] in [conversation]'s field. */
     fun write(conversation: String, text: String) {

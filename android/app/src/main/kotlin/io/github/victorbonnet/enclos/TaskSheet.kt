@@ -54,7 +54,8 @@ fun TaskSheet(model: AppModel, openChat: (String) -> Unit) {
     ModalBottomSheet(onDismissRequest = details::close, sheetState = sheet, containerColor = p.bg, shape = Shapes.bubble, tonalElevation = 0.dp) {
         // A related task opened in its place starts at its top.
         key(open) {
-            val task = model.tasks[open]
+            val held = details.held
+            val task = held?.let(::heldTaskSummary) ?: model.tasks[open]
             if (task == null) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 24.dp)) {
                     Text("Task", style = Type.heading, color = p.text)
@@ -63,18 +64,18 @@ fun TaskSheet(model: AppModel, openChat: (String) -> Unit) {
                     ActionButton("Close", onClick = details::close)
                 }
             } else {
-                TaskSheetContent(model, task, openChat)
+                TaskSheetContent(model, task, openChat, held)
             }
         }
     }
 }
 
 @Composable
-private fun TaskSheetContent(model: AppModel, task: AgentTask, openChat: (String) -> Unit) {
+private fun TaskSheetContent(model: AppModel, task: AgentTask, openChat: (String) -> Unit, held: HeldTask? = null) {
     val p = palette
     val details = model.taskDetails
     val connected = model.connected(task.host)
-    val shares = model.offersTaskDetails(task.assigneeAddress)
+    val shares = if (held != null) model.agents.any { it.host == held.host && it.name == held.agent && "held_task_details" in it.capabilities } && model.hostSupports(held.host, "held_task.get") else model.offersTaskDetails(task.assigneeAddress)
     val available = connected && shares
     LaunchedEffect(task.key, available) { if (available && details.detail == null) details.fetch() }
     // "running 12 min" and the times stay true while the sheet shows.
@@ -92,7 +93,7 @@ private fun TaskSheetContent(model: AppModel, task: AgentTask, openChat: (String
             Text(task.title, style = Type.heading.copy(fontSize = 19.sp, lineHeight = 24.sp), color = p.text)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { TaskMark(task.state) }
-                Text(taskStatus(task, now), style = Type.small, color = if (task.state.ended) p.textMuted else p.accent)
+                Text(if (held != null) heldTaskStatus(held) else taskStatus(task, now), style = Type.small, color = if (task.state.ended) p.textMuted else p.accent)
             }
             Text("Assigned to ${name(task.assignee)}", style = Type.small, color = p.textMuted)
             task.askedBy?.let { Text("Asked by ${name(it)}", style = Type.small, color = p.textMuted) }
@@ -141,7 +142,7 @@ private fun TaskDetailSections(model: AppModel, task: AgentTask, detail: TaskDet
         Section("Related work") {
             detail.related.forEach { r ->
                 val key = TaskKey(task.host, task.sandbox, r.id)
-                val known = model.tasks[key] != null
+                val known = model.taskDetails.held == null && model.tasks[key] != null
                 SettingRow(if (known) Modifier.clickable(onClickLabel = "Open the task") { model.taskDetails.show(key) } else Modifier) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(if (r.relation == Relation.Parent) "↑" else "↓", style = Type.label, color = p.textFaint)
@@ -208,3 +209,11 @@ private fun TaskDetailSections(model: AppModel, task: AgentTask, detail: TaskDet
         }
     }
 }
+
+/** Presentation only: read routing always uses HeldTask.agent and the complete task reference. */
+internal fun heldTaskSummary(card: HeldTask): AgentTask = AgentTask(
+    host = card.host, id = card.task, title = card.title,
+    assignee = card.assignee?.let { if ('/' in it) AgentTask.agentName(it) else AgentTask.agentName("${card.agent.substringBefore('/')}/$it") } ?: card.agent,
+    askedBy = card.agent, conversation = card.conversation, state = TaskState.Blocked,
+    since = card.since, summary = null,
+)

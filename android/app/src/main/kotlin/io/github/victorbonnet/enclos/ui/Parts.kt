@@ -657,13 +657,13 @@ fun FormField(
 
 /** A secondary action with the app's 44dp target and accent type. */
 @Composable
-fun ActionButton(text: String, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
+fun ActionButton(text: String, modifier: Modifier = Modifier, enabled: Boolean = true, wrap: Boolean = false, onClick: () -> Unit) {
     Box(
         // 48dp: the platform's minimum touch target.
         modifier.defaultMinSize(minHeight = 48.dp).clip(Shapes.control).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center,
-    ) { Text(text, style = Type.label, color = if (enabled) palette.accent else palette.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+    ) { Text(text, style = Type.label, color = if (enabled) palette.accent else palette.textFaint, maxLines = if (wrap) Int.MAX_VALUE else 1, overflow = if (wrap) TextOverflow.Clip else TextOverflow.Ellipsis) }
 }
 
 /** A switch in the same palette as the app lock, including disabled states. */

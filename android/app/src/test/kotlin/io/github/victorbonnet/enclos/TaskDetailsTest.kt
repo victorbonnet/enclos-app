@@ -326,4 +326,32 @@ class TaskDetailsTest {
         assertEquals(Outcome.GaveUp, Outcome.of("gave_up"))
         assertEquals("ended", Outcome.of("vanished").label)
     }
+    @Test fun held_task_details_use_the_exact_board_reference_and_creator() {
+        val sent = mutableListOf<JSONObject>()
+        val card = HeldTask("host", "lab/lead", "home", "app/t_same", "Review", "reviewer", "Decision", since = 1, resume = "", stateWire = "held", revision = 2, resumable = false)
+        val client = TaskDetails(send = { _, command -> sent += command; true }, task = { error("Must not guess a task-list id") }, available = { false }, later = { _, _ -> }, heldAvailable = { true })
+        client.showHeld(card)
+        assertTrue(client.fetch())
+        assertEquals("held_task.get", sent.single().getString("type"))
+        assertEquals("lab/lead", sent.single().getString("agent"))
+        assertEquals("app/t_same", sent.single().getString("task"))
+        val reply = message("task.detail", "of" to sent.single().getString("id"), "agent" to "lab/lead", "task" to "t_same", "detail" to JSONObject().put("body", "Wrong board"))
+        client.received("host", reply)
+        assertNull(client.detail)
+        reply.put("task", "app/t_same")
+        client.received("other-host", reply)
+        assertNull(client.detail)
+        client.received("host", reply)
+        assertEquals("Wrong board", client.detail?.body)
+        client.close()
+        assertNull(client.held)
+    }
+
+    @Test fun generic_task_details_capability_cannot_read_held_board_details() {
+        val card = HeldTask("host", "lab/lead", "home", "app/t_same", "Review", "reviewer", "Decision", since = 1, resume = "", stateWire = "held", revision = 2, resumable = false)
+        val client = TaskDetails(send = { _, _ -> error("No held capability") }, task = { null }, available = { true }, later = { _, _ -> }, heldAvailable = { false })
+        client.showHeld(card)
+        assertFalse(client.fetch())
+    }
+
 }

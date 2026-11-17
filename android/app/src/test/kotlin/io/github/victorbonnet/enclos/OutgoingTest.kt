@@ -2,6 +2,7 @@ package io.github.victorbonnet.enclos
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -118,4 +119,37 @@ class OutgoingTest {
         out.write("c1", "")
         assertFalse("c1" in out.unsent)
     }
+    @Test fun review_a_restored_send_does_not_block_future_reply_buttons() {
+        val out = Outgoing()
+        out.send("c1", "mac", "old reply") { "m1" }
+        assertTrue(out.waiting("c1"))
+        out.ended("mac", "Disconnected")
+        out.write("c1", "a rewritten draft")
+        assertFalse(out.waiting("c1"))
+        out.shown("c1", "old reply")
+        assertEquals("a rewritten draft", out.unsent["c1"])
+    }
+
+    @Test fun suggested_reply_uses_the_real_send_path_and_restores_literal_text_on_disconnect() {
+        val out = Outgoing()
+        val line = Line(1, "agent", "Choose", "reply", 1, suggestedReplies = listOf("Keep paused"))
+        out.write("home", "Existing draft")
+        assertNull(out.sendSuggested("home", line, "Keep paused", listOf(line)) { text ->
+            assertEquals("Keep paused", text)
+            assertTrue(out.send("home", "host", text) { "frame" })
+            null
+        })
+        assertEquals("Existing draft", out.unsent["home"])
+        assertNotNull(out.sendSuggested("home", line, "Keep paused", listOf(line)) { error("Double tap") })
+        out.ended("host", "Disconnected")
+        assertFalse(out.waiting("home"))
+        assertEquals("Keep paused\n\nExisting draft", out.unsent["home"])
+        out.write("home", "Existing draft")
+        assertEquals("Disconnected", out.sendSuggested("home", line, "Keep paused", listOf(line)) { "Disconnected" })
+        assertEquals("Keep paused\n\nExisting draft", out.unsent["home"])
+        val owner = Line(2, "person", "New direction", "reply", 2)
+        assertNotNull(out.sendSuggested("home", line, "Keep paused", listOf(line, owner)) { error("Old reply") })
+        assertNotNull(out.sendSuggested("home", line, "invented", listOf(line)) { error("Invented reply") })
+    }
+
 }

@@ -8,6 +8,7 @@ import android.os.Looper
 import android.os.SystemClock
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -71,6 +72,7 @@ data class Line(
     val question: String? = null,
     /** The held task this message is about (a card of the same agent), whose card comes before it. */
     val heldTask: String? = null,
+    val suggestedReplies: List<String> = emptyList(),
 )
 
 /** A file of a message, fetched from the bridge when it is shown. */
@@ -316,6 +318,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         send = { host, command -> connections[host]?.send(command) == true },
         task = { key -> tasks[key] },
         available = { task -> connected(task.host) && offersTaskDetails(task.assigneeAddress) },
+        heldAvailable = ::offersHeldTaskDetails,
         later = { wait, action -> main.postDelayed({ action() }, wait) },
     )
     val routines = RoutineClient(
@@ -332,14 +335,34 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     )
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
+    val needsYou: NeedsYou = NeedsYou(policies = { approvals.values }, dropped = { android.util.Log.w("enclos", it) }) { host, items ->
+        val coverage = needsYou.policyCoverage(host)
+        save { openItems(host, items, coverage) }
+    }
+    val attentionItems: List<OpenItem> by derivedStateOf {
+        attentionItems(needsYou.items.values, approvals.values, needsYou.indexedHosts.keys, needsYou.staleHosts.keys, needsYou.coveredPolicies)
+    }
+    private val attentionByAgent: Map<String, Int> by derivedStateOf { attentionCounts(attentionItems) }
+    fun attentionCount(agent: String): Int = attentionByAgent[agent] ?: 0
+    var focusedRequest by mutableStateOf<OpenItem?>(null)
+    val reminderDismissals = ReminderDismissals(
+        index = needsYou,
+        connected = ::connected,
+        supported = { host -> hostSupports(host, "open_item.dismiss") },
+        send = { item, id -> connections[item.host]?.send(message("open_item.dismiss", "kind" to item.kind, "item" to item.id, "agent" to item.agent, "version" to item.version).put("id", id)) == true },
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+    )
+
     val questions = QuestionClient(
         send = { request -> connections[request.question.host]?.send(request.command()) == true },
         connected = ::connected,
         accepts = { question -> paired.any { it.name == question.host } && conversations.any(question::belongsTo) },
         changed = { question -> save { question(question) } },
         later = { wait, action -> main.postDelayed({ action() }, wait) },
-        resync = { host -> connections[host]?.send(message("sync", "since" to since(host))) == true },
+        resync = { host -> connections[host]?.send(message("sync", "since" to since(host), "open_items" to true)) == true },
         dropped = { why -> android.util.Log.d("enclos", "question not shown: $why") },
+        closeSupported = { host -> hostSupports(host, "question.close") },
+        sendClose = { question, id -> connections[question.host]?.send(message("question.close", "question" to question.id, "revision" to question.revision).put("id", id)) == true },
     )
     val heldTasks = HeldTaskClient(
         send = { request -> connections[request.card.host]?.send(request.command()) == true },
@@ -348,7 +371,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         accepts = { card -> paired.any { it.name == card.host } && ConversationKey(card.host, card.conversation) !in deletion.deleted },
         changed = { card -> save { heldTask(card) } },
         later = { wait, action -> main.postDelayed({ action() }, wait) },
-        resync = { host -> connections[host]?.send(message("sync", "since" to since(host))) == true },
+        resync = { host -> connections[host]?.send(message("sync", "since" to since(host), "open_items" to true)) == true },
         dropped = { why -> android.util.Log.d("enclos", "held task not shown: $why") },
     )
     val deletion = ConversationDeletion(
@@ -414,6 +437,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     deletion.deleted.putAll(recent.deleted.associateWith { true })
                     conversations.addAll(recent.conversations.filter { ConversationKey(it.host, it.id) !in deletion.deleted })
                     recent.questions.forEach { questions.merge(it, cached = true) }
+                    needsYou.restore(recent.openItems, recent.indexedHosts, recent.policyCoverage, recent.deleted.toSet())
                     recent.heldTasks.forEach { heldTasks.merge(it, cached = true) }
                     lines.putAll(recent.lines)
                     kept.putAll(recent.kept)
@@ -720,6 +744,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         tasks.askedIn(conversation.host, conversation.id).filter { offersTasks(it.assigneeAddress) }
 
     /** Whether the agent at [address] (`host/sandbox/agent`) shares its tasks' details: its channel has the `task_details` capability. */
+    fun offersHeldTaskDetails(card: HeldTask): Boolean = connected(card.host) && hostSupports(card.host, "held_task.get") &&
+        agents.any { it.host == card.host && it.name == card.agent && "held_task_details" in it.capabilities }
+
     fun offersTaskDetails(address: String) = agents.any { it.address == address && "task_details" in it.capabilities }
 
     /** The task the agent at [address] (`host/sandbox/agent`) is working on, as its activity names it, when the phone keeps that task. */
@@ -981,6 +1008,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         agentNames.ended(host.name)
         routines.ended(host.name)
         questions.ended(host.name)
+        needsYou.ended(host.name)
+        reminderDismissals.ended(host.name)
         heldTasks.ended(host.name)
         // What the agents were doing comes again after `agents.list`; a sync the old connection began drops nothing.
         activities.ended(host.name)
@@ -1043,6 +1072,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         routines.ended(host.name)
         questions.ended(host.name)
+        needsYou.ended(host.name)
+        reminderDismissals.ended(host.name)
         heldTasks.ended(host.name)
         agentNames.ended(host.name)
         agentImages.ended(host.name)
@@ -1113,7 +1144,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (about != null && leftOutForClash(conversations, host.name, m.optString("type"), about)) {
             return refusedClash(host.name, about, m.optString("agent").ifBlank { null })
         }
-        if (m.optString("type") in setOf("question", "question.result", "error") && questions.received(host.name, m)) return
+        if (reminderDismissals.received(host.name, m)) return
+        if (m.optString("type") == "open_items") {
+            if (needsYou.received(host.name, m)) reminderDismissals.refreshed(host.name)
+            return
+        }
+        if (m.optString("type") in setOf("question", "question.result", "question.closed", "error") && questions.received(host.name, m)) return
         if (m.optString("type") in setOf("held_task", "held_task.result", "error") && heldTasks.received(host.name, m)) return
         if (m.optString("type") in setOf("agent.name", "error") && agentNames.received(host.name, m)) return
         if (m.optString("type") in setOf("routine.response", "error") && routines.received(host.name, m)) return
@@ -1157,6 +1193,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 // A connection that replaced another without ending it: what the old one said is not fresh.
                 policyConnectionEnded(host.name)
                 hostCapabilities[host.name] = hostCapabilitiesIn(m)
+                needsYou.authenticated(host.name, hostSupports(host.name, "open_items"))
                 if (!hostSupports(host.name, "audit")) audit.remove(host.name)
                 if (!hostSupports(host.name, "usage")) {
                     hostUsage.remove(host.name)
@@ -1173,7 +1210,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 tasks.syncing(host.name)
                 forgetting.authenticated(host.name)
                 // What is on the phone is kept: only what is newer comes.
-                connections[host.name]?.send(message("sync", "since" to since(host.name)))
+                connections[host.name]?.send(message("sync", "since" to since(host.name), "open_items" to true))
                 // The token at each connection: the host keeps the last one given.
                 // None yet (Firebase could not give one at start): asked again.
                 when (val token = PushTokens.current(getApplication())) {
@@ -1763,6 +1800,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Each message's folded words, for search, kept while the app runs. */
     val folds = Folds()
 
+    /** Buttons send exactly their label and keep any text already in the composer's draft. */
+    fun sendSuggested(conversation: Conversation, line: Line, reply: String): String? {
+        return outgoing.sendSuggested(conversation.id, line, reply, lines[conversation.id].orEmpty()) { send(conversation, it) }
+    }
+
     /**
      * Sends [text] in [conversation]; why it did not leave the field, or
      * `null` once it did. It goes only while the host is connected: the
@@ -1808,6 +1850,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val c = conversations.firstOrNull { it.host == key.host && it.id == key.id }
         val attached = if (c == null) emptyList() else lines[key.id].orEmpty().flatMap { it.attachments }
         questions.forgetConversation(key.host, key.id)
+        needsYou.forgetConversation(key.host, key.id)
         heldTasks.forgetConversation(key.host, key.id)
         if (c != null) {
             conversations.removeAll { it.host == key.host && it.id == key.id }
@@ -2002,7 +2045,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // Every host syncs again from the start: what was skipped comes again.
         unreadable.clear()
         paired.forEach { deletion.ended(it.name) }
-        paired.forEach { questions.forget(it.name) }
+        paired.forEach { questions.forget(it.name); needsYou.forget(it.name); reminderDismissals.forget(it.name) }
         paired.forEach { heldTasks.forget(it.name) }
         paired.forEach { agentNames.forget(it.name) }
         paired.forEach { routines.forget(it.name) }
@@ -2070,6 +2113,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         clashes.remove(host)
         clashAgents.remove(host)
         questions.forget(host)
+        needsYou.forget(host)
+        reminderDismissals.forget(host)
         heldTasks.forget(host)
         deletion.forget(host)
         forgetting.clear(host)
@@ -2188,6 +2233,7 @@ fun lineIn(m: JSONObject): Line {
         question = (m.opt("question") as? String)?.takeIf { it.isNotBlank() },
         // A held task's id, without a hidden character, as the protocol carries one; anything else links no card.
         heldTask = protocolId(m.opt("held_task"))?.takeUnless { Visible.hasHidden(it) },
+        suggestedReplies = suggestedReplies(m.opt("suggested_replies")),
     )
 }
 

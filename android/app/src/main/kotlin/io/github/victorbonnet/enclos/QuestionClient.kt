@@ -28,7 +28,41 @@ class QuestionClient(
     private val resync: (String) -> Boolean = { false },
     /** Why a question was not shown (never its text), for the log. */
     private val dropped: (String) -> Unit = {},
+    private val closeSupported: (String) -> Boolean = { false },
+    private val sendClose: (QuestionInfo, String) -> Boolean = { _, _ -> false },
 ) {
+    val closed = mutableStateMapOf<QuestionKey, Boolean>()
+    val closing = mutableStateMapOf<QuestionKey, String>()
+    private val closeRequests = mutableMapOf<String, QuestionInfo>()
+
+    fun offersClose(question: QuestionInfo): Boolean = question.state == QuestionState.Expired && question.approval == null && closeSupported(question.host)
+
+    fun closeUnavailable(question: QuestionInfo): String? = when {
+        !offersClose(question) -> "This host cannot close this request."
+        questions[question.key] != question -> "This request changed. Open its latest version."
+        !connected(question.host) -> "Connect to ${question.host} to close this request."
+        fresh[question.host] != true -> "Waiting for the host to sync…"
+        question.key in closing -> "Closing…"
+        else -> null
+    }
+
+    fun close(question: QuestionInfo): Boolean {
+        if (questions[question.key] != question || !offersClose(question) || !connected(question.host) || fresh[question.host] != true || question.key in closing || closed[question.key] == true) return false
+        val id = UUID.randomUUID().toString()
+        closeRequests[id] = question; closing[question.key] = id
+        if (!sendClose(question, id)) {
+            closeRequests.remove(id); closing.remove(question.key)
+            errors[question.key] = "The request was not closed. Reconnect and try again."
+            return false
+        }
+        later(30_000) {
+            if (closeRequests.remove(id) != null) {
+                closing.remove(question.key)
+                errors[question.key] = "Closing was not confirmed. The request may still appear until the next sync."
+            }
+        }
+        return true
+    }
     val questions = mutableStateMapOf<QuestionKey, QuestionInfo>()
     val pending = mutableStateMapOf<QuestionKey, QuestionRequest>()
     val errors = mutableStateMapOf<QuestionKey, String>()
@@ -40,8 +74,10 @@ class QuestionClient(
 
     fun current(conversation: Conversation, id: String?): QuestionInfo? = id?.let { questions[QuestionKey(conversation.host, it)] }?.takeIf { it.belongsTo(conversation) }
 
+    fun offersAnswer(question: QuestionInfo): Boolean = question.state == QuestionState.Pending
+
     fun unavailable(question: QuestionInfo): String? = when {
-        question.state != QuestionState.Pending -> "This question is ${question.state.wire}."
+        !offersAnswer(question) -> "This question is ${question.state.wire}."
         uncertain[question.key] == true && checking(question.host) -> "Checking the outcome with ${question.host}…"
         uncertain[question.key] == true -> "The outcome is unconfirmed. Check again before answering again."
         question.key in pending -> "Waiting for the agent to confirm…"
@@ -103,6 +139,10 @@ class QuestionClient(
     }
 
     fun failure(host: String, of: String, reason: String, code: String = ""): Boolean {
+        closeRequests[of]?.takeIf { it.host == host }?.let {
+            closeRequests.remove(of); closing.remove(it.key); errors[it.key] = oneLine(reason, 300).ifBlank { "Could not dismiss this reminder. Try again." }
+            return true
+        }
         val request = requests[of]?.takeIf { it.question.host == host } ?: return false
         finish(request)
         if (code !in REFUSED_BEFORE_SENDING) {
@@ -120,6 +160,13 @@ class QuestionClient(
     }
 
     fun received(host: String, message: JSONObject): Boolean = when (message.optString("type")) {
+        "question.closed" -> {
+            val id = message.optString("of")
+            closeRequests[id]?.takeIf { it.host == host && it.id == message.optString("question") }?.let {
+                closeRequests.remove(id); closing.remove(it.key); closed[it.key] = true; errors.remove(it.key)
+            }
+            true
+        }
         "question" -> { parsed(host, message)?.let { merge(it) }; true }
         "question.result" -> { parsed(host, message)?.let { result(host, message.optString("of"), it) }; true }
         "error" -> failure(host, message.optString("of"), message.optString("message"), message.optString("code"))
@@ -137,7 +184,7 @@ class QuestionClient(
     private fun checking(host: String): Boolean = connected(host) && fresh[host] != true && host in syncing
 
     /** Whether [question]'s unconfirmed outcome can be checked now, with [checkAgain]. */
-    fun canCheckAgain(question: QuestionInfo): Boolean = question.state == QuestionState.Pending &&
+    fun canCheckAgain(question: QuestionInfo): Boolean = offersAnswer(question) &&
         uncertain[question.key] == true && connected(question.host) && fresh[question.host] == true
 
     /**
@@ -165,6 +212,10 @@ class QuestionClient(
     }
 
     fun ended(host: String) {
+        closeRequests.entries.filter { it.value.host == host }.toList().forEach { (id, q) ->
+            closeRequests.remove(id); closing.remove(q.key)
+            errors[q.key] = "The connection ended before closing was confirmed. Check after reconnecting."
+        }
         fresh[host] = false
         syncing.remove(host)
         pending.values.filter { it.question.host == host }.toList().forEach {
@@ -177,6 +228,8 @@ class QuestionClient(
     fun forgetConversation(host: String, conversation: String) {
         val keys = questions.values.filter { it.host == host && it.conversation == conversation }.map { it.key }
         keys.forEach { key ->
+            closed.remove(key); closing.remove(key)
+            closeRequests.entries.removeAll { it.value.key == key }
             pending[key]?.let(::finish)
             questions.remove(key); errors.remove(key); uncertain.remove(key); receipts.remove(key)
             syncing[host]?.remove(key)
@@ -187,6 +240,7 @@ class QuestionClient(
         ended(host)
         questions.keys.filter { it.host == host }.forEach { key -> questions.remove(key); errors.remove(key); uncertain.remove(key); receipts.remove(key) }
         fresh.remove(host)
+        closed.keys.filter { it.host == host }.forEach { closed.remove(it) }
     }
 
     private companion object {
