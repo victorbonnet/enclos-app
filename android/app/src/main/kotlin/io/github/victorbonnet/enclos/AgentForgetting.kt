@@ -55,6 +55,14 @@ class AgentForgetting(
 
     fun isRemoved(key: AgentKey) = key.name in removed[key.host].orEmpty()
 
+    /** An inventory can bring a forgotten name back without a new connection. */
+    fun listed(host: String, agents: Set<String>) {
+        agents.forEach { forgotten.remove(AgentKey(host, it)) }
+        removed[host]?.let { removed[host] = it - agents }
+        // Inventory absence alone is not proof of removal. Ask the bridge to check.
+        refresh(host)
+    }
+
     /** Asks [host] which agents it confirmed removed, when its bridge can say. */
     fun refresh(host: String) {
         if (!connected(host) || !supported(host) || host in listing) return
@@ -112,6 +120,11 @@ class AgentForgetting(
 
     /** Whether the page of [key] shows Forget: removed, or a forget of it pending or failed. */
     fun offers(key: AgentKey) = isRemoved(key) || key in pending || key in errors
+
+    /** Host-page actions keep removed agents reachable after their inbox rows are hidden. */
+    fun offered(host: String): List<AgentKey> =
+        (removed[host].orEmpty().map { AgentKey(host, it) } + pending.keys + errors.keys)
+            .filter { it.host == host }.distinct().sortedBy { it.name }
 
     fun forget(key: AgentKey): Boolean {
         if (unavailable(key) != null) return false

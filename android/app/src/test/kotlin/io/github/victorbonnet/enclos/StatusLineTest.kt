@@ -34,8 +34,9 @@ class StatusLineTest {
     fun the_inbox_lists_a_home_always_and_a_conversation_once_something_was_said() {
         val home = Conversation("mac", "lab/main", "h", home = true)
         val other = Conversation("mac", "lab/main", "c")
-        assertTrue(listedWith(home, emptyList()))
-        assertFalse(listedWith(other, emptyList()))
-        assertTrue(listedWith(other, listOf(line(1, "agent", "status"))))
+        val agents = listOf(Agent("mac", "lab/main", "hermes", emptyList()))
+        assertTrue(listedWith(home, emptyList(), agents))
+        assertFalse(listedWith(other, emptyList(), agents))
+        assertTrue(listedWith(other, listOf(line(1, "agent", "status")), agents))
     }
 }

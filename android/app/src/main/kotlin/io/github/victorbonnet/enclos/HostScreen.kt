@@ -50,6 +50,7 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
     val p = palette
     val host = model.paired.firstOrNull { it.name == name }
     val live = model.connected(name)
+    LaunchedEffect(name, live) { if (live) model.forgetting.refresh(name) }
     val available = model.canReadAudit(name)
     val audit = model.audit[name] ?: HostAudit()
     LaunchedEffect(name, available) { if (available) model.loadAudit(name) }
@@ -61,6 +62,7 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
     val charted = usage.series.filter { s -> s.points.any { (it.tokens ?: 0) > 0 } }.map { it.agent }
     val slots = usageSlots(model.agents.filter { it.host == name }.map { it.name }, charted)
     val colors: Map<String, Color> = slots.mapValues { (_, slot) -> seriesColor(slot) }
+    val removed = model.forgetting.offered(name)
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
@@ -90,6 +92,16 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
                     }
                     Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
                 }
+            }
+            if (removed.isNotEmpty()) item {
+                Section("Removed agents") {
+                    SettingRow {
+                        Text("Their Home and your conversations stay saved until you forget them. Group conversations stay.", style = Type.small, color = p.textMuted)
+                    }
+                }
+            }
+            items(removed, key = { "removed:${it.name}" }) { agent ->
+                ForgetAgentAction(model, agent, agent.name)
             }
             item {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

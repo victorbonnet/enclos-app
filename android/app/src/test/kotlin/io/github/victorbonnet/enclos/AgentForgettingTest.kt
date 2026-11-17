@@ -25,6 +25,50 @@ class AgentForgettingTest {
         assertEquals("mac/lab/coder", AgentKey("mac", "lab/coder").address)
     }
 
+    @Test fun an_agent_recreated_after_a_host_page_forget_has_no_page_close_flag() {
+        val f = Fixture()
+        f.listed("mac", "gone/coder")
+        f.listed("pi", "gone/coder")
+        assertTrue(f.client.forget(f.coder))
+        f.receipt("ack")
+        // No AgentScreen is open to consume the flag.
+        assertTrue(f.client.forgotten[f.coder] == true)
+        f.client.forgotten[AgentKey("pi", "gone/coder")] = true
+        f.client.listed("mac", setOf("gone/coder"))
+        assertFalse(f.coder in f.client.forgotten)
+        assertTrue(f.client.forgotten[AgentKey("pi", "gone/coder")] == true)
+        assertFalse(f.client.isRemoved(f.coder))
+    }
+
+    @Test fun a_live_inventory_refreshes_removal_checks_and_reappearing_agents_are_not_removed() {
+        val f = Fixture()
+        f.listed("mac", "gone/coder")
+        f.client.listed("mac", setOf("gone/coder"))
+        assertFalse(f.client.isRemoved(f.coder))
+        assertEquals("agents.removed", f.sent.single().second.getString("type"))
+        f.listed("mac")
+        f.client.listed("mac", emptySet())
+        assertEquals(2, f.sent.size)
+    }
+
+    @Test fun the_host_page_keeps_its_removed_and_failed_actions_reachable() {
+        val f = Fixture()
+        f.listed("mac", "gone/coder")
+        f.listed("pi", "gone/coder")
+        assertEquals(listOf(f.coder), f.client.offered("mac"))
+        assertTrue(f.client.forget(f.coder))
+        assertEquals(listOf(f.coder), f.client.offered("mac"))
+        f.receipt("error")
+        // Reauthentication clears the old inventory while a new list is requested.
+        f.client.authenticated("mac")
+        assertEquals(listOf(f.coder), f.client.offered("mac"))
+        f.listed("mac", "gone/coder")
+        assertTrue(f.client.forget(f.coder))
+        f.receipt("ack")
+        assertEquals(emptyList<AgentKey>(), f.client.offered("mac"))
+        assertEquals(listOf(AgentKey("pi", "gone/coder")), f.client.offered("pi"))
+    }
+
     @Test fun the_removed_list_is_asked_only_of_a_bridge_that_forgets() {
         val f = Fixture()
         f.client.authenticated("mac")

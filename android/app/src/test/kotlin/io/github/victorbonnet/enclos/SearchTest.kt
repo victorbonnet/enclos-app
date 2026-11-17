@@ -5,6 +5,23 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class SearchTest {
+    @Test
+    fun pending_search_keeps_previous_matches_but_drops_hidden_conversations() {
+        val hidden = Found(Conversation("mac", "lab/coder", "hidden"), null)
+        val kept = Found(Conversation("mac", "lab/main", "kept"), null)
+        val unrelated = Found(Conversation("mac", "lab/director", "other"), null)
+        val current = listOf(kept, unrelated)
+        // Typing, reading, and incoming messages keep the last completed matches.
+        assertEquals(listOf(kept), inboxSearchResults("new query", current, listOf(hidden, kept)))
+        // The first search and a completed empty search never flash all rows.
+        assertEquals(emptyList<Found>(), inboxSearchResults("first query", current, null))
+        assertEquals(emptyList<Found>(), inboxSearchResults("no matches", current, emptyList()))
+        assertEquals(current, inboxSearchResults("", current, listOf(hidden)))
+        // A matching id on another host does not make an old result visible.
+        val otherHost = kept.copy(conversation = kept.conversation.copy(host = "pi"))
+        assertEquals(emptyList<Found>(), inboxSearchResults("query", listOf(otherHost), listOf(kept)))
+    }
+
     private val weather = Conversation("mac", "lab/main", "c-1", title = "Weather in Lyon", titledBy = "agent")
     private val code = Conversation("mac", "lab/coder", "c-2")
     private val pi = Conversation("pi", "home/main", "c-3")
