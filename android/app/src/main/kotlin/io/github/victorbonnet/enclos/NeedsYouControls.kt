@@ -14,18 +14,27 @@ import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.ui.*
 
 @Composable
-fun NeedsYouRow(item: OpenItem, label: String, online: Boolean, photo: PhotoKey? = null, open: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClickLabel = "Review request from $label", onClick = open)
-        .padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        AgentInitial(label, false, side = 32.dp,
-            photo = photo)
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(label + if (item.expired) " · Expired" else "", style = Type.name, color = palette.accent)
-            Text(item.summary, style = Type.small, color = palette.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(item.host + if (online) "" else " · Offline, cached request", style = Type.small, color = palette.textMuted)
+fun NeedsYouRow(item: OpenItem, label: String, online: Boolean, photo: PhotoKey? = null, now: Long = System.currentTimeMillis() / 1000, open: () -> Unit) {
+    val p = palette
+    Row(
+        Modifier.fillMaxWidth().clickable(onClickLabel = "Review request from $label", onClick = open)
+            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        AgentInitial(label, false, side = 32.dp, photo = photo)
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(label + if (item.expired) " · Expired" else "", style = Type.name, color = p.text,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(Times.ago(item.since, now), style = Type.small, color = p.textFaint, maxLines = 1)
+                Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+            }
+            Text(
+                "${item.host} · " + (if (online) "" else "Offline, cached request · ") + item.summary,
+                style = Type.small, color = p.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp),
+            )
         }
-        Glyph(Glyphs.chevron, palette.textFaint, size = 16.dp)
     }
 }
 

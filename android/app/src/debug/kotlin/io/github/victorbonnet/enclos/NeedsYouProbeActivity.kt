@@ -1,8 +1,11 @@
 package io.github.victorbonnet.enclos
 
 import android.os.Bundle
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -21,6 +24,7 @@ class NeedsYouProbeActivity : ComponentActivity() {
     var closedRequest: String? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val dark = intent.getBooleanExtra("dark", false)
         val expired = intent.getBooleanExtra("expired", false)
         val runtimeApproval = intent.getBooleanExtra("runtime_approval", false)
         val q = QuestionInfo("Ubuntu", "q", "Inbox filters reset when you return from an agent. Allow a fix and independent testing?",
@@ -35,15 +39,20 @@ class NeedsYouProbeActivity : ComponentActivity() {
         }, connected = { true }, accepts = { true }, changed = {}, later = { _, _ -> },
             closeSupported = { true }, sendClose = { _, id -> closedRequest = id; true })
         client.merge(q); client.authenticated(q.host); client.synced(q.host)
+        val now = System.currentTimeMillis() / 1000
         val rows = listOf(
-            OpenItem("Ubuntu", "q", "question", "lab/director", "home", q.text, 3, expired),
-            OpenItem("Mac", "held", "held_task", "lab/reviewer", "home-reviewer", "Review is paused until you choose the next step.", 2, false),
-            OpenItem("Ubuntu", "approval", "runtime_approval", "lab/engineer", "home-engineer", "Allow the requested test command?", 1, false))
+            OpenItem("Ubuntu", "q", "question", "lab/director", "home", q.text, now - 180, expired),
+            OpenItem("Mac", "held", "held_task", "lab/reviewer", "home-reviewer", "Review is paused until you choose the next step.", now - 3_600, false),
+            OpenItem("Ubuntu", "approval", "runtime_approval", "lab/engineer", "home-engineer", "Allow the requested test command?", now - 7_200, false))
         setContent {
-            EnclosTheme(dark = intent.getBooleanExtra("dark", false)) {
+            LaunchedEffect(dark) {
+                val bars = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT) { dark }
+                enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
+            }
+            EnclosTheme(dark = dark) {
                 CompositionLocalProvider(LocalDensity provides Density(resources.displayMetrics.density, intent.getFloatExtra("font", 1f))) {
                     var selected by remember { mutableStateOf(false) }
-                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.fillMaxSize().background(palette.bg).safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         if (!selected) {
                             Text("Needs you (3)", style = Type.heading, color = palette.accent)
                             rows.zip(listOf("Director", "Reviewer", "Engineer")).forEach { (item, label) ->

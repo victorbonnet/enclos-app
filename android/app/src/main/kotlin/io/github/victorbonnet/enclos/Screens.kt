@@ -376,7 +376,7 @@ fun InboxScreen(
                                 Text(error, style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                             } }
                             items(requests, key = { "request:${it.key}" }) { request ->
-                                Arriving { NeedsYouRow(request, request.agent?.let { model.agentLabel("${request.host}/$it") } ?: "Sandbox request", model.connected(request.host), request.agent?.let { PhotoKey(request.host, it) }) {
+                                Arriving { NeedsYouRow(request, request.agent?.let { model.agentLabel("${request.host}/$it") } ?: "Sandbox request", model.connected(request.host), request.agent?.let { PhotoKey(request.host, it) }, now = now) {
                                     model.focusedRequest = request
                                     requestError = null
                                 } }
