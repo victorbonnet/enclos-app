@@ -40,6 +40,83 @@ class HeldTaskClientTest {
     private fun frame(type: String, card: HeldTask, of: String? = null) = JSONObject().put("v", 1).put("id", "b-1").put("type", type)
         .put("held_task", card.json()).apply { of?.let { put("of", it) } }
 
+    @Test fun raw_inbound_false_before_home_cache_and_linked_history_stays_visible() {
+        val card = HeldTask.from("mac", held.json().put("resumable", false))
+        val client = HeldTaskClient(send = { error("Must not send") }, connected = { false },
+            accepts = { true }, changed = {}, later = { _, _ -> })
+        val raw = frame("held_task", card).toString().toByteArray(Charsets.UTF_8)
+        val inbound = inbound(String(raw, Charsets.UTF_8)) as Inbound.Use
+        assertTrue(client.received("mac", inbound.message))
+        val home = Fixture().home
+        assertEquals(card, client.current(home, card.task))
+        assertEquals(listOf(card), client.unlinked(home, emptySet()))
+        assertTrue(client.unlinked(home, setOf(card.task)).isEmpty())
+        client.merge(HeldTask.from("mac", JSONObject(card.json().toString())), cached = true)
+        client.authenticated("mac"); client.synced("mac")
+        assertEquals(listOf(card), client.unlinked(home, emptySet()))
+        assertFalse(client.offersResume(card))
+    }
+
+    @Test fun malformed_capability_in_result_keeps_uncertainty() {
+        val f = Fixture(); f.ready(held)
+        val id = f.client.resume(held)!!
+        val result = frame("held_task.result", held, id)
+        result.getJSONObject("held_task").put("resumable", "false")
+        f.client.received("mac", result)
+        assertTrue(f.client.uncertain[held.key] == true)
+        assertTrue(f.client.pending.isEmpty())
+        assertEquals(1, f.sent.size)
+        assertEquals(listOf("mac"), f.resyncs)
+    }
+
+    @Test fun false_stays_visible_and_never_sends_even_from_a_stale_opening() {
+        val f = Fixture(); f.ready(held)
+        val blocked = HeldTask.from("mac", held.json().put("resumable", false).put("revision", 4))
+        f.client.merge(blocked)
+        assertEquals(listOf(blocked), f.client.unlinked(f.home, emptySet()))
+        assertEquals(blocked, f.client.current(f.home, held.task))
+        assertFalse(f.client.offersResume(blocked))
+        assertNull(f.client.resume(blocked))
+        assertNull(f.client.resume(held))
+        assertTrue(f.sent.isEmpty()); assertTrue(f.client.pending.isEmpty()); assertTrue(f.timers.isEmpty())
+        f.client.merge(held.copy(revision = 4)); f.client.merge(held)
+        assertEquals(blocked, f.client.current(f.home, held.task))
+        val enabled = held.copy(revision = 5)
+        f.client.merge(enabled)
+        assertNotNull(f.client.resume(enabled))
+        assertEquals(1, f.sent.size)
+    }
+
+    @Test fun unsupported_refreshes_with_neutral_copy_and_never_resends() {
+        val f = Fixture(); f.ready(held)
+        val id = f.client.resume(held)!!
+        f.client.failure("mac", id, "unsupported", "upgrade runtime")
+        assertEquals("This request could not resume the task.", f.client.notes[held.key])
+        assertEquals(listOf("mac"), f.resyncs)
+        assertFalse(f.client.canResume(held))
+        assertNull(f.client.resume(held))
+        val no = HeldTask.from("mac", held.json().put("resumable", false).put("revision", 4))
+        f.client.received("mac", frame("held_task", no))
+        f.client.synced("mac")
+        assertEquals(listOf(no), f.client.unlinked(f.home, emptySet()))
+        assertEquals("Held · waiting for you", f.client.status(no))
+        assertFalse(f.client.offersResume(no))
+        assertNull(f.client.resume(held)); assertNull(f.client.resume(no))
+        assertTrue(f.client.pending.isEmpty())
+        assertEquals(1, f.sent.size)
+    }
+
+    @Test fun malformed_live_capability_cannot_replace_the_last_valid_card() {
+        val f = Fixture(); f.ready(held)
+        for (bad in listOf(JSONObject.NULL, "false", 0, 0.5, JSONObject(), org.json.JSONArray())) {
+            val incoming = frame("held_task", held.copy(revision = 9))
+            incoming.getJSONObject("held_task").put("resumable", bad)
+            f.client.received("mac", incoming)
+            assertEquals(held, f.client.current(f.home, held.task))
+        }
+        assertTrue(f.sent.isEmpty())
+    }
+
     @Test fun resume_sends_the_cards_agent_task_and_bridge_revision_under_a_fresh_id() {
         val f = Fixture(); f.ready(held)
         val id = f.client.resume(held)!!
@@ -124,7 +201,7 @@ class HeldTaskClientTest {
     }
 
     @Test fun refusals_before_sending_are_certain_and_leave_resume_available() {
-        for (code in listOf("agent_unavailable", "not_allowed", "bad_message", "unknown_type", "unsupported")) {
+        for (code in listOf("agent_unavailable", "not_allowed", "bad_message", "unknown_type")) {
             val f = Fixture(); f.ready(held)
             val id = f.client.resume(held)!!
             assertFalse(f.client.received("pi", f.error(id, code)))

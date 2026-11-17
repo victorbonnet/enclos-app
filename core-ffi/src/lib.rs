@@ -256,6 +256,15 @@ mod tests {
         let (answer, mut bridge_session) = responder.answer().unwrap();
         let session = handshake.finish(answer).unwrap();
         assert!(handshake.hello().is_err(), "a handshake is used once");
+        // The app's selected path is raw bytes, not the pinned typed HeldTask.
+        // An optional field unknown to that pin must reach Kotlin intact.
+        for raw in [
+            br#"{"type":"held_task","held_task":{"resumable":false}}"#.as_slice(),
+            br#"{"type":"held_task.result","held_task":{"resumable":true}}"#.as_slice(),
+        ] {
+            let encrypted = bridge_session.encrypt(raw).unwrap();
+            assert_eq!(session.decrypt(encrypted).unwrap(), raw);
+        }
         let sealed = session.encrypt(b"hi".to_vec()).unwrap();
         assert_eq!(bridge_session.decrypt(&sealed).unwrap(), b"hi");
         assert_eq!(

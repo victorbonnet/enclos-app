@@ -17,7 +17,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class StoreHeldTasksTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
-    private val name = "held-tasks-test.db"
+    private val name = "held-tasks-test-${java.util.UUID.randomUUID()}.db"
     private val home = Conversation("mac", "lab/main", "home.lab.main", home = true)
 
     private fun card(revision: Long, state: String = "held", task: String = "t_1", host: String = "mac") = HeldTask(
@@ -27,7 +27,25 @@ class StoreHeldTasksTest {
 
     @Before @After
     fun clean() {
-        context.deleteDatabase(name)
+        if (context.getDatabasePath(name).exists()) assertTrue(context.deleteDatabase(name))
+    }
+
+    @Test fun capability_survives_actual_close_reopen_and_revision_fences() {
+        val no = HeldTask.from("mac", card(5).json().put("resumable", false))
+        val yes = HeldTask.from("mac", card(1, task = "true-control").json())
+        Store(context, name).use { store ->
+            store.conversation(home)
+            store.heldTask(no); store.heldTask(yes)
+        }
+        Store(context, name).use { store ->
+            assertEquals(setOf(no, yes), store.recent().heldTasks.toSet())
+            store.heldTask(card(4)); store.heldTask(card(5))
+            assertEquals(no, store.recent().heldTasks.single { it.task == no.task })
+            store.heldTask(card(6))
+        }
+        Store(context, name).use { store ->
+            assertTrue(store.recent().heldTasks.single { it.task == no.task }.resumable)
+        }
     }
 
     @Test

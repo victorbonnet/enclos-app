@@ -7,7 +7,7 @@ import org.json.JSONObject
  * background work an agent's runtime started that has stopped and waits for a person
  * before it runs again. The runtime keeps the task; the bridge keeps a card for it in the
  * Home of the agent that started it and sends it to the host's person alone. The app
- * shows the card and offers its one action, Resume.
+ * shows the card and offers Resume when the runtime permits it.
  */
 
 /** enclos-protocol's `held_task` bounds, in characters, as the bridge cuts a card. */
@@ -58,6 +58,8 @@ data class HeldTask(
     val stateWire: String,
     /** The bridge's revision of the card, advanced on every change; a resume names it. */
     val revision: Long,
+    /** Whether the runtime permits Resume from the app; legacy cards default to true. */
+    val resumable: Boolean = true,
 ) {
     val key: HeldTaskKey get() = HeldTaskKey(host, agent, task)
     val state: HeldTaskState get() = HeldTaskState.of(stateWire)
@@ -72,7 +74,7 @@ data class HeldTask(
         .apply { assignee?.let { put("assignee", it) } }
         .put("reason", reason)
         .apply { lastError?.let { put("last_error", it) } }
-        .put("since", since).put("resume", resume).put("state", stateWire).put("revision", revision)
+        .put("resumable", resumable).put("since", since).put("resume", resume).put("state", stateWire).put("revision", revision)
 
     companion object {
         /**
@@ -116,6 +118,8 @@ data class HeldTask(
                 resume = cut(Visible.stripped(string("resume")), MAX_HELD_RESUME_CHARS),
                 stateWire = state,
                 revision = revision,
+                resumable = if (!json.has("resumable")) true else
+                    (json.opt("resumable") as? Boolean) ?: throw IllegalArgumentException("Invalid resumable"),
             )
         }
 

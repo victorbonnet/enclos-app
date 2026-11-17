@@ -53,6 +53,7 @@ class HeldTaskClient(
      * runtime) no longer knows the task, so no Resume, until the bridge sends a newer card.
      */
     val gone = mutableStateMapOf<HeldTaskKey, Long>()
+    private val unsupported = mutableSetOf<HeldTaskKey>()
     private val requests = mutableMapOf<String, HeldTaskRequest>()
     /** By host: whether a sync ended since the connection authenticated, or since this client asked for one. */
     private val fresh = mutableStateMapOf<String, Boolean>()
@@ -70,17 +71,18 @@ class HeldTaskClient(
      */
     fun unlinked(conversation: Conversation, linked: Set<String>): List<HeldTask> = cards.values
         .filter { it.belongsTo(conversation) && it.task !in linked }
-        .filter { offersResume(it) || it.key in pending || it.key in uncertain || it.key in notes }
+        .filter { it.state == HeldTaskState.Held || it.key in pending || it.key in uncertain || it.key in notes }
         .sortedWith(compareBy({ it.since }, { it.task }))
 
     /** Whether the card offers Resume at all: only while held, and not after the host said it has no such task. */
-    fun offersResume(card: HeldTask): Boolean = card.state == HeldTaskState.Held && card.key !in gone
+    fun offersResume(card: HeldTask): Boolean = card.state == HeldTaskState.Held && card.resumable && card.key !in gone
 
     /** What the card says of its state. */
     fun status(card: HeldTask): String = heldTaskStatus(card, here = card.key in receipts, gone = card.key in gone)
 
     /** Why Resume cannot be tapped now, or null when it can. */
     fun unavailable(card: HeldTask): String? = when {
+        card.state == HeldTaskState.Held && !card.resumable -> "This task cannot be resumed from the app."
         !offersResume(card) -> "This task is no longer held."
         card.key in pending -> "Waiting for the runtime to confirm…"
         uncertain[card.key] == true && !connected(card.host) -> "Reconnect to ${card.host} to check whether it resumed."
@@ -100,6 +102,7 @@ class HeldTaskClient(
         val current = cards[incoming.key]
         val selected = newestHeldTask(current, incoming)
         if (selected != current) {
+            if (unsupported.remove(incoming.key)) notes.remove(incoming.key)
             cards[incoming.key] = selected
             // A newer card from the bridge replaces what `not_found` said.
             gone.remove(selected.key)
@@ -123,6 +126,7 @@ class HeldTaskClient(
         val request = HeldTaskRequest(UUID.randomUUID().toString(), current)
         requests[request.id] = request
         pending[current.key] = request
+        unsupported.remove(current.key)
         notes.remove(current.key)
         receipts.remove(current.key)
         if (!send(request)) {
@@ -164,7 +168,13 @@ class HeldTaskClient(
             // Refused before anything was sent to the runtime: certain, and Resume stays.
             "agent_unavailable" -> notes[key] = "The agent is not connected, so nothing was sent. Try again once it is back."
             "not_allowed" -> notes[key] = "Only the host's person can resume held tasks."
-            "bad_message", "unknown_type", "unsupported" ->
+            "unsupported" -> {
+                unsupported.add(key)
+                notes[key] = "This request could not resume the task."
+                fresh[host] = false
+                if (connected(host)) resync(host)
+            }
+            "bad_message", "unknown_type" ->
                 notes[key] = "The bridge on $host cannot resume held tasks. Update enclos there."
             // The bridge has no such card, or the runtime no such task (the plugin asked it):
             // certain, and nothing left to resume. The card says so until a newer one comes.
@@ -216,6 +226,10 @@ class HeldTaskClient(
     /** [host]'s sync ended: each card it sent is current, and the doubt of every card of the host is settled by it. */
     fun synced(host: String) {
         fresh[host] = true
+        unsupported.filter { it.host == host }.toList().forEach { key ->
+            unsupported.remove(key)
+            notes.remove(key)
+        }
         uncertain.keys.filter { it.host == host }.forEach { key ->
             uncertain.remove(key)
             val card = cards[key] ?: return@forEach
@@ -249,6 +263,7 @@ class HeldTaskClient(
 
     private fun forgetCard(key: HeldTaskKey) {
         pending[key]?.let(::finish)
+        unsupported.remove(key)
         cards.remove(key); notes.remove(key); uncertain.remove(key); receipts.remove(key); gone.remove(key)
     }
 
