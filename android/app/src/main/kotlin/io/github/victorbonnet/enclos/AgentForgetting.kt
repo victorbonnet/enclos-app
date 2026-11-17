@@ -113,6 +113,11 @@ class AgentForgetting(
     /** Whether the page of [key] shows Forget: removed, or a forget of it pending or failed. */
     fun offers(key: AgentKey) = isRemoved(key) || key in pending || key in errors
 
+    /** Host-page actions keep removed agents reachable after their inbox rows are hidden. */
+    fun offered(host: String): List<AgentKey> =
+        (removed[host].orEmpty().map { AgentKey(host, it) } + pending.keys + errors.keys)
+            .filter { it.host == host }.distinct().sortedBy { it.name }
+
     fun forget(key: AgentKey): Boolean {
         if (unavailable(key) != null) return false
         val command = message("agent.forget", "agent" to key.name)

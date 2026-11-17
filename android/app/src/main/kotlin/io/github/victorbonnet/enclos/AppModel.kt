@@ -231,8 +231,12 @@ val Line.status: Boolean get() = kind == "status"
 /** The agent's messages among [lines] after [read]; a status line never counts. */
 internal fun unreadAmong(lines: List<Line>, read: Long): Int = lines.count { it.from == "agent" && !it.status && it.seq > read }
 
-/** Whether the inbox lists [conversation], whose messages are [lines]: once something was said in it, an agent's Home and a group always. */
-internal fun listedWith(conversation: Conversation, lines: List<Line>): Boolean = conversation.home || conversation.group || lines.isNotEmpty()
+/** The inbox uses the host's last saved agent inventory, including offline. Hidden history stays saved. */
+internal fun listedWith(conversation: Conversation, lines: List<Line>, agents: List<Agent>): Boolean {
+    if (conversation.group) return true
+    return agents.any { it.host == conversation.host && it.name == conversation.agent } &&
+        (conversation.home || lines.isNotEmpty())
+}
 
 /** The pairing in progress: what the link said, and how far it went. */
 data class Pairing(
@@ -1442,8 +1446,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         conversations.removeAll { it.id == conversation }
     }
 
-    /** Whether the inbox lists [conversation]: once something was said in it, an agent's Home and a group always. */
-    fun listed(conversation: Conversation) = listedWith(conversation, lines[conversation.id].orEmpty())
+    /** Whether the inbox lists [conversation] with the host's latest saved agents and its messages. */
+    fun listed(conversation: Conversation) = listedWith(conversation, lines[conversation.id].orEmpty(), agents)
 
     /** Who a status line of [conversation] is from: its agent's runtime, else the agent. */
     fun statusSource(conversation: Conversation): String =

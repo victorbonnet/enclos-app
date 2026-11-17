@@ -25,6 +25,24 @@ class AgentForgettingTest {
         assertEquals("mac/lab/coder", AgentKey("mac", "lab/coder").address)
     }
 
+    @Test fun the_host_page_keeps_its_removed_and_failed_actions_reachable() {
+        val f = Fixture()
+        f.listed("mac", "gone/coder")
+        f.listed("pi", "gone/coder")
+        assertEquals(listOf(f.coder), f.client.offered("mac"))
+        assertTrue(f.client.forget(f.coder))
+        assertEquals(listOf(f.coder), f.client.offered("mac"))
+        f.receipt("error")
+        // Reauthentication clears the old inventory while a new list is requested.
+        f.client.authenticated("mac")
+        assertEquals(listOf(f.coder), f.client.offered("mac"))
+        f.listed("mac", "gone/coder")
+        assertTrue(f.client.forget(f.coder))
+        f.receipt("ack")
+        assertEquals(emptyList<AgentKey>(), f.client.offered("mac"))
+        assertEquals(listOf(AgentKey("pi", "gone/coder")), f.client.offered("pi"))
+    }
+
     @Test fun the_removed_list_is_asked_only_of_a_bridge_that_forgets() {
         val f = Fixture()
         f.client.authenticated("mac")

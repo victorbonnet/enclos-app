@@ -50,6 +50,7 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
     val p = palette
     val host = model.paired.firstOrNull { it.name == name }
     val live = model.connected(name)
+    LaunchedEffect(name, live) { if (live) model.forgetting.refresh(name) }
     val available = model.canReadAudit(name)
     val audit = model.audit[name] ?: HostAudit()
     LaunchedEffect(name, available) { if (available) model.loadAudit(name) }
@@ -61,6 +62,7 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
     val charted = usage.series.filter { s -> s.points.any { (it.tokens ?: 0) > 0 } }.map { it.agent }
     val slots = usageSlots(model.agents.filter { it.host == name }.map { it.name }, charted)
     val colors: Map<String, Color> = slots.mapValues { (_, slot) -> seriesColor(slot) }
+    val removed = model.forgetting.offered(name)
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
@@ -89,6 +91,12 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
                         Text(sandbox.runtime, style = Type.small, color = p.textMuted)
                     }
                     Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+                }
+            }
+            items(removed, key = { "removed:${it.name}" }) { agent ->
+                Column {
+                    Text(agent.name, style = Type.code, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp))
+                    ForgetAgentSection(model, agent, agent.name.substringAfterLast('/'))
                 }
             }
             item {

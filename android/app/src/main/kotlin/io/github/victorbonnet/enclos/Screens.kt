@@ -327,8 +327,9 @@ fun InboxScreen(
         search(sorted, { said[it].orEmpty() }, { unread[it] ?: 0 }, "", filter, archived = archivedOnly, agentNames = { names[it.id].orEmpty() })
     }
     // A query reads every message: searched off the main thread, each
-    // message folded once (model.folds); the last result stays meanwhile.
-    var searched by remember { mutableStateOf<List<Found>?>(null) }
+    // message folded once (model.folds). Changed inputs retire old results,
+    // so a removed agent cannot remain visible while a new search runs.
+    var searched by remember(sorted, said, unread, names, query, filter, archivedOnly) { mutableStateOf<List<Found>?>(null) }
     LaunchedEffect(sorted, said, unread, names, query, filter, archivedOnly) {
         searched = if (query.isBlank()) {
             null
