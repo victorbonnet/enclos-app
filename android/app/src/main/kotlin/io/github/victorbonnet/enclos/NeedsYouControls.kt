@@ -34,13 +34,13 @@ fun FocusedRequest(model: AppModel, item: OpenItem) {
         when (item.kind) {
             "question", "runtime_approval" -> {
                 val question = model.questions.questions[QuestionKey(item.host, item.id)]
-                if (question == null) Text("Connect to this host to load the request.", style = Type.body, color = palette.textMuted)
+                if (question == null) Text(if (model.connected(item.host)) "Native controls are unavailable for this request. Review the original message below or use the runtime to answer it." else "Connect to this host to load the request.", style = Type.body, color = palette.textMuted)
                 else if (question.approval != null) RuntimeApprovalCard(model.questions, question)
                 else QuestionCard(model.questions, question) { model.draftQuestionReply(question, it) }
             }
             "held_task" -> {
                 val card = model.heldTasks.cards.values.firstOrNull { it.host == item.host && it.agent == item.agent && it.task == item.id }
-                if (card == null) Text("Connect to this host to load the request.", style = Type.body, color = palette.textMuted)
+                if (card == null) Text(if (model.connected(item.host)) "The task’s controls are unavailable. Review its original message below." else "Connect to this host to load the request.", style = Type.body, color = palette.textMuted)
                 else HeldTaskCard(model.heldTasks, card)
                 val conversation = model.conversations.firstOrNull { it.id == item.conversation && it.host == item.host }
                 if (conversation != null) {
