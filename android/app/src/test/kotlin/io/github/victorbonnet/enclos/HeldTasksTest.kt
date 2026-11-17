@@ -13,6 +13,19 @@ class HeldTasksTest {
 
     private val home = Conversation("mac", "lab/main", "home.lab.main", home = true)
 
+    @Test fun resumable_is_strict_optional_and_survives_cache_and_copy() {
+        for (value in listOf(true, false)) {
+            val card = HeldTask.from("mac", wire().put("resumable", value))
+            assertEquals(value, card.json().getBoolean("resumable"))
+            assertEquals(value, HeldTask.from("mac", JSONObject(card.json().toString())).copy().json().getBoolean("resumable"))
+            assertEquals(listOf(card), keptHeldTasks(listOf(HeldTaskRow("mac", card.agent, card.task, card.json().toString())), listOf(home)).first)
+        }
+        assertTrue(HeldTask.from("mac", wire()).json().getBoolean("resumable"))
+        for (bad in listOf(JSONObject.NULL, "false", "true", 0, 1, 0.5, JSONObject(), org.json.JSONArray())) {
+            assertThrows(IllegalArgumentException::class.java) { HeldTask.from("mac", wire().put("resumable", bad)) }
+        }
+    }
+
     @Test fun a_card_reads_every_field_of_the_bridge() {
         val card = HeldTask.from("mac", wire())
         assertEquals(HeldTaskKey("mac", "lab/main", "t_1"), card.key)

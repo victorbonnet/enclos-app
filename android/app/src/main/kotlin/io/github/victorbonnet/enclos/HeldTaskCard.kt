@@ -1,5 +1,8 @@
 package io.github.victorbonnet.enclos
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,7 +39,7 @@ fun HeldTaskCard(client: HeldTaskClient, card: HeldTask) {
     val unavailable = client.unavailable(card)
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // The runtime wrote all that follows; this line is the app's.
-        Text(HELD_TASK_FRAME, style = Type.small, color = p.textMuted)
+        Text(if (card.resumable) HELD_TASK_FRAME else "Held task", style = Type.small, color = p.textMuted)
         SelectionContainer { Text(card.title, style = Type.name, color = p.text) }
         SelectionContainer { Text(card.reason, style = Type.body, color = p.text) }
         card.lastError?.let { error ->
@@ -53,11 +56,20 @@ fun HeldTaskCard(client: HeldTaskClient, card: HeldTask) {
                     )
                 }
             }
-            if (folds) TextLink(if (unfolded) "Show less" else "Show the whole error") { unfolded = !unfolded }
+            if (folds) Text(
+                if (unfolded) "Show less" else "Show the whole error",
+                style = Type.label, color = p.accent,
+                modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
+                    .clickable(role = Role.Button) { unfolded = !unfolded }.padding(vertical = 12.dp),
+            )
         }
         card.assignee?.let { Text("Assigned to $it", style = Type.small, color = p.textMuted) }
         Text("Held since ${Times.ago(card.since, System.currentTimeMillis() / 1000)}", style = Type.small, color = p.textMuted)
-        if (card.resume.isNotBlank()) Text("Resume: ${card.resume}", style = Type.small, color = p.textMuted)
+        if (card.resumable) {
+            if (card.resume.isNotBlank()) Text("Resume: ${card.resume}", style = Type.small, color = p.textMuted)
+        } else if (card.state == HeldTaskState.Held) {
+            Text(card.resume.ifBlank { "This task cannot be resumed from the app." }, style = Type.small, color = p.textMuted)
+        }
         Text(client.status(card), style = Type.body, color = p.text)
         if (client.offersResume(card)) {
             PrimaryButton("Resume", enabled = unavailable == null) { client.resume(card) }
