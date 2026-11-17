@@ -317,6 +317,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         send = { host, command -> connections[host]?.send(command) == true },
         task = { key -> tasks[key] },
         available = { task -> connected(task.host) && offersTaskDetails(task.assigneeAddress) },
+        heldAvailable = ::offersHeldTaskDetails,
         later = { wait, action -> main.postDelayed({ action() }, wait) },
     )
     val routines = RoutineClient(
@@ -335,6 +336,13 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val lines = mutableStateMapOf<String, List<Line>>()
     val needsYou = NeedsYou { host, items -> save { openItems(host, items) } }
     var focusedRequest by mutableStateOf<OpenItem?>(null)
+    val reminderDismissals = ReminderDismissals(
+        index = needsYou,
+        connected = ::connected,
+        supported = { host -> hostSupports(host, "open_item.dismiss") },
+        send = { item, id -> connections[item.host]?.send(message("open_item.dismiss", "kind" to item.kind, "item" to item.id, "agent" to item.agent, "version" to item.version).put("id", id)) == true },
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+    )
 
     val questions = QuestionClient(
         send = { request -> connections[request.question.host]?.send(request.command()) == true },
@@ -421,7 +429,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     deletion.deleted.putAll(recent.deleted.associateWith { true })
                     conversations.addAll(recent.conversations.filter { ConversationKey(it.host, it.id) !in deletion.deleted })
                     recent.questions.forEach { questions.merge(it, cached = true) }
-                    needsYou.restore(recent.openItems)
+                    needsYou.restore(recent.openItems, recent.indexedHosts)
                     recent.heldTasks.forEach { heldTasks.merge(it, cached = true) }
                     lines.putAll(recent.lines)
                     kept.putAll(recent.kept)
@@ -728,6 +736,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         tasks.askedIn(conversation.host, conversation.id).filter { offersTasks(it.assigneeAddress) }
 
     /** Whether the agent at [address] (`host/sandbox/agent`) shares its tasks' details: its channel has the `task_details` capability. */
+    fun offersHeldTaskDetails(card: HeldTask): Boolean = connected(card.host) && hostSupports(card.host, "held_task.get") &&
+        agents.any { it.host == card.host && it.name == card.agent && "held_task_details" in it.capabilities }
+
     fun offersTaskDetails(address: String) = agents.any { it.address == address && "task_details" in it.capabilities }
 
     /** The task the agent at [address] (`host/sandbox/agent`) is working on, as its activity names it, when the phone keeps that task. */
@@ -990,6 +1001,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         routines.ended(host.name)
         questions.ended(host.name)
         needsYou.ended(host.name)
+        reminderDismissals.ended(host.name)
         heldTasks.ended(host.name)
         // What the agents were doing comes again after `agents.list`; a sync the old connection began drops nothing.
         activities.ended(host.name)
@@ -1053,6 +1065,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         routines.ended(host.name)
         questions.ended(host.name)
         needsYou.ended(host.name)
+        reminderDismissals.ended(host.name)
         heldTasks.ended(host.name)
         agentNames.ended(host.name)
         agentImages.ended(host.name)
@@ -1123,6 +1136,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (about != null && leftOutForClash(conversations, host.name, m.optString("type"), about)) {
             return refusedClash(host.name, about, m.optString("agent").ifBlank { null })
         }
+        if (reminderDismissals.received(host.name, m)) return
         if (m.optString("type") == "open_items") { needsYou.received(host.name, m); return }
         if (m.optString("type") in setOf("question", "question.result", "question.closed", "error") && questions.received(host.name, m)) return
         if (m.optString("type") in setOf("held_task", "held_task.result", "error") && heldTasks.received(host.name, m)) return
@@ -1163,12 +1177,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "authenticated" -> {
                 questions.authenticated(host.name)
-                needsYou.authenticated(host.name)
                 heldTasks.authenticated(host.name)
                 approvalsFresh[host.name] = false
                 // A connection that replaced another without ending it: what the old one said is not fresh.
                 policyConnectionEnded(host.name)
                 hostCapabilities[host.name] = hostCapabilitiesIn(m)
+                needsYou.authenticated(host.name, hostSupports(host.name, "open_items"))
                 if (!hostSupports(host.name, "audit")) audit.remove(host.name)
                 if (!hostSupports(host.name, "usage")) {
                     hostUsage.remove(host.name)
@@ -2040,7 +2054,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // Every host syncs again from the start: what was skipped comes again.
         unreadable.clear()
         paired.forEach { deletion.ended(it.name) }
-        paired.forEach { questions.forget(it.name); needsYou.forget(it.name) }
+        paired.forEach { questions.forget(it.name); needsYou.forget(it.name); reminderDismissals.forget(it.name) }
         paired.forEach { heldTasks.forget(it.name) }
         paired.forEach { agentNames.forget(it.name) }
         paired.forEach { routines.forget(it.name) }
@@ -2109,6 +2123,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         clashAgents.remove(host)
         questions.forget(host)
         needsYou.forget(host)
+        reminderDismissals.forget(host)
         heldTasks.forget(host)
         deletion.forget(host)
         forgetting.clear(host)

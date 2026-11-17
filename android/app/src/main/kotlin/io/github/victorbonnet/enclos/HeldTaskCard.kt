@@ -33,7 +33,7 @@ const val HELD_TASK_FRAME = "Held task · the runtime keeps it; resuming changes
  * and arrive without hidden characters ([HeldTask.from]).
  */
 @Composable
-fun HeldTaskCard(client: HeldTaskClient, card: HeldTask) {
+fun HeldTaskCard(client: HeldTaskClient, card: HeldTask, onViewTask: (() -> Unit)? = null) {
     val p = palette
     var reasonUnfolded by rememberSaveable(card.host, card.agent, card.task) { mutableStateOf(false) }
     var unfolded by rememberSaveable(card.host, card.agent, card.task) { mutableStateOf(false) }
@@ -77,9 +77,10 @@ fun HeldTaskCard(client: HeldTaskClient, card: HeldTask) {
         }
         Text(client.status(card), style = Type.body, color = p.text)
         if (client.offersResume(card)) {
-            PrimaryButton("Resume", enabled = unavailable == null) { client.resume(card) }
+            PrimaryButton("Resume task", enabled = unavailable == null) { client.resume(card) }
             unavailable?.let { Text(it, style = Type.small, color = p.textMuted) }
         }
+        onViewTask?.let { RequestSecondaryButton("View task", onClick = it) }
         client.notes[card.key]?.let { Text(it, style = Type.small, color = p.textMuted) }
     }
 }

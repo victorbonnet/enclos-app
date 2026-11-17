@@ -67,6 +67,7 @@ class StoreTest {
                 assertTrue("a new database lacks: $statement", statement in CREATE)
                 continue
             }
+            if (statement == "INSERT OR IGNORE INTO open_item_hosts(host) SELECT DISTINCT host FROM open_items") continue
             val (table, column) = adding.matchEntire(statement)?.destructured ?: error("not an addition: $statement")
             val created = CREATE.first { it.startsWith("CREATE TABLE $table (") }
             assertTrue("$table lacks $column", created.contains(column))

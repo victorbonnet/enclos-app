@@ -416,6 +416,7 @@ private fun Screens(model: AppModel, ask: Ask) {
                 }
             }
         }
+        NeedsYouSheet(model, openChat = { go(Route.Chat(it)) }, openApproval = { go(Route.ApprovalPage(it)) })
         // A task opened from any screen: its sheet over it.
         TaskSheet(model, openChat = { go(Route.Chat(it)) })
     }

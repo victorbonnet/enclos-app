@@ -16,7 +16,7 @@ class StoreNeedsYouTest {
         val path = context.getDatabasePath(name)
         path.parentFile!!.mkdirs()
         SQLiteDatabase.openOrCreateDatabase(path, null).use { old ->
-            CREATE.filterNot { it.startsWith("CREATE TABLE open_items") }.forEach {
+            CREATE.filterNot { it.startsWith("CREATE TABLE open_item") }.forEach {
                 old.execSQL(it.replace(", suggested_replies TEXT", ""))
             }
             old.execSQL("INSERT INTO conversations(id,host,agent) VALUES ('home','one','lab/main')")
@@ -37,8 +37,10 @@ class StoreNeedsYouTest {
                 assertEquals(listOf("Fix Inbox filters", "Keep paused"), saved.lines["home"]!!.last().suggestedReplies)
                 restored.openItems("one", emptyList())
                 assertEquals(listOf("two"), restored.recent().openItems.map { it.host })
+                assertEquals(setOf("one", "two"), restored.recent().indexedHosts)
                 restored.forget("two")
                 assertTrue(restored.recent().openItems.isEmpty())
+                assertEquals(setOf("one"), restored.recent().indexedHosts)
             }
         } finally { context.deleteDatabase(name) }
     }

@@ -236,11 +236,15 @@ class TaskDetails(
     /** Whether [task]'s detail can be asked for now: its host connected, its agent offering `task_details`. */
     private val available: (AgentTask) -> Boolean,
     private val later: (Long, () -> Unit) -> Unit,
+    private val heldAvailable: (HeldTask) -> Boolean = { false },
 ) {
     private data class Request(val id: String, val host: String, val agent: String, val task: String)
 
     /** The task whose sheet shows, if any. */
     var open by mutableStateOf<TaskKey?>(null)
+        private set
+
+    var held by mutableStateOf<HeldTask?>(null)
         private set
 
     /** The open task's detail, once one came. */
@@ -265,15 +269,24 @@ class TaskDetails(
 
     /** Opens the sheet of [key], in place of any other. */
     fun show(key: TaskKey) {
-        if (open == key) return
+        if (open == key && held == null) return
         reset()
+        held = null
         open = key
+    }
+
+    /** Uses the creator and exact opaque board reference; never a guessed task-list id. */
+    fun showHeld(card: HeldTask) {
+        reset()
+        held = card
+        open = TaskKey(card.host, card.agent.substringBefore('/'), card.task)
     }
 
     /** Closes the sheet: its detail goes. */
     fun close() {
         reset()
         open = null
+        held = null
     }
 
     private fun reset() {
@@ -288,10 +301,13 @@ class TaskDetails(
     /** Asks the host for the open task's detail; returns whether it was sent. */
     fun fetch(): Boolean {
         val key = open ?: return false
-        val shown = task(key) ?: return false
-        if (pending != null || !available(shown)) return false
-        val command = message("task.get", "agent" to shown.assignee, "task" to shown.id)
-        val request = Request(command.getString("id"), shown.host, shown.assignee, shown.id)
+        if (pending != null) return false
+        val card = held
+        val shown = if (card == null) task(key) ?: return false else null
+        if (card != null && !heldAvailable(card) || shown != null && !available(shown)) return false
+        val agent = card?.agent ?: shown!!.assignee
+        val command = message(if (card != null) "held_task.get" else "task.get", "agent" to agent, "task" to key.id)
+        val request = Request(command.getString("id"), key.host, agent, key.id)
         pending = request
         sent[request.id] = request
         loading = true
@@ -303,7 +319,7 @@ class TaskDetails(
                 askAgainIfChanged()
             }
         }
-        if (!send(shown.host, command)) {
+        if (!send(key.host, command)) {
             finish()
             sent.remove(request.id)
             error = "The request was not sent. Reconnect and try again."
@@ -331,7 +347,7 @@ class TaskDetails(
 
     /** A task came from a bridge, [before] being what the phone kept of it: an open sheet on it asks again when it changed ([asksAgain]). */
     fun updated(before: AgentTask?, after: AgentTask) {
-        if (after.key != open || !asksAgain(before, after)) return
+        if (held != null || after.key != open || !asksAgain(before, after)) return
         if (pending != null) again = true else fetch()
     }
 

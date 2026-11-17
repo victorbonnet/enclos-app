@@ -92,13 +92,26 @@ class NeedsYouTest {
     @Test fun policy_rows_lead_with_the_host_resolved_target_and_never_duplicate_or_reopen() {
         val request = PolicyRequest("host", "p", "lab", "lab/main", "home", "write", "/input",
             false, "Allow the download?", 2, "pending", "", false, "r", true, null, "/resolved/private")
-        val projected = OpenItem("host", "p", "policy_request", null, "home", request.action, 2, false)
+        val projected = OpenItem("host", "p", "policy_request", "lab/main", "home", request.action, 2, false)
         val shown = attentionItems(listOf(projected), listOf(request))
         assertEquals(1, shown.size)
         assertEquals("Write to /resolved/private", shown.single().summary)
         assertEquals("lab/main", shown.single().agent)
         assertTrue(attentionItems(listOf(projected), listOf(request.copy(state = "closed"))).isEmpty())
         assertEquals(shown, attentionItems(emptyList(), listOf(request)))
+    }
+
+    @Test fun an_empty_authoritative_snapshot_does_not_recreate_dismissed_policy_rows() {
+        val request = PolicyRequest("host", "p", "lab", "lab/main", "home", "write", "/input",
+            false, "Allow?", 2, "pending", "", false, "r", true, null)
+        assertEquals(1, attentionItems(emptyList(), listOf(request)).size)
+        assertTrue(attentionItems(emptyList(), listOf(request), setOf("host")).isEmpty())
+        val index = NeedsYou()
+        index.restore(emptyList(), setOf("host"))
+        assertTrue("host" in index.indexedHosts)
+        assertTrue(index.freshHosts.isEmpty())
+        index.authenticated("host", supportsProjection = false)
+        assertEquals(1, attentionItems(emptyList(), listOf(request), index.indexedHosts.keys).size)
     }
 
 }

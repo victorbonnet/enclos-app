@@ -377,14 +377,8 @@ fun InboxScreen(
                             } }
                             items(requests, key = { "request:${it.key}" }) { request ->
                                 Arriving { NeedsYouRow(request, request.agent?.let { model.agentLabel("${request.host}/$it") } ?: "Sandbox request", model.connected(request.host), request.agent?.let { PhotoKey(request.host, it) }) {
-                                    if (request.kind == "policy_request") openApproval("${request.host}/${request.id}")
-                                    else request.conversation?.let { id ->
-                                        if (model.conversations.any { it.host == request.host && it.id == id }) {
-                                            model.focusedRequest = request
-                                            requestError = null
-                                            open(id)
-                                        } else requestError = "The conversation is not available on this phone. Reconnect to ${request.host} to refresh requests."
-                                    }
+                                    model.focusedRequest = request
+                                    requestError = null
                                 } }
                             }
                             item(key = "needs-you-gap") { Gap(8.dp) }
@@ -1431,7 +1425,6 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     val lines = model.lines[id].orEmpty()
     val notices = remember(lines) { statusRuns(lines) }
     val statusExpanded = remember(id) { mutableStateMapOf<Long, Boolean>() }
-    val focused = model.focusedRequest?.takeIf { it.host == conversation.host && it.conversation == id }
     // Where each held task's card is drawn: the newest message that introduced it.
     val introductions = remember(lines) { heldTaskIntroductions(lines) }
     val scope = "${conversation.host}/${conversation.agent}"
@@ -1461,7 +1454,6 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     // Why the last message could not go (too long, say): the draft stays.
     var unsent by remember { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
-    LaunchedEffect(focused?.key) { if (focused != null) list.scrollToItem(0) }
     // Whether the person is at the newest: the first item (the list is
     // reversed) at its very end. Read when a scroll ends, theirs or the
     // list's own, not when a message arrives, which shifts the first
@@ -1577,15 +1569,12 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             // ended with no answer shows none.
             val running = model.steps[id].orEmpty()
             if (working && running.isNotEmpty()) item(key = "steps-live") { Arriving { ToolSteps(running, live = true, expanded = true) {} } }
-            focused?.let { request -> item(key = "focused-request") {
-                Arriving { Bubble(text = "", time = "", outgoing = false, content = { FocusedRequest(model, request) }) }
-            } }
             // Held tasks no loaded message introduces (one held before this phone kept the
             // link, say), below the history; newest lowest, as the list is drawn bottom-up.
             model.heldTasks.unlinked(conversation, introductions.keys).asReversed().forEach { card ->
                 item(key = "held-${card.agent}/${card.task}") {
                     Arriving {
-                        Bubble(text = "", time = Times.clock(card.since), outgoing = false, content = { HeldTaskCard(model.heldTasks, card) })
+                        Bubble(text = "", time = Times.clock(card.since), outgoing = false, content = { HeldTaskCard(model.heldTasks, card, onViewTask = { model.taskDetails.showHeld(card) }) })
                     }
                 }
             }
@@ -1632,7 +1621,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             },
                             content = question?.let { known -> {
                                 if (known.approval != null) RuntimeApprovalCard(model.questions, known) else QuestionCard(model.questions, known) { model.draftQuestionReply(known, it) }
-                            } } ?: held?.let { card -> { HeldTaskCard(model.heldTasks, card) } },
+                            } } ?: held?.let { card -> { HeldTaskCard(model.heldTasks, card, onViewTask = { model.taskDetails.showHeld(card) }) } },
                         )
                         SuggestedReplyButtons(model, conversation, line, lines)
                         }

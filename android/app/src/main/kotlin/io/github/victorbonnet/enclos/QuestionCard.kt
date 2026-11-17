@@ -36,7 +36,7 @@ internal fun questionStatus(question: QuestionInfo): String {
 
 /** Typed native questions only; readable history stays the fallback for older hosts. */
 @Composable
-fun QuestionCard(client: QuestionClient, question: QuestionInfo, onFollowup: ((QuestionAnswer) -> Unit)? = null) {
+fun QuestionCard(client: QuestionClient, question: QuestionInfo, showClose: Boolean = true, onFollowup: ((QuestionAnswer) -> Unit)? = null) {
     if (question.approval != null) return
     val p = palette
     var selected by rememberSaveable(question.host, question.id) { mutableStateOf(emptyList<Int>()) }
@@ -89,16 +89,16 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo, onFollowup: ((Q
             if (answer == null && (custom || question.choices.isEmpty()) && text.isNotBlank()) {
                 Text("Remove tabs or hidden characters to submit.", style = Type.small, color = p.textMuted)
             }
-            if (followup) Text("The live question expired. Open your answer in a new conversation, then press Send. Newer questions stay untouched; close this request separately when you are done.", style = Type.small, color = p.textMuted)
-            PrimaryButton(if (followup) "Open reply conversation" else "Submit", enabled = enabled && answer != null) {
+            if (followup) Text("This question expired. Your answer opens as a draft in a new conversation; press Send there.", style = Type.small, color = p.textMuted)
+            PrimaryButton(if (followup) "Write reply" else "Send answer", enabled = enabled && answer != null) {
                 answer?.let { if (followup) onFollowup?.invoke(it) else client.submit(question, it) }
             }
-            if (!followup) ActionButton("Skip", enabled = enabled) { client.submit(question, QuestionAnswer.Skip) }
+            if (!followup) RequestSecondaryButton("Skip question", enabled = enabled) { client.submit(question, QuestionAnswer.Skip) }
             unavailable?.let { Text(it, style = Type.small, color = p.textMuted) }
             // An unconfirmed outcome is settled by a fresh sync, not by reconnecting.
             if (client.canCheckAgain(question)) ActionButton("Check again") { client.checkAgain(question) }
         }
-        if (client.offersClose(question) && client.closed[question.key] != true) {
+        if (showClose && client.offersClose(question) && client.closed[question.key] != true) {
             ActionButton(if (question.key in client.closing) "Closing…" else "Close request", enabled = client.closeUnavailable(question) == null) { client.close(question) }
             client.closeUnavailable(question)?.let { Text(it, style = Type.small, color = p.textMuted) }
         }

@@ -1,5 +1,8 @@
 package io.github.victorbonnet.enclos
 
+import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
@@ -26,33 +29,77 @@ fun NeedsYouRow(item: OpenItem, label: String, online: Boolean, photo: PhotoKey?
     }
 }
 
-/** A reference to the original card, opened with its conversation, never a new message. */
+/** A request has one review surface, separate from the conversation history. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun FocusedRequest(model: AppModel, item: OpenItem) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Needs you", style = Type.label, color = palette.accent)
-        when (item.kind) {
-            "question", "runtime_approval" -> {
-                val question = model.questions.questions[QuestionKey(item.host, item.id)]
-                if (question == null) Text(if (model.connected(item.host)) "Native controls are unavailable for this request. Review the original message below or use the runtime to answer it." else "Connect to this host to load the request.", style = Type.body, color = palette.textMuted)
-                else if (question.approval != null) RuntimeApprovalCard(model.questions, question)
-                else QuestionCard(model.questions, question) { model.draftQuestionReply(question, it) }
-            }
-            "held_task" -> {
-                val card = model.heldTasks.cards.values.firstOrNull { it.host == item.host && it.agent == item.agent && it.task == item.id }
-                if (card == null) Text(if (model.connected(item.host)) "The task’s controls are unavailable. Review its original message below." else "Connect to this host to load the request.", style = Type.body, color = palette.textMuted)
-                else HeldTaskCard(model.heldTasks, card)
-                val conversation = model.conversations.firstOrNull { it.id == item.conversation && it.host == item.host }
-                if (conversation != null) {
-                    val history = model.lines[conversation.id].orEmpty()
-                    history.lastOrNull { offeredReplies(it, history).isNotEmpty() }?.let { line ->
-                        SuggestedReplyButtons(model, conversation, line, history)
+fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (String) -> Unit) {
+    val opening = model.focusedRequest ?: return
+    val item = model.attentionItems().firstOrNull { it.key == opening.key }
+    if (item == null && model.needsYou.freshHosts[opening.host] == true) {
+        LaunchedEffect(opening.key) { model.focusedRequest = null }
+        return
+    }
+    val current = item ?: opening
+    val sheet = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = { model.focusedRequest = null }, sheetState = sheet,
+        containerColor = palette.bg, shape = Shapes.bubble, tonalElevation = 0.dp,
+    ) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Needs you", style = Type.label, color = palette.accent)
+            Text(current.agent?.let { model.agentLabel("${current.host}/$it") } ?: "Sandbox request", style = Type.name, color = palette.text)
+            when (current.kind) {
+                "held_task" -> {
+                    val card = model.heldTasks.cards.values.firstOrNull { it.host == current.host && it.agent == current.agent && it.task == current.id }
+                    if (card == null) Text(current.summary, style = Type.small, color = palette.text)
+                    else {
+                        Text(card.title, style = Type.name, color = palette.text)
+                        Text(card.reason, style = Type.small, color = palette.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        if (model.heldTasks.offersResume(card)) {
+                            PrimaryButton("Resume task", enabled = model.heldTasks.canResume(card)) { model.heldTasks.resume(card) }
+                            model.heldTasks.unavailable(card)?.let { Text(it, style = Type.small, color = palette.textMuted) }
+                        }
+                        RequestSecondaryButton("View task") {
+                            model.focusedRequest = null
+                            model.taskDetails.showHeld(card)
+                        }
+                        model.heldTasks.notes[card.key]?.let { Text(it, style = Type.small, color = palette.textMuted) }
+                    }
+                }
+                "question", "runtime_approval" -> {
+                    val question = model.questions.questions[QuestionKey(current.host, current.id)]
+                    if (question == null) {
+                        Text(current.summary, style = Type.small, color = palette.text)
+                        Text("Open the conversation to review this request.", style = Type.small, color = palette.textMuted)
+                    } else if (question.approval != null) RuntimeApprovalCard(model.questions, question)
+                    else QuestionCard(model.questions, question, showClose = false) { model.draftQuestionReply(question, it) }
+                }
+                "policy_request" -> {
+                    Text(current.summary, style = Type.small, color = palette.text)
+                    PrimaryButton("Review request") {
+                        model.focusedRequest = null
+                        openApproval("${current.host}/${current.id}")
                     }
                 }
             }
+            val conversation = model.conversations.firstOrNull { it.host == current.host && it.id == current.conversation }
+            if (conversation != null) RequestSecondaryButton("View conversation") {
+                model.focusedRequest = null
+                openChat(conversation.id)
+            }
+            RequestSecondaryButton(if (current.key in model.reminderDismissals.pending) "Dismissing…" else "Dismiss reminder", enabled = model.reminderDismissals.unavailable(current) == null) {
+                model.reminderDismissals.dismiss(current)
+            }
+            Text("Dismiss hides this reminder. It leaves the request and work unchanged.", style = Type.small, color = palette.textMuted)
+            model.reminderDismissals.unavailable(current)?.let { Text(it, style = Type.small, color = palette.textMuted) }
+            model.reminderDismissals.errors[current.key]?.let { Text(it, style = Type.small, color = palette.textMuted) }
         }
-        TextLink("Back to latest messages") { model.focusedRequest = null }
     }
+}
+
+@Composable
+fun RequestSecondaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+    ActionButton(text, modifier = Modifier.fillMaxWidth().border(1.dp, palette.line, Shapes.control), enabled = enabled, wrap = true, onClick = onClick)
 }
 
 @Composable

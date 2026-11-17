@@ -56,7 +56,7 @@ class NeedsYouSemanticsTest {
                 click("Director" + if (expired) " · Expired" else "")
                 click("Fix Inbox filters")
                 capture("choice")
-                click(if (expired) "Open reply conversation" else "Submit")
+                click(if (expired) "Write reply" else "Send answer")
                 runner.waitForIdleSync()
                 if (expired) {
                     assertNull(activity.submitted)

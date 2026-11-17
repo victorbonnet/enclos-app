@@ -40,7 +40,7 @@ class HeldTaskSemanticsTest {
                     val all = nodes(root.semanticsOwner.unmergedRootSemanticsNode)
                     val texts = all.flatMap { it.config.getOrElse(SemanticsProperties.Text) { emptyList() } }.map { it.text }
                     assertTrue(texts.contains("Held · waiting for you"))
-                    assertEquals(resumable, texts.contains("Resume"))
+                    assertEquals(resumable, texts.contains("Resume task"))
                     assertEquals(resumable, texts.any { it.startsWith("Resume:") })
                     if (!resumable) {
                         assertTrue(texts.contains("Held task"))

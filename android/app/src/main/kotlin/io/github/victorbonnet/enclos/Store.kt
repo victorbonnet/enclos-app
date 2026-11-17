@@ -22,6 +22,7 @@ class Saved(
     val deleted: List<ConversationKey> = emptyList(),
     val heldTasks: List<HeldTask> = emptyList(),
     val openItems: List<OpenItem> = emptyList(),
+    val indexedHosts: Set<String> = emptySet(),
 )
 
 /**
@@ -95,7 +96,8 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
         }
         val deleted = db.rawQuery("SELECT host,id FROM conversation_deletions", null).use { c -> c.rows { ConversationKey(it.getString(0), it.getString(1)) } }
         val open = db.rawQuery("SELECT host,info FROM open_items", null).use { c -> c.rows { OpenItem.from(it.getString(0), JSONObject(it.getString(1))) } }
-        return Saved(agents, conversations, lines, kept, questions, deleted, heldTasks, open)
+        val indexed = db.rawQuery("SELECT host FROM open_item_hosts", null).use { c -> c.rows { it.getString(0) }.toSet() }
+        return Saved(agents, conversations, lines, kept, questions, deleted, heldTasks, open, indexed)
     }
 
     /** Every message kept, by conversation, in `seq` order. */
@@ -200,6 +202,7 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
         val db = writableDatabase
         db.beginTransaction()
         try {
+            db.insertWithOnConflict("open_item_hosts", null, ContentValues().apply { put("host", host) }, SQLiteDatabase.CONFLICT_IGNORE)
             db.delete("open_items", "host=?", arrayOf(host))
             items.forEach { item -> db.insertOrThrow("open_items", null, ContentValues().apply {
                 put("host", host); put("item_key", item.key); put("conversation", item.conversation); put("info", item.json().toString())
@@ -298,7 +301,7 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
         val db = writableDatabase
         db.beginTransaction()
         try {
-            listOf("messages", "questions", "held_tasks", "open_items", "conversations", "agents").forEach { db.delete(it, null, null) }
+            listOf("messages", "questions", "held_tasks", "open_items", "open_item_hosts", "conversations", "agents").forEach { db.delete(it, null, null) }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -310,7 +313,7 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
         val db = writableDatabase
         db.beginTransaction()
         try {
-            listOf("messages", "questions", "held_tasks", "open_items", "conversations", "agents", "conversation_deletions").forEach { db.delete(it, "host = ?", arrayOf(host)) }
+            listOf("messages", "questions", "held_tasks", "open_items", "open_item_hosts", "conversations", "agents", "conversation_deletions").forEach { db.delete(it, "host = ?", arrayOf(host)) }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -393,7 +396,7 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
 }
 
 /** The database's version: [upgrades] brings an older one to it. */
-internal const val STORE_VERSION = 9
+internal const val STORE_VERSION = 10
 
 /** A new database, at [STORE_VERSION]. */
 internal val CREATE = listOf(
@@ -410,12 +413,15 @@ internal val CREATE = listOf(
     DELETIONS,
     HELD_TASKS,
     OPEN_ITEMS,
+    OPEN_ITEM_HOSTS,
 )
 
 /** Held tasks' cards, by host, agent and task, each with its Home and the bridge's revision. */
 private const val HELD_TASKS =
     "CREATE TABLE held_tasks (host TEXT NOT NULL, agent TEXT NOT NULL, task TEXT NOT NULL, conversation TEXT NOT NULL, " +
         "revision INTEGER NOT NULL CHECK(revision>=0), info TEXT NOT NULL, PRIMARY KEY (host, agent, task))"
+
+private const val OPEN_ITEM_HOSTS = "CREATE TABLE open_item_hosts (host TEXT PRIMARY KEY)"
 
 private const val OPEN_ITEMS = "CREATE TABLE open_items (host TEXT NOT NULL, item_key TEXT NOT NULL, conversation TEXT, info TEXT NOT NULL, PRIMARY KEY(host,item_key))"
 
@@ -459,5 +465,6 @@ internal fun upgrades(old: Int): List<String> = buildList {
         add(HELD_TASKS)
     }
     if (old < 9) { add("ALTER TABLE messages ADD COLUMN suggested_replies TEXT"); add(OPEN_ITEMS) }
+    if (old < 10) { add(OPEN_ITEM_HOSTS); add("INSERT OR IGNORE INTO open_item_hosts(host) SELECT DISTINCT host FROM open_items") }
 
 }
