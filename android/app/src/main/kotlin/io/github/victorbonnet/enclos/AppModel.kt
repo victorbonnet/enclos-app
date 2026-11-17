@@ -8,6 +8,7 @@ import android.os.Looper
 import android.os.SystemClock
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -334,7 +335,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     )
     val conversations = mutableStateListOf<Conversation>()
     val lines = mutableStateMapOf<String, List<Line>>()
-    val needsYou = NeedsYou { host, items -> save { openItems(host, items) } }
+    val needsYou: NeedsYou = NeedsYou(policies = { approvals.values }, dropped = { android.util.Log.w("enclos", it) }) { host, items ->
+        val coverage = needsYou.policyCoverage(host)
+        save { openItems(host, items, coverage) }
+    }
+    val attentionItems: List<OpenItem> by derivedStateOf {
+        attentionItems(needsYou.items.values, approvals.values, needsYou.indexedHosts.keys, needsYou.staleHosts.keys, needsYou.coveredPolicies)
+    }
+    private val attentionByAgent: Map<String, Int> by derivedStateOf { attentionCounts(attentionItems) }
+    fun attentionCount(agent: String): Int = attentionByAgent[agent] ?: 0
     var focusedRequest by mutableStateOf<OpenItem?>(null)
     val reminderDismissals = ReminderDismissals(
         index = needsYou,
@@ -352,7 +361,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         later = { wait, action -> main.postDelayed({ action() }, wait) },
         resync = { host -> connections[host]?.send(message("sync", "since" to since(host), "open_items" to true)) == true },
         dropped = { why -> android.util.Log.d("enclos", "question not shown: $why") },
-        projectionFresh = { host -> needsYou.staleHosts[host] != true },
         closeSupported = { host -> hostSupports(host, "question.close") },
         sendClose = { question, id -> connections[question.host]?.send(message("question.close", "question" to question.id, "revision" to question.revision).put("id", id)) == true },
     )
@@ -429,7 +437,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     deletion.deleted.putAll(recent.deleted.associateWith { true })
                     conversations.addAll(recent.conversations.filter { ConversationKey(it.host, it.id) !in deletion.deleted })
                     recent.questions.forEach { questions.merge(it, cached = true) }
-                    needsYou.restore(recent.openItems, recent.indexedHosts)
+                    needsYou.restore(recent.openItems, recent.indexedHosts, recent.policyCoverage, recent.deleted.toSet())
                     recent.heldTasks.forEach { heldTasks.merge(it, cached = true) }
                     lines.putAll(recent.lines)
                     kept.putAll(recent.kept)
@@ -1137,7 +1145,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             return refusedClash(host.name, about, m.optString("agent").ifBlank { null })
         }
         if (reminderDismissals.received(host.name, m)) return
-        if (m.optString("type") == "open_items") { needsYou.received(host.name, m); return }
+        if (m.optString("type") == "open_items") {
+            if (needsYou.received(host.name, m)) reminderDismissals.refreshed(host.name)
+            return
+        }
         if (m.optString("type") in setOf("question", "question.result", "question.closed", "error") && questions.received(host.name, m)) return
         if (m.optString("type") in setOf("held_task", "held_task.result", "error") && heldTasks.received(host.name, m)) return
         if (m.optString("type") in setOf("agent.name", "error") && agentNames.received(host.name, m)) return
@@ -1791,11 +1802,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Buttons send exactly their label and keep any text already in the composer's draft. */
     fun sendSuggested(conversation: Conversation, line: Line, reply: String): String? {
-        if (reply !in offeredReplies(line, lines[conversation.id].orEmpty()) || outgoing.waiting(conversation.id)) return "This reply is no longer available."
-        val draft = unsent[conversation.id]
-        val error = send(conversation, reply)
-        if (error == null && draft != null) outgoing.write(conversation.id, draft)
-        return error
+        return outgoing.sendSuggested(conversation.id, line, reply, lines[conversation.id].orEmpty()) { send(conversation, it) }
     }
 
     /**

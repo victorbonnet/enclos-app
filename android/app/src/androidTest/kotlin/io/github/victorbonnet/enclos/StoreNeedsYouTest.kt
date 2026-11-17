@@ -44,4 +44,42 @@ class StoreNeedsYouTest {
             }
         } finally { context.deleteDatabase(name) }
     }
+    @Test fun versions_9_and_10_upgrade_and_corrupt_cached_items_are_removed_without_losing_history() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        for (version in listOf(9, 10)) {
+            val name = "needs-you-$version-${UUID.randomUUID()}.db"
+            val path = context.getDatabasePath(name)
+            path.parentFile!!.mkdirs()
+            SQLiteDatabase.openOrCreateDatabase(path, null).use { old ->
+                CREATE.filterNot { it.startsWith("CREATE TABLE open_item_hosts") }.forEach(old::execSQL)
+                if (version == 10) old.execSQL("CREATE TABLE open_item_hosts (host TEXT PRIMARY KEY)")
+                old.execSQL("INSERT INTO conversations(id,host,agent) VALUES ('home','one','lab/main')")
+                old.execSQL("INSERT INTO messages(host,seq,conversation,sender,text,kind,time) VALUES ('one',1,'home','agent','History preserved','reply',1)")
+                val good = OpenItem("one", "good", "question", "lab/main", "home", "Choose", 1, false, "question:1")
+                old.execSQL("INSERT INTO open_items(host,item_key,conversation,info) VALUES (?,?,?,?)", arrayOf("one", good.key, "home", good.json().toString()))
+                old.execSQL("INSERT INTO open_items(host,item_key,info) VALUES ('one','broken','{')")
+                old.execSQL("INSERT INTO open_items(host,item_key,info) VALUES ('one','future','{\"kind\":\"future\"}')")
+                if (version == 10) old.execSQL("INSERT INTO open_item_hosts(host) VALUES ('one')")
+                old.version = version
+            }
+            try {
+                Store(context, name).use { store ->
+                    val saved = store.recent()
+                    assertEquals("History preserved", saved.lines["home"]!!.single().text)
+                    assertEquals(listOf("good"), saved.openItems.map { it.id })
+                    assertEquals(setOf("one"), saved.indexedHosts)
+                    store.readableDatabase.rawQuery("SELECT COUNT(*) FROM open_items", null).use { c -> c.moveToFirst(); assertEquals(1, c.getInt(0)) }
+                    store.openItems("one", saved.openItems, mapOf("policy" to "policy:2:failed"))
+                }
+                Store(context, name).use { store ->
+                    assertEquals("policy:2:failed", store.recent().policyCoverage["one"]?.get("policy"))
+                    store.deleteConversation(ConversationKey("one", "home"))
+                    assertTrue(store.recent().openItems.isEmpty())
+                    store.forget("one")
+                    assertTrue(store.recent().policyCoverage.isEmpty())
+                }
+            } finally { context.deleteDatabase(name) }
+        }
+    }
+
 }

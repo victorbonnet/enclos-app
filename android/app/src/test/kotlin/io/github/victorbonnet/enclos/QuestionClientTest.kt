@@ -264,18 +264,15 @@ class QuestionClientTest {
         val q = question.copy(state = QuestionState.Expired, revision = 1)
         val sent = mutableListOf<Pair<QuestionInfo, String>>()
         var online = true
-        var fresh = true
         val timers = mutableListOf<() -> Unit>()
         val client = QuestionClient(send = { fail("No native answer is sent"); false }, connected = { online },
             accepts = { it.host == "mac" }, changed = {}, later = { _, fn -> timers += fn },
-            closeSupported = { true }, sendClose = { current, id -> sent += current to id; true },
-            projectionFresh = { fresh })
+            closeSupported = { true }, sendClose = { current, id -> sent += current to id; true })
         client.merge(q, cached = true)
         assertFalse(client.close(q))
         client.authenticated("mac"); client.merge(q); client.synced("mac")
         online = false; assertFalse(client.close(q))
-        online = true; fresh = false; assertFalse(client.close(q))
-        fresh = true; assertTrue(client.close(q))
+        online = true; assertTrue(client.close(q))
         assertFalse(client.close(q))
         val id = sent.single().second
         client.received("other", message("question.closed", "of" to id, "question" to q.id))
@@ -304,6 +301,32 @@ class QuestionClientTest {
         assertEquals(expired, f.client.questions[expired.key])
         assertTrue(f.sent.isEmpty())
         assertTrue(f.timers.isEmpty())
+    }
+
+    @Test fun review_discovery_failure_does_not_remove_native_answer_authority() {
+        val index = NeedsYou()
+        index.received("mac", message("open_items", "revision" to 1, "reset" to true, "complete" to true, "unavailable" to true, "items" to org.json.JSONArray()))
+        assertTrue("mac" in index.staleHosts)
+        val approval = question.copy(id = "approval", choices = emptyList(), approval = RuntimeApprovalDefinition("pwd", "Inspect folder", listOf(RuntimeApprovalAction.Once, RuntimeApprovalAction.Deny)))
+        for ((q, answer) in listOf(question to QuestionAnswer.Choices(listOf(0)), approval to QuestionAnswer.Approval(RuntimeApprovalAction.Once))) {
+            val sent = mutableListOf<QuestionRequest>()
+            val client = QuestionClient(send = { sent += it; true }, connected = { true }, accepts = { true }, changed = {}, later = { _, _ -> })
+            client.authenticated("mac"); client.merge(q); client.synced("mac")
+            assertNotNull(client.submit(q, answer))
+            assertEquals(1, sent.size)
+        }
+    }
+
+    @Test fun legacy_close_errors_have_a_readable_fallback() {
+        val q = question.copy(state = QuestionState.Expired, revision = 1)
+        var id = ""
+        val client = QuestionClient(send = { error("Not an answer") }, connected = { true }, accepts = { true }, changed = {}, later = { _, _ -> }, closeSupported = { true }, sendClose = { _, request -> id = request; true })
+        client.authenticated("mac"); client.merge(q); client.synced("mac")
+        assertTrue(client.close(q))
+        assertTrue(client.failure("mac", id, ""))
+        assertFalse(client.errors[q.key].isNullOrBlank())
+        assertTrue(client.closing.isEmpty())
+        assertFalse(client.closed[q.key] == true)
     }
 
 }

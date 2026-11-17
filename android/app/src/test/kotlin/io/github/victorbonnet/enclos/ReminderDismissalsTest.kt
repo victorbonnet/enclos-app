@@ -52,4 +52,38 @@ class ReminderDismissalsTest {
         h.client.received("host", h.receipt())
         assertEquals("held:3", h.index.items[h.item.key]?.version)
     }
+    @Test fun blank_errors_disconnects_and_snapshots_settle_requests_without_hiding_failures() {
+        val h = Harness()
+        h.client.dismiss(h.item)
+        assertTrue(h.client.received("host", message("error", "of" to h.sent.last().second, "message" to "")))
+        assertEquals("Could not dismiss this reminder. Try again.", h.client.errors[h.item.key])
+        assertTrue(h.index.items.containsKey(h.item.key))
+        h.client.dismiss(h.item)
+        h.client.ended("host")
+        assertTrue(h.client.pending.isEmpty())
+        assertTrue(h.client.errors[h.item.key]!!.contains("Connection ended"))
+        h.client.dismiss(h.item)
+        h.index.received("host", JSONObject().put("revision", 2).put("reset", true).put("complete", true).put("items", JSONArray()))
+        h.client.refreshed("host")
+        assertTrue(h.client.pending.isEmpty())
+        assertTrue(h.client.errors.isEmpty())
+        h.waits.forEach { it() }
+        assertTrue(h.client.errors.isEmpty())
+    }
+
+    @Test fun dismissal_receipt_persists_the_changed_index_and_unsupported_hosts_never_send() {
+        val saved = mutableListOf<List<OpenItem>>()
+        val index = NeedsYou { _, rows -> saved += rows }
+        val item = Harness().item
+        index.received("host", JSONObject().put("revision", 1).put("reset", true).put("complete", true).put("items", JSONArray().put(item.json())))
+        val unsupported = ReminderDismissals(index, { true }, { false }, { _, _ -> error("No send") }, { _, _ -> })
+        assertFalse(unsupported.dismiss(item))
+        index.dismissed(item)
+        assertTrue(saved.last().isEmpty())
+        val restored = NeedsYou()
+        restored.restore(saved.last(), setOf("host"))
+        assertTrue(restored.items.isEmpty())
+        assertTrue("host" in restored.indexedHosts)
+    }
+
 }

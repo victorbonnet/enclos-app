@@ -23,6 +23,7 @@ class Saved(
     val heldTasks: List<HeldTask> = emptyList(),
     val openItems: List<OpenItem> = emptyList(),
     val indexedHosts: Set<String> = emptySet(),
+    val policyCoverage: Map<String, Map<String, String>> = emptyMap(),
 )
 
 /**
@@ -95,9 +96,27 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
             staleHeld.forEach { write.delete("held_tasks", "host = ? AND agent = ? AND task = ?", arrayOf(it.host, it.agent, it.task)) }
         }
         val deleted = db.rawQuery("SELECT host,id FROM conversation_deletions", null).use { c -> c.rows { ConversationKey(it.getString(0), it.getString(1)) } }
-        val open = db.rawQuery("SELECT host,info FROM open_items", null).use { c -> c.rows { OpenItem.from(it.getString(0), JSONObject(it.getString(1))) } }
-        val indexed = db.rawQuery("SELECT host FROM open_item_hosts", null).use { c -> c.rows { it.getString(0) }.toSet() }
-        return Saved(agents, conversations, lines, kept, questions, deleted, heldTasks, open, indexed)
+        val open = mutableListOf<OpenItem>()
+        val staleOpen = mutableListOf<Pair<String, String>>()
+        db.rawQuery("SELECT host,item_key,info FROM open_items", null).use { c ->
+            while (c.moveToNext()) {
+                val host = c.getString(0); val key = c.getString(1)
+                val item = runCatching { OpenItem.from(host, JSONObject(c.getString(2))) }.getOrNull()?.takeIf { it.key == key }
+                if (item != null) open += item else staleOpen += host to key
+            }
+        }
+        if (staleOpen.isNotEmpty()) {
+            android.util.Log.w("enclos", "Dropped ${staleOpen.size} unreadable cached request rows")
+            staleOpen.forEach { (host, key) -> writableDatabase.delete("open_items", "host=? AND item_key=?", arrayOf(host, key)) }
+        }
+        val coverage = db.rawQuery("SELECT host,policy_coverage FROM open_item_hosts", null).use { c -> c.rows { row ->
+            val versions = runCatching {
+                val json = JSONObject(row.getString(1) ?: "{}")
+                json.keys().asSequence().associateWith { json.getString(it) }
+            }.getOrDefault(emptyMap())
+            row.getString(0) to versions
+        }.toMap() }
+        return Saved(agents, conversations, lines, kept, questions, deleted, heldTasks, open, coverage.keys, coverage)
     }
 
     /** Every message kept, by conversation, in `seq` order. */
@@ -198,11 +217,11 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
         writableDatabase.insertWithOnConflict("messages", null, values, SQLiteDatabase.CONFLICT_IGNORE)
     }
 
-    fun openItems(host: String, items: List<OpenItem>) {
+    fun openItems(host: String, items: List<OpenItem>, coverage: Map<String, String> = emptyMap()) {
         val db = writableDatabase
         db.beginTransaction()
         try {
-            db.insertWithOnConflict("open_item_hosts", null, ContentValues().apply { put("host", host) }, SQLiteDatabase.CONFLICT_IGNORE)
+            db.insertWithOnConflict("open_item_hosts", null, ContentValues().apply { put("host", host); put("policy_coverage", JSONObject(coverage).toString()) }, SQLiteDatabase.CONFLICT_REPLACE)
             db.delete("open_items", "host=?", arrayOf(host))
             items.forEach { item -> db.insertOrThrow("open_items", null, ContentValues().apply {
                 put("host", host); put("item_key", item.key); put("conversation", item.conversation); put("info", item.json().toString())
@@ -396,7 +415,7 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
 }
 
 /** The database's version: [upgrades] brings an older one to it. */
-internal const val STORE_VERSION = 10
+internal const val STORE_VERSION = 11
 
 /** A new database, at [STORE_VERSION]. */
 internal val CREATE = listOf(
@@ -421,7 +440,7 @@ private const val HELD_TASKS =
     "CREATE TABLE held_tasks (host TEXT NOT NULL, agent TEXT NOT NULL, task TEXT NOT NULL, conversation TEXT NOT NULL, " +
         "revision INTEGER NOT NULL CHECK(revision>=0), info TEXT NOT NULL, PRIMARY KEY (host, agent, task))"
 
-private const val OPEN_ITEM_HOSTS = "CREATE TABLE open_item_hosts (host TEXT PRIMARY KEY)"
+private const val OPEN_ITEM_HOSTS = "CREATE TABLE open_item_hosts (host TEXT PRIMARY KEY, policy_coverage TEXT)"
 
 private const val OPEN_ITEMS = "CREATE TABLE open_items (host TEXT NOT NULL, item_key TEXT NOT NULL, conversation TEXT, info TEXT NOT NULL, PRIMARY KEY(host,item_key))"
 
@@ -465,6 +484,7 @@ internal fun upgrades(old: Int): List<String> = buildList {
         add(HELD_TASKS)
     }
     if (old < 9) { add("ALTER TABLE messages ADD COLUMN suggested_replies TEXT"); add(OPEN_ITEMS) }
-    if (old < 10) { add(OPEN_ITEM_HOSTS); add("INSERT OR IGNORE INTO open_item_hosts(host) SELECT DISTINCT host FROM open_items") }
+    if (old < 10) { add("CREATE TABLE open_item_hosts (host TEXT PRIMARY KEY)"); add("INSERT OR IGNORE INTO open_item_hosts(host) SELECT DISTINCT host FROM open_items") }
+    if (old < 11) add("ALTER TABLE open_item_hosts ADD COLUMN policy_coverage TEXT")
 
 }

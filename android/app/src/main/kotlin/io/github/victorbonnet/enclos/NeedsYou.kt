@@ -39,36 +39,56 @@ data class OpenItem(
 }
 
 /** A complete newer snapshot replaces one host atomically, never another host's rows. */
-class NeedsYou(private val changed: (String, List<OpenItem>) -> Unit = { _, _ -> }) {
+class NeedsYou(
+    private val policies: () -> Collection<PolicyRequest> = { emptyList() },
+    private val dropped: (String) -> Unit = {},
+    private val changed: (String, List<OpenItem>) -> Unit = { _, _ -> },
+) {
     val items = mutableStateMapOf<String, OpenItem>()
     val staleHosts = mutableStateMapOf<String, Boolean>()
     val indexedHosts = mutableStateMapOf<String, Boolean>()
     val freshHosts = mutableStateMapOf<String, Boolean>()
-    private data class Incoming(val revision: Long, val items: MutableMap<String, OpenItem>)
+    val coveredPolicies = mutableStateMapOf<String, String>()
+    private val forgottenConversations = mutableSetOf<ConversationKey>()
+    private data class Incoming(val revision: Long, val items: MutableMap<String, OpenItem>, var received: Int = 0)
     private val incoming = mutableMapOf<String, Incoming>()
     private val revisions = mutableMapOf<String, Long>()
-    fun restore(rows: List<OpenItem>, hosts: Set<String> = emptySet()) {
-        rows.forEach { items[it.key] = it }
+    fun restore(rows: List<OpenItem>, hosts: Set<String> = emptySet(), coverage: Map<String, Map<String, String>> = emptyMap(), deleted: Set<ConversationKey> = emptySet()) {
+        forgottenConversations.addAll(deleted)
+        coverage.forEach { (host, versions) -> versions.forEach { (id, version) -> coveredPolicies["$host/$id"] = version } }
+        rows.filterNot { ConversationKey(it.host, it.conversation.orEmpty()) in forgottenConversations }.forEach { items[it.key] = it }
         (hosts + rows.map { it.host }).forEach { indexedHosts[it] = true }
     }
+    fun policyCoverage(host: String): Map<String, String> = coveredPolicies.filterKeys { it.startsWith("$host/") }.mapKeys { it.key.removePrefix("$host/") }
+
     fun dismissed(item: OpenItem) {
         if (items[item.key]?.version == item.version) {
             items.remove(item.key)
+            if (item.kind == "policy_request") coveredPolicies["${item.host}/${item.id}"] = item.version
             changed(item.host, items.values.filter { it.host == item.host })
         }
     }
     fun authenticated(host: String, supportsProjection: Boolean = true) {
         revisions.remove(host); incoming.remove(host); freshHosts.remove(host)
-        if (!supportsProjection) indexedHosts.remove(host)
+        if (!supportsProjection) { indexedHosts.remove(host); staleHosts.remove(host) }
     }
     fun ended(host: String) { incoming.remove(host); freshHosts.remove(host) }
-    fun forgetConversation(host: String, conversation: String) { items.entries.removeAll { it.value.host == host && it.value.conversation == conversation } }
-    fun forget(host: String) { ended(host); revisions.remove(host); staleHosts.remove(host); indexedHosts.remove(host); items.entries.removeAll { it.value.host == host } }
-    fun count(agentAddress: String? = null): Int = if (agentAddress == null) items.size
-        else items.values.count { it.agent != null && "${it.host}/${it.agent}" == agentAddress }
+    fun forgetConversation(host: String, conversation: String) {
+        forgottenConversations += ConversationKey(host, conversation)
+        items.entries.removeAll { it.value.host == host && it.value.conversation == conversation }
+        incoming[host]?.items?.entries?.removeAll { it.value.conversation == conversation }
+        changed(host, items.values.filter { it.host == host })
+    }
+    fun forget(host: String) {
+        ended(host); revisions.remove(host); staleHosts.remove(host); indexedHosts.remove(host)
+        items.entries.removeAll { it.value.host == host }
+        coveredPolicies.keys.filter { it.startsWith("$host/") }.forEach(coveredPolicies::remove)
+        forgottenConversations.removeAll { it.host == host }
+    }
     fun received(host: String, frame: JSONObject): Boolean = try {
         receive(host, frame)
-    } catch (_: Exception) {
+    } catch (error: Exception) {
+        dropped("Request snapshot rejected (${error.javaClass.simpleName})")
         incoming.remove(host)
         staleHosts[host] = true
         freshHosts.remove(host)
@@ -92,9 +112,15 @@ class NeedsYou(private val changed: (String, List<OpenItem>) -> Unit = { _, _ ->
             else partial?.takeIf { it.revision == revision } ?: return false
         val values = frame.getJSONArray("items")
         require(values.length() <= 24)
-        val parsed = (0 until values.length()).map { OpenItem.from(host, values.getJSONObject(it)) }
-        require(snapshot.items.size + parsed.size <= 8192)
-        parsed.forEach { snapshot.items[it.key] = it }
+        snapshot.received += values.length()
+        require(snapshot.received <= 8192)
+        for (i in 0 until values.length()) {
+            val item = try { OpenItem.from(host, values.getJSONObject(i)) } catch (error: Exception) {
+                dropped("Request item omitted (${error.javaClass.simpleName})")
+                continue
+            }
+            if (ConversationKey(host, item.conversation.orEmpty()) !in forgottenConversations) snapshot.items[item.key] = item
+        }
         if (!frame.getBoolean("complete")) return false
         val complete = snapshot.items.values.toList()
         items.entries.removeAll { it.value.host == host }
@@ -102,6 +128,8 @@ class NeedsYou(private val changed: (String, List<OpenItem>) -> Unit = { _, _ ->
         revisions[host] = revision
         staleHosts.remove(host)
         indexedHosts[host] = true; freshHosts[host] = true
+        coveredPolicies.keys.filter { it.startsWith("$host/") }.forEach(coveredPolicies::remove)
+        policies().filter { it.host == host }.forEach { coveredPolicies[it.key] = policySourceVersion(it) }
         incoming.remove(host)
         changed(host, complete)
         return true
@@ -122,7 +150,12 @@ fun offeredReplies(line: Line, history: List<Line>): List<String> = line.suggest
 }.orEmpty()
 
 /** Policy rows retain the host-resolved target, including while the discovery index catches up. */
-fun attentionItems(items: Collection<OpenItem>, policies: Collection<PolicyRequest>, indexedHosts: Set<String> = emptySet()): List<OpenItem> {
+fun policySourceVersion(policy: PolicyRequest): String = "policy:${policy.revision}:${policy.state}"
+
+fun attentionCounts(items: Collection<OpenItem>): Map<String, Int> = items.filter { it.agent != null }
+    .groupingBy { "${it.host}/${it.agent}" }.eachCount()
+
+fun attentionItems(items: Collection<OpenItem>, policies: Collection<PolicyRequest>, indexedHosts: Set<String> = emptySet(), staleHosts: Set<String> = emptySet(), coveredPolicies: Map<String, String> = emptyMap()): List<OpenItem> {
     val canonical = policies.associateBy { it.key }
     fun policyItem(a: PolicyRequest) = OpenItem(a.host, a.id, "policy_request",
         a.agent.takeIf { it.isNotBlank() }?.let { if ('/' in it) it else "${a.sandbox}/$it" },
@@ -133,8 +166,8 @@ fun attentionItems(items: Collection<OpenItem>, policies: Collection<PolicyReque
             ?: item.takeIf { "${it.host}/${it.id}" !in canonical }
     }
     // Older bridges contribute their existing requests without the optional projection.
-    return (projected + policies.filter { it.attention && it.host !in indexedHosts }.map(::policyItem))
+    return (projected + policies.filter { it.attention && (it.host !in indexedHosts || it.host in staleHosts) && coveredPolicies[it.key] != policySourceVersion(it) }.map(::policyItem))
         .distinctBy { it.key }.sortedWith(compareByDescending<OpenItem> { it.since }.thenBy { it.key })
 }
 
-fun AppModel.attentionItems(): List<OpenItem> = attentionItems(needsYou.items.values, approvals.values, needsYou.indexedHosts.keys)
+fun AppModel.attentionItems(): List<OpenItem> = attentionItems

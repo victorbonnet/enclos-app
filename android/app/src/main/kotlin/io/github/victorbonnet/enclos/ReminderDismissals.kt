@@ -42,7 +42,7 @@ class ReminderDismissals(
         val id = message.optString("of")
         val request = requests[id]?.takeIf { it.item.host == host } ?: return false
         if (message.optString("type") == "error") {
-            finish(id); errors[request.item.key] = message.optString("message", "Could not dismiss this reminder.")
+            finish(id); errors[request.item.key] = oneLine(message.optString("message"), 300).ifBlank { "Could not dismiss this reminder. Try again." }
             return true
         }
         if (message.optString("type") != "open_item.dismissed") return false
@@ -51,6 +51,11 @@ class ReminderDismissals(
         if (message.optString("kind") != item.kind || message.optString("item") != item.id || agent != item.agent || message.optString("version") != item.version) return true
         finish(id); errors.remove(item.key); index.dismissed(item)
         return true
+    }
+    /** Complete canonical snapshots can settle discovery before the direct receipt arrives. */
+    fun refreshed(host: String) {
+        requests.values.filter { it.item.host == host && index.items[it.item.key]?.version != it.item.version }.toList().forEach { finish(it.id) }
+        errors.keys.filter { it.startsWith("$host/") && it !in index.items }.forEach(errors::remove)
     }
     fun ended(host: String) {
         requests.values.filter { it.item.host == host }.toList().forEach {

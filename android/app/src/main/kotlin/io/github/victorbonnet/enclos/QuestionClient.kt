@@ -30,7 +30,6 @@ class QuestionClient(
     private val dropped: (String) -> Unit = {},
     private val closeSupported: (String) -> Boolean = { false },
     private val sendClose: (QuestionInfo, String) -> Boolean = { _, _ -> false },
-    private val projectionFresh: (String) -> Boolean = { true },
 ) {
     val closed = mutableStateMapOf<QuestionKey, Boolean>()
     val closing = mutableStateMapOf<QuestionKey, String>()
@@ -41,7 +40,6 @@ class QuestionClient(
     fun closeUnavailable(question: QuestionInfo): String? = when {
         !offersClose(question) -> "This host cannot close this request."
         questions[question.key] != question -> "This request changed. Open its latest version."
-        !projectionFresh(question.host) -> "Requests could not be refreshed. Reconnect before closing."
         !connected(question.host) -> "Connect to ${question.host} to close this request."
         fresh[question.host] != true -> "Waiting for the host to sync…"
         question.key in closing -> "Closing…"
@@ -49,7 +47,7 @@ class QuestionClient(
     }
 
     fun close(question: QuestionInfo): Boolean {
-        if (questions[question.key] != question || !projectionFresh(question.host) || !offersClose(question) || !connected(question.host) || fresh[question.host] != true || question.key in closing || closed[question.key] == true) return false
+        if (questions[question.key] != question || !offersClose(question) || !connected(question.host) || fresh[question.host] != true || question.key in closing || closed[question.key] == true) return false
         val id = UUID.randomUUID().toString()
         closeRequests[id] = question; closing[question.key] = id
         if (!sendClose(question, id)) {
@@ -80,7 +78,6 @@ class QuestionClient(
 
     fun unavailable(question: QuestionInfo): String? = when {
         !offersAnswer(question) -> "This question is ${question.state.wire}."
-        !projectionFresh(question.host) -> "Requests could not be refreshed. Reconnect before deciding."
         uncertain[question.key] == true && checking(question.host) -> "Checking the outcome with ${question.host}…"
         uncertain[question.key] == true -> "The outcome is unconfirmed. Check again before answering again."
         question.key in pending -> "Waiting for the agent to confirm…"
@@ -143,7 +140,7 @@ class QuestionClient(
 
     fun failure(host: String, of: String, reason: String, code: String = ""): Boolean {
         closeRequests[of]?.takeIf { it.host == host }?.let {
-            closeRequests.remove(of); closing.remove(it.key); errors[it.key] = reason
+            closeRequests.remove(of); closing.remove(it.key); errors[it.key] = oneLine(reason, 300).ifBlank { "Could not dismiss this reminder. Try again." }
             return true
         }
         val request = requests[of]?.takeIf { it.question.host == host } ?: return false

@@ -56,7 +56,7 @@ fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (St
     ) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Needs you", style = Type.label, color = palette.accent)
-            Text(current.agent?.let { model.agentLabel("${current.host}/$it") } ?: "Sandbox request", style = Type.name, color = palette.text)
+            Text(current.agent?.let { model.agentLabel("${current.host}/$it") } ?: "Policy request", style = Type.name, color = palette.text)
             when (current.kind) {
                 "held_task" -> {
                     val card = model.heldTasks.cards.values.firstOrNull { it.host == current.host && it.agent == current.agent && it.task == current.id }
@@ -81,7 +81,7 @@ fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (St
                         Text(current.summary, style = Type.small, color = palette.text)
                         Text("Open the conversation to review this request.", style = Type.small, color = palette.textMuted)
                     } else if (question.approval != null) RuntimeApprovalCard(model.questions, question)
-                    else QuestionCard(model.questions, question, showClose = false)
+                    else QuestionCard(model.questions, question)
                 }
                 "policy_request" -> {
                     Text(current.summary, style = Type.small, color = palette.text)

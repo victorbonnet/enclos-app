@@ -17,20 +17,20 @@ class NeedsYouTest {
         val index = NeedsYou { host, rows -> persisted += host to rows }
         index.received("one", frame(1, item("q1", true)))
         index.received("two", frame(1, item("q2")))
-        assertEquals(2, index.count())
-        assertEquals(1, index.count("one/lab/main"))
+        assertEquals(2, index.items.size)
+        assertEquals(1, attentionCounts(index.items.values)["one/lab/main"])
         assertTrue(index.items.values.single { it.host == "one" }.expired)
         index.received("one", frame(2, item("q3"), complete = false))
         assertEquals(setOf("q1", "q2"), index.items.values.map { it.id }.toSet())
         index.ended("one")
-        assertEquals(2, index.count())
+        assertEquals(2, index.items.size)
         index.received("one", frame(3))
         assertEquals(listOf("q2"), index.items.values.map { it.id })
         assertFalse(index.received("one", frame(1, item("old"))))
         assertEquals(3, persisted.size)
         index.authenticated("one")
         index.received("one", frame(0, item("after-restart")))
-        assertEquals(2, index.count())
+        assertEquals(2, index.items.size)
     }
 
     @Test fun malformed_optional_replies_leave_a_message_readable_and_literal_choices_are_unchanged() {
@@ -69,7 +69,7 @@ class NeedsYouTest {
         assertTrue(index.staleHosts["one"] == true)
         assertEquals(1, persisted.size)
         index.received("one", frame(3, item("partial"), complete = false))
-        assertFalse(index.received("one", frame(3, item("bad").put("since", "yesterday"), reset = false)))
+        assertFalse(index.received("one", frame(3, reset = false).put("items", "invalid envelope")))
         assertFalse(index.received("one", frame(3, reset = false)))
         assertEquals("kept", index.items.values.single().id)
         index.received("one", frame(4, item("fresh")))
@@ -101,6 +101,76 @@ class NeedsYouTest {
         assertTrue(index.freshHosts.isEmpty())
         index.authenticated("host", supportsProjection = false)
         assertEquals(1, attentionItems(emptyList(), listOf(request), index.indexedHosts.keys).size)
+    }
+
+    @Test fun review_one_bad_or_future_item_does_not_discard_the_valid_snapshot() {
+        val index = NeedsYou()
+        assertTrue(index.received("one", frame(1, item("good"), item("invalid").put("since", "invalid"), item("future").put("kind", "future_kind"))))
+        assertEquals(listOf("good"), index.items.values.map { it.id })
+        assertTrue(index.staleHosts.isEmpty())
+    }
+
+    @Test fun stale_projection_keeps_new_policy_generations_without_reviving_covered_ones() {
+        val p = PolicyRequest("one", "p", "lab", "main", "home", "read", "/tmp/a", false, "read", 10, "pending", "", false, "1", true, null)
+        val policies = mutableListOf(p)
+        val index = NeedsYou(policies = { policies })
+        // An omitted policy was covered by this complete, authoritative snapshot.
+        index.received("one", frame(1))
+        val coverage = index.policyCoverage("one")
+        index.received("one", frame(2).put("unavailable", true))
+        fun shown() = attentionItems(index.items.values, policies, index.indexedHosts.keys, index.staleHosts.keys, index.coveredPolicies)
+        assertTrue(shown().isEmpty())
+        policies += p.copy(host = "old", id = "legacy", time = 11)
+        policies[0] = p.copy(id = "new", time = 12)
+        assertEquals(listOf("new", "legacy"), shown().map { it.id })
+        policies[0] = p.copy(revision = "2", state = "failed", time = 13)
+        assertEquals(listOf("p", "legacy"), shown().map { it.id })
+        val restored = NeedsYou()
+        restored.restore(emptyList(), setOf("one"), mapOf("one" to coverage))
+        restored.received("one", frame(1).put("unavailable", true))
+        assertTrue(attentionItems(emptyList(), listOf(p), restored.indexedHosts.keys, restored.staleHosts.keys, restored.coveredPolicies).isEmpty())
+        index.authenticated("one", supportsProjection = false)
+        assertFalse("one" in index.staleHosts)
+        assertFalse("one" in index.indexedHosts)
+    }
+
+    @Test fun deleted_conversations_cannot_return_through_in_flight_chunks_and_forgetting_clears_host_state() {
+        val index = NeedsYou()
+        index.received("one", frame(1, item("first"), complete = false))
+        index.forgetConversation("one", "home")
+        index.received("one", frame(1, item("late"), reset = false))
+        assertTrue(index.items.isEmpty())
+        index.received("two", frame(1, item("kept")))
+        index.forget("one")
+        index.received("one", frame(1, item("repaired")))
+        assertEquals(setOf("kept", "repaired"), index.items.values.map { it.id }.toSet())
+        val restored = NeedsYou()
+        restored.restore(index.items.values.toList(), deleted = setOf(ConversationKey("one", "home")))
+        assertEquals(listOf("kept"), restored.items.values.map { it.id })
+    }
+
+    @Test fun shared_protocol_fixtures_match_discovery_replies_dismissal_and_held_detail_commands() {
+        fun fixture(name: String) = JSONObject(javaClass.getResource("/protocol/$name.json")!!.readText())
+        val index = NeedsYou()
+        assertTrue(index.received("one", fixture("to_device_open_items")))
+        assertEquals("q-expired", index.items.values.single().id)
+        assertTrue(index.items.values.single().expired)
+        val m = fixture("to_device_message_suggested_replies")
+        assertEquals(listOf("Fix Inbox filters", "Keep paused"), suggestedReplies(m.get("suggested_replies")))
+        val held = HeldTask("one", "lab/lead", "home", "app/t_same", "Review", "reviewer", "Decision", since = 1, resume = "", stateWire = "held", revision = 2, resumable = false)
+        var command = JSONObject()
+        val details = TaskDetails(send = { _, value -> command = value; true }, task = { null }, available = { false }, heldAvailable = { true }, later = { _, _ -> })
+        details.showHeld(held); assertTrue(details.fetch())
+        val expected = fixture("from_device_held_task_get")
+        for (key in listOf("v", "type", "agent", "task")) assertEquals(expected.get(key), command.get(key))
+        val request = fixture("from_device_open_item_dismiss")
+        val item = OpenItem("one", request.getString("item"), request.getString("kind"), request.getString("agent"), "home", "Decision", 1, false, request.getString("version"))
+        index.received("one", frame(4, item.json()))
+        var requestId = ""
+        val dismissals = ReminderDismissals(index, { true }, { true }, { _, id -> requestId = id; true }, { _, _ -> })
+        assertTrue(dismissals.dismiss(item))
+        assertTrue(dismissals.received("one", fixture("to_device_open_item_dismissed").put("of", requestId)))
+        assertTrue(index.items.isEmpty())
     }
 
 }

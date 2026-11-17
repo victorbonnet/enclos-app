@@ -340,7 +340,6 @@ fun InboxScreen(
         }
     }
     val found = inboxSearchResults(query, listed, searched)
-    var requestError by remember { mutableStateOf<String?>(null) }
     val requests = model.attentionItems().filter { query.isBlank() || "${it.summary} ${it.agent.orEmpty()} ${it.host}".contains(query, ignoreCase = true) }
     val narrowed = archivedOnly || query.isNotBlank() || filter != InboxFilter.All
     // Groups have their own section; the agents' trees hold one-to-one conversations.
@@ -358,7 +357,7 @@ fun InboxScreen(
                     "Pair a host →",
                     pair,
                 )
-                sorted.isEmpty() && requests.isEmpty() && model.needsYou.staleHosts.isEmpty() -> Empty(
+                sorted.isEmpty() && requests.isEmpty() && model.needsYou.staleHosts.isEmpty() && model.reminderDismissals.errors.isEmpty() -> Empty(
                     if (archivedOnly) "No archived conversation." else "No active conversation yet.",
                     if (archivedOnly) "Archived conversations stay here until you unarchive them." else "Start one below, or find archived conversations with the archive filter above.",
                 )
@@ -367,18 +366,17 @@ fun InboxScreen(
                         if (archivedOnly) item(key = "archive-view") {
                             Text("Archived conversations", style = Type.meta, color = palette.accent, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
                         }
-                        if (requests.isNotEmpty() || model.needsYou.staleHosts.isNotEmpty()) {
+                        if (requests.isNotEmpty() || model.needsYou.staleHosts.isNotEmpty() || model.reminderDismissals.errors.isNotEmpty()) {
                             item(key = "needs-you") { FoldHeading("Needs you", true, requests.size, false) {} }
                             if (model.needsYou.staleHosts.isNotEmpty()) item(key = "requests-unavailable") {
                                 Text("Requests could not be refreshed on ${model.needsYou.staleHosts.keys.joinToString()}. Showing the last known requests.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                             }
-                            requestError?.let { error -> item(key = "request-error") {
-                                Text(error, style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-                            } }
+                            if (model.reminderDismissals.errors.isNotEmpty()) item(key = "dismiss-errors") {
+                                Text("Some reminders could not be dismissed. Open a request to check.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                            }
                             items(requests, key = { "request:${it.key}" }) { request ->
-                                Arriving { NeedsYouRow(request, request.agent?.let { model.agentLabel("${request.host}/$it") } ?: "Sandbox request", model.connected(request.host), request.agent?.let { PhotoKey(request.host, it) }, now = now) {
+                                Arriving { NeedsYouRow(request, request.agent?.let { model.agentLabel("${request.host}/$it") } ?: "Policy request", model.connected(request.host), request.agent?.let { PhotoKey(request.host, it) }, now = now) {
                                     model.focusedRequest = request
-                                    requestError = null
                                 } }
                             }
                             item(key = "needs-you-gap") { Gap(8.dp) }
@@ -1214,7 +1212,7 @@ internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () 
         status = if (busy) working.firstOrNull()?.let { model.doing(it.id) } ?: activity?.label ?: "working"
             else if (last != null) "active ${Times.ago(last, now)}" else "no message yet",
         usage = model.recentUsage[agent.host]?.of(agent.name)?.total?.let(::recentUsageText),
-        needsYou = model.attentionItems().count { it.agent != null && "${it.host}/${it.agent}" == agent.address },
+        needsYou = model.attentionCount(agent.address),
         onClick = onClick,
     )
 }

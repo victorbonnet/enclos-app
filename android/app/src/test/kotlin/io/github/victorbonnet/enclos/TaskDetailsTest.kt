@@ -347,4 +347,11 @@ class TaskDetailsTest {
         assertNull(client.held)
     }
 
+    @Test fun generic_task_details_capability_cannot_read_held_board_details() {
+        val card = HeldTask("host", "lab/lead", "home", "app/t_same", "Review", "reviewer", "Decision", since = 1, resume = "", stateWire = "held", revision = 2, resumable = false)
+        val client = TaskDetails(send = { _, _ -> error("No held capability") }, task = { null }, available = { true }, later = { _, _ -> }, heldAvailable = { false })
+        client.showHeld(card)
+        assertFalse(client.fetch())
+    }
+
 }
