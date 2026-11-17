@@ -81,7 +81,7 @@ data class RoutineSummary(
 ) {
     val title: String get() = name ?: preview.take(80).ifBlank { "Unnamed routine" }
     companion object {
-        fun from(m: JSONObject) = RoutineSummary(m.getString("id"), m.getString("revision"), m.routineText("name"), routineScheduleFrom(m.getJSONObject("schedule")), m.getBoolean("enabled"), m.optString("prompt_preview"), m.optString("delivery_label"), m.optBoolean("editable"), m.routineText("next_run_at"), m.routineText("last_run_at"), m.routineText("last_status"), m.routineText("state"), m.routineText("paused_reason"), m.routineText("last_error"))
+        fun from(m: JSONObject) = RoutineSummary(m.getString("id"), m.getString("revision"), m.routineLabel("name"), routineScheduleFrom(m.getJSONObject("schedule")), m.getBoolean("enabled"), Visible.stripped(m.optString("prompt_preview"), lines = true), Visible.stripped(m.optString("delivery_label")), m.optBoolean("editable"), m.routineText("next_run_at"), m.routineText("last_run_at"), m.routineLabel("last_status"), m.routineLabel("state"), m.routineLabel("paused_reason", lines = true), m.routineLabel("last_error", lines = true))
     }
 }
 
