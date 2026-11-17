@@ -53,7 +53,8 @@ class HeldTaskClient(
      * runtime) no longer knows the task, so no Resume, until the bridge sends a newer card.
      */
     val gone = mutableStateMapOf<HeldTaskKey, Long>()
-    private val unsupported = mutableSetOf<HeldTaskKey>()
+    /** Certain refusals awaiting sync: whether this connection sent the refresh. */
+    private val unsupported = mutableStateMapOf<HeldTaskKey, Boolean>()
     private val requests = mutableMapOf<String, HeldTaskRequest>()
     /** By host: whether a sync ended since the connection authenticated, or since this client asked for one. */
     private val fresh = mutableStateMapOf<String, Boolean>()
@@ -87,6 +88,9 @@ class HeldTaskClient(
         card.key in pending -> "Waiting for the runtime to confirm…"
         uncertain[card.key] == true && !connected(card.host) -> "Reconnect to ${card.host} to check whether it resumed."
         uncertain[card.key] == true -> "Checking with ${card.host}…"
+        card.key in unsupported && (!connected(card.host) || unsupported[card.key] != true) ->
+            "Reconnect to ${card.host} to check the task."
+        card.key in unsupported -> "Checking with ${card.host}…"
         !connected(card.host) -> "Connect to ${card.host} to resume it."
         fresh[card.host] != true -> "Waiting for the host to sync…"
         else -> null
@@ -102,7 +106,7 @@ class HeldTaskClient(
         val current = cards[incoming.key]
         val selected = newestHeldTask(current, incoming)
         if (selected != current) {
-            if (unsupported.remove(incoming.key)) notes.remove(incoming.key)
+            if (unsupported.remove(incoming.key) != null) notes.remove(incoming.key)
             cards[incoming.key] = selected
             // A newer card from the bridge replaces what `not_found` said.
             gone.remove(selected.key)
@@ -169,10 +173,9 @@ class HeldTaskClient(
             "agent_unavailable" -> notes[key] = "The agent is not connected, so nothing was sent. Try again once it is back."
             "not_allowed" -> notes[key] = "Only the host's person can resume held tasks."
             "unsupported" -> {
-                unsupported.add(key)
                 notes[key] = "This request could not resume the task."
                 fresh[host] = false
-                if (connected(host)) resync(host)
+                unsupported[key] = connected(host) && resync(host)
             }
             "bad_message", "unknown_type" ->
                 notes[key] = "The bridge on $host cannot resume held tasks. Update enclos there."
@@ -226,7 +229,7 @@ class HeldTaskClient(
     /** [host]'s sync ended: each card it sent is current, and the doubt of every card of the host is settled by it. */
     fun synced(host: String) {
         fresh[host] = true
-        unsupported.filter { it.host == host }.toList().forEach { key ->
+        unsupported.keys.filter { it.host == host }.toList().forEach { key ->
             unsupported.remove(key)
             notes.remove(key)
         }
@@ -241,6 +244,7 @@ class HeldTaskClient(
     /** [host]'s connection ended: a resume still unanswered may have happened, and is not sent again. */
     fun ended(host: String) {
         fresh[host] = false
+        unsupported.keys.filter { it.host == host }.forEach { unsupported[it] = false }
         requests.values.filter { it.card.host == host }.toList().forEach { request ->
             val waiting = pending[request.card.key] == request
             finish(request)

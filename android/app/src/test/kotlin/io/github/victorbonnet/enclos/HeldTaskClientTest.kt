@@ -106,6 +106,56 @@ class HeldTaskClientTest {
         assertEquals(1, f.sent.size)
     }
 
+    @Test fun unsupported_sent_refresh_checks_until_sync() = checkUnsupportedRefresh("sent")
+    @Test fun unsupported_failed_refresh_requires_reconnect() = checkUnsupportedRefresh("failed")
+    @Test fun unsupported_offline_refusal_requires_reconnect() = checkUnsupportedRefresh("offline")
+    @Test fun unsupported_disconnect_during_check_requires_reconnect() = checkUnsupportedRefresh("disconnected")
+
+    private fun checkUnsupportedRefresh(path: String) {
+        run {
+            val f = Fixture(); f.ready(held)
+            val id = f.client.resume(held)!!
+            f.resyncing = path != "failed"
+            f.connected = path != "offline"
+            assertTrue(f.client.failure("mac", id, "unsupported"))
+            if (path == "disconnected") {
+                assertEquals("Checking with mac…", f.client.unavailable(held))
+                f.connected = false
+                f.client.ended("mac")
+            }
+            val expected = if (path == "sent") "Checking with mac…" else "Reconnect to mac to check the task."
+            assertEquals(path, expected, f.client.unavailable(held))
+            assertEquals("This request could not resume the task.", f.client.notes[held.key])
+            assertTrue(f.client.uncertain.isEmpty())
+            assertTrue(f.client.pending.isEmpty())
+            assertEquals(if (path == "offline") emptyList<String>() else listOf("mac"), f.resyncs)
+            assertNull(f.client.resume(held))
+            f.timers.forEach { it.second() }
+            assertEquals(expected, f.client.unavailable(held))
+            f.connected = true
+            f.client.authenticated("mac")
+            if (path != "sent") assertEquals("Reconnect to mac to check the task.", f.client.unavailable(held))
+            f.client.synced("mac")
+            assertNull(f.client.notes[held.key])
+            assertTrue(f.client.canResume(held))
+            assertEquals(held, f.client.cards[held.key])
+            assertEquals(1, f.sent.size)
+        }
+    }
+
+    @Test fun unsupported_refresh_is_cleared_when_conversation_or_host_is_forgotten() {
+        for (conversationOnly in listOf(true, false)) {
+            val f = Fixture(); f.ready(held)
+            f.client.failure("mac", f.client.resume(held)!!, "unsupported")
+            if (conversationOnly) f.client.forgetConversation("mac", held.conversation) else f.client.forget("mac")
+            assertTrue(f.client.cards.isEmpty())
+            assertTrue(f.client.notes.isEmpty())
+            f.ready(held)
+            assertNull(f.client.unavailable(held))
+            assertEquals(1, f.sent.size)
+        }
+    }
+
     @Test fun malformed_live_capability_cannot_replace_the_last_valid_card() {
         val f = Fixture(); f.ready(held)
         for (bad in listOf(JSONObject.NULL, "false", 0, 0.5, JSONObject(), org.json.JSONArray())) {
