@@ -410,7 +410,7 @@ fun InboxScreen(
                         if (agentsShown) agents.forEach { entry ->
                             val expanded = entry.address in model.unfolded
                             val rows = entry.under
-                            val task = if (!archivedOnly && query.isBlank()) model.activeTask(entry.address) else null
+                            val task = if (!narrowed) model.activeTask(entry.address) else null
                             // Searching shows everything found: no "more" then.
                             val hidden = entry.others - rows.size
                             val more = !narrowed && (hidden > 0 || (expanded && entry.others > RECENT))
@@ -425,6 +425,7 @@ fun InboxScreen(
                                         now,
                                         archivedOnly,
                                         branches = task != null || rows.isNotEmpty() || more,
+                                        taskShown = task != null,
                                         menu = AgentMenu(
                                             start = agent?.let { { start(it) } },
                                             all = if (more) toggle else null,
@@ -535,12 +536,12 @@ private fun Modifier.branch(color: Color, last: Boolean) = drawBehind {
  * An agent in the inbox: its initial (pulsing while it works), its name,
  * then working (the wave) or how long ago it last said something, and a
  * chevron; under the name, its Home's last message on one line (or, while
- * it works, what it does), and Home's unread count. Tapping it opens its
- * Home; a long press opens its [menu]. With conversations under it, the
- * tree's trunk starts below the initial.
+ * it works, what it does unless its task has a branch), and Home's unread
+ * count. Tapping it opens its Home; a long press opens its [menu]. With
+ * conversations under it, the tree's trunk starts below the initial.
  */
 @Composable
-private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Long, archived: Boolean, branches: Boolean, menu: AgentMenu, onOpen: (() -> Unit)?) {
+private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Long, archived: Boolean, branches: Boolean, taskShown: Boolean, menu: AgentMenu, onOpen: (() -> Unit)?) {
     val p = palette
     val name = model.agentLabel(entry.address)
     val haptics = LocalHapticFeedback.current
@@ -602,7 +603,7 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
                 val shown = entry.homeMatch ?: last
                 val text = when {
                     at != null && entry.homeMatch == null -> model.doing(at.id) ?: "working"
-                    activity != null && entry.homeMatch == null -> activity.label ?: "working"
+                    activity != null && entry.homeMatch == null && !taskShown -> activity.label ?: "working"
                     shown == null -> if (home != null) "Cron jobs and the agent's notices come here." else ""
                     shown.from == "agent" -> remember(shown.text) { words(shown) }
                     else -> "You: ${shown.text}"
