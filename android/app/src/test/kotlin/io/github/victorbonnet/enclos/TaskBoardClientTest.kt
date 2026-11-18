@@ -118,4 +118,17 @@ class TaskBoardClientTest {
         f.client.received(card.host, reply(f.requestId, path))
         assertTrue(f.opened.isEmpty())
     }
+
+    @Test fun a_busy_bridge_says_to_try_again_shortly_and_allows_another_tap() {
+        val f = Fixture()
+        f.client.open(card, bridge, f.opened::add)
+        assertTrue(f.client.received(card.host, message("error", "of" to f.requestId, "code" to "busy")))
+        assertEquals("The host is busy opening task boards. Try again shortly.", f.client.error(card.key))
+        assertFalse(f.client.isOpening(card.key))
+        assertTrue(f.opened.isEmpty())
+        f.client.open(card, bridge, f.opened::add)
+        assertEquals(2, f.sent.size)
+        assertTrue(f.client.isOpening(card.key))
+        assertNull(f.client.error(card.key))
+    }
 }

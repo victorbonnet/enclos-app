@@ -6,6 +6,16 @@ import org.junit.Test
 
 class TaskBoardLinksTest {
     @Test
+    fun an_existing_saved_address_opens_even_when_the_older_bridge_is_disconnected() {
+        val saved = LinkDestination("boards.example", "https://boards.example/kanban")
+        assertEquals(TaskBoardRoute.Saved(saved), taskBoardRoute(connected = false, supportsBoard = false, saved = saved))
+        assertEquals(TaskBoardRoute.Saved(saved), taskBoardRoute(connected = true, supportsBoard = false, saved = saved))
+        assertEquals(TaskBoardRoute.Bridge, taskBoardRoute(connected = true, supportsBoard = true, saved = saved))
+        assertEquals(TaskBoardRoute.UpdateHost, taskBoardRoute(connected = true, supportsBoard = false, saved = null))
+        assertEquals(TaskBoardRoute.Bridge, taskBoardRoute(connected = false, supportsBoard = false, saved = null))
+    }
+
+    @Test
     fun saved_links_restore_and_forgetting_is_scoped_to_the_agent_or_host() {
         val stored = mutableMapOf<String, String>()
         fun open() = TaskBoardLinks { changes ->

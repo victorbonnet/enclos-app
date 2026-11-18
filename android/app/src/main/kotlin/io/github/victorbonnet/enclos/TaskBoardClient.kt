@@ -73,6 +73,7 @@ internal class TaskBoardClient(
                 "unsupported", "unknown_type" -> "This host cannot open the task board for this agent."
                 "not_allowed" -> "This device does not have access to the task board."
                 "agent_unavailable" -> "The agent is unavailable. Try again when it is connected."
+                "busy" -> "The host is busy opening task boards. Try again shortly."
                 else -> "The host could not open the task board. Try again."
             })
             return true
