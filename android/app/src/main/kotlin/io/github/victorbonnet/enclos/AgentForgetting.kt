@@ -34,6 +34,7 @@ class AgentForgetting(
     private val supported: (String) -> Boolean,
     private val send: (String, JSONObject) -> Boolean,
     private val later: (Long, () -> Unit) -> Unit,
+    private val removedAgent: (AgentKey) -> Unit = {},
 ) {
     /** By host: the agents its bridge confirmed removed, as it last listed them. */
     val removed = mutableStateMapOf<String, Set<String>>()
@@ -161,6 +162,7 @@ class AgentForgetting(
                     }
                 }.toSet()
                 removed[host] = names
+                names.forEach { removedAgent(AgentKey(host, it)) }
                 listing.remove(host)
                 listErrors.remove(host)
                 // A forget whose answer was lost: no longer listed, it was most likely done,
@@ -173,6 +175,7 @@ class AgentForgetting(
                 errors.remove(key)
                 removed[host] = removed[host].orEmpty() - key.name
                 forgotten[key] = true
+                removedAgent(key)
                 return true
             }
             "error" -> {

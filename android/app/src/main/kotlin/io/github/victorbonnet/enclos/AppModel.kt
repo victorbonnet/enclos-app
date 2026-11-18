@@ -295,6 +295,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val said = mutableStateMapOf<String, String>()
     private val policyCache = application.getSharedPreferences("sandbox-policies", Context.MODE_PRIVATE)
     private val approvalCache = application.getSharedPreferences("policy-requests", Context.MODE_PRIVATE)
+    private val taskBoardPrefs = application.getSharedPreferences("task-board-links", Context.MODE_PRIVATE)
+    internal val taskBoardLinks = TaskBoardLinks { changes ->
+        saving.execute {
+            taskBoardPrefs.edit {
+                changes.forEach { (key, address) -> if (address == null) remove(key) else putString(key, address) }
+            }
+        }
+    }
     val approvals = mutableStateMapOf<String, PolicyRequest>()
     val approvalsFresh = mutableStateMapOf<String, Boolean>()
     val pendingApprovalActions = mutableStateMapOf<String, PendingPolicyRequestAction>()
@@ -395,6 +403,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         supported = { host -> hostSupports(host, AGENT_FORGET) },
         send = { host, command -> connections[host]?.send(command) == true },
         later = { wait, action -> main.postDelayed({ action() }, wait) },
+        removedAgent = taskBoardLinks::forget,
     )
     private data class ArchiveKey(val host: String, val conversation: String)
     private val archiveRequests = mutableMapOf<String, ArchiveKey>()
@@ -435,9 +444,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             val cachedTasks = taskCache.all.values.mapNotNull { (it as? String)?.let { json -> AgentTask.kept(json) } }
                 .filter { t -> paired.any { it.name == t.host } }
             val recent = read { recent() }
+            val savedBoardLinks = taskBoardPrefs.all
             // The connections open next: their HTTP client is built here, not on the main thread.
             BridgeConnection.prepare()
             ui {
+                taskBoardLinks.restore(savedBoardLinks)
                 cachedRequests.forEach { approvals[it.key] = it }
                 cachedPolicies.forEach { sandboxPolicies[it.address] = it }
                 tasks.load(cachedTasks)
@@ -542,6 +553,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val pairLinkError = mutableStateOf<String?>(null)
 
     private val settings = application.getSharedPreferences("settings", Context.MODE_PRIVATE)
+
     /** Light or dark: the system's until the person chooses, then theirs, kept on this device. */
     val theme = mutableStateOf(ThemeChoice.read(settings.getString("theme", null)))
 
@@ -2109,6 +2121,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
         provisioningEnded(host)
+        taskBoardLinks.forget(host)
         unreadable.remove(host)
         sandboxes.remove(host)
         provisioning.keys.filter { it == host || it.startsWith("$host/") }.forEach { provisioning.remove(it) }

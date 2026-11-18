@@ -12,7 +12,8 @@ class AgentForgettingTest {
         var sending = true
         val sent = mutableListOf<Pair<String, JSONObject>>()
         val timers = mutableListOf<() -> Unit>()
-        val client = AgentForgetting({ online }, { supports }, { host, command -> sent += host to command; sending }, { _, callback -> timers += callback })
+        val removals = mutableListOf<AgentKey>()
+        val client = AgentForgetting({ online }, { supports }, { host, command -> sent += host to command; sending }, { _, callback -> timers += callback }, { removals += it })
         val coder = AgentKey("mac", "gone/coder")
         fun listed(host: String = "mac", vararg agents: String) =
             client.received(host, JSONObject().put("type", "agents.removed.list").put("agents", JSONArray(agents.toList())))
@@ -38,6 +39,19 @@ class AgentForgettingTest {
         assertFalse(f.coder in f.client.forgotten)
         assertTrue(f.client.forgotten[AgentKey("pi", "gone/coder")] == true)
         assertFalse(f.client.isRemoved(f.coder))
+    }
+
+    @Test fun removal_observers_receive_only_confirmed_agent_keys() {
+        val f = Fixture()
+        f.client.listed("mac", emptySet())
+        assertTrue(f.removals.isEmpty())
+        f.listed("mac", f.coder.name)
+        assertEquals(listOf(f.coder), f.removals)
+        assertTrue(f.client.forget(f.coder))
+        assertFalse(f.receipt("ack", host = "pi"))
+        assertEquals(listOf(f.coder), f.removals)
+        assertTrue(f.receipt("ack"))
+        assertEquals(listOf(f.coder, f.coder), f.removals)
     }
 
     @Test fun a_live_inventory_refreshes_removal_checks_and_reappearing_agents_are_not_removed() {
