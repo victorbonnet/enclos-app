@@ -18,5 +18,6 @@ Reason: drawing the elements natively keeps the design's tokens and the platform
 ## Consequences
 
 - Separately opened HTML attachments follow [ADR 0005](0005-static-html-artefacts-open-in-a-separate-viewer.md); this decision still governs message text.
-- Each runtime's plugin tells the agent which elements the app draws (in enclos), so the hint and this list change together.
+- Each runtime's plugin tells the agent which elements the app draws (in enclos), for a message and for a task's text, so those hints and this list change together.
 - An agent's literal `*`, `_`, `#` or `|` can format text, as in any chat app that renders markdown.
+- A task's body and comments (enclos `docs/protocol.md`, Task details) are drawn the same way: agents write them as they write messages, and a person who writes one through the runtime's board gets markdown too. Nothing in them is fetched or run, and a link opens as one in a message does (one whose text is not its own address is confirmed first, naming the task). A task's title, its history and every other text of a task stay plain text.

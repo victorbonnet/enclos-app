@@ -12,8 +12,11 @@ class QuestionClientTest {
         val changed = mutableListOf<QuestionInfo>()
         val timers = mutableListOf<() -> Unit>()
         val conversation = Conversation("mac", "lab/main", "c-1")
+        val resyncs = mutableListOf<String>()
+        val dropped = mutableListOf<String>()
         val client = QuestionClient(send = { sent += it; sending }, connected = { connected }, accepts = { it.belongsTo(conversation) },
-            changed = { changed += it }, later = { _, callback -> timers += callback })
+            changed = { changed += it }, later = { _, callback -> timers += callback },
+            resync = { resyncs += it; sending }, dropped = { dropped += it })
         fun ready(question: QuestionInfo) {
             client.authenticated("mac")
             client.merge(question)
@@ -127,7 +130,7 @@ class QuestionClientTest {
     @Test fun bridge_timeout_before_local_timer_requires_fresh_reconnect_snapshot_before_retry() {
         val f = Fixture(); f.ready(question)
         val request = f.client.submit(question, QuestionAnswer.Skip)!!
-        assertTrue(f.client.failure("mac", request, "The agent did not confirm the answer.", "agent_unavailable"))
+        assertTrue(f.client.failure("mac", request, "The agent did not confirm the answer.", "unconfirmed"))
         assertFalse(question.key in f.client.pending)
         assertTrue(f.client.uncertain[question.key] == true)
         assertNull(f.client.submit(question, QuestionAnswer.Skip))
@@ -152,7 +155,8 @@ class QuestionClientTest {
     }
 
     @Test fun definitive_rejections_finish_without_an_ambiguous_outcome_lock() {
-        for (code in listOf("bad_message", "conflict", "unsupported")) {
+        // `agent_unavailable` included: the bridge refused before writing to the agent.
+        for (code in listOf("bad_message", "conflict", "unsupported", "not_found", "agent_unavailable")) {
             val f = Fixture(); f.ready(question)
             val request = f.client.submit(question, QuestionAnswer.Skip)!!
             assertTrue(f.client.failure("mac", request, "Answer rejected.", code))
@@ -160,6 +164,77 @@ class QuestionClientTest {
             assertFalse(question.key in f.client.uncertain)
             assertNotNull(f.client.submit(question, QuestionAnswer.Skip))
         }
+    }
+
+    @Test fun an_unconfirmed_or_unknown_code_locks_until_a_fresh_sync() {
+        for (code in listOf("unconfirmed", "a_code_from_a_later_bridge", "")) {
+            val f = Fixture(); f.ready(question)
+            val request = f.client.submit(question, QuestionAnswer.Skip)!!
+            assertTrue(f.client.failure("mac", request, "Not confirmed.", code))
+            assertTrue(code, f.client.uncertain[question.key] == true)
+            assertNull(f.client.submit(question, QuestionAnswer.Skip))
+        }
+    }
+
+    @Test fun a_confirmed_receipt_finishes_and_an_answer_the_card_cannot_carry_does_not() {
+        val f = Fixture(); f.ready(question)
+        val choice = f.client.submit(question, QuestionAnswer.Choices(listOf(1)))!!
+        // Answered with no answer: the agent took something else; never this device's receipt.
+        assertFalse(f.client.result("mac", choice, question.copy(state = QuestionState.Answered, revision = 1)))
+        assertEquals(QuestionState.Answered, f.client.questions[question.key]?.state)
+        assertTrue(question.key in f.client.pending)
+        val g = Fixture(); g.ready(question)
+        val mine = g.client.submit(question, QuestionAnswer.Choices(listOf(1)))!!
+        val confirmed = question.copy(state = QuestionState.Answered, revision = 1, answer = QuestionAnswer.Choices(listOf(1)), confirmed = true)
+        assertTrue(g.client.result("mac", mine, confirmed))
+        assertEquals(confirmed, g.client.questions[question.key])
+    }
+
+    @Test fun check_again_settles_an_unconfirmed_outcome_over_the_open_connection() {
+        val f = Fixture(); f.ready(question)
+        assertFalse(f.client.canCheckAgain(question))
+        val request = f.client.submit(question, QuestionAnswer.Skip)!!
+        assertFalse(f.client.checkAgain(question))
+        f.timers.single()()
+        assertTrue(f.client.canCheckAgain(question))
+        assertTrue(f.client.checkAgain(question))
+        assertEquals(listOf("mac"), f.resyncs)
+        // While the sync runs, the card waits and cannot ask twice.
+        assertFalse(f.client.canCheckAgain(question))
+        assertEquals("Checking the outcome with mac…", f.client.unavailable(question))
+        assertNull(f.client.submit(question, QuestionAnswer.Skip))
+        // A sync that did not send the question again leaves the doubt.
+        f.client.synced("mac")
+        assertTrue(f.client.uncertain[question.key] == true)
+        assertTrue(f.client.checkAgain(question))
+        f.client.merge(question)
+        f.client.synced("mac")
+        assertFalse(question.key in f.client.uncertain)
+        assertFalse(f.client.result("mac", request, question.copy(state = QuestionState.Skipped, revision = 1)))
+        assertNotNull(f.client.submit(question, QuestionAnswer.Skip))
+        assertEquals(2, f.sent.size)
+    }
+
+    @Test fun check_again_needs_a_connection_and_a_sent_sync() {
+        val f = Fixture(); f.ready(question)
+        val request = f.client.submit(question, QuestionAnswer.Skip)!!
+        assertTrue(f.client.failure("mac", request, "Not confirmed.", "unconfirmed"))
+        f.connected = false
+        assertFalse(f.client.checkAgain(question))
+        f.connected = true
+        f.sending = false
+        assertFalse(f.client.checkAgain(question))
+        assertTrue(f.client.canCheckAgain(question))
+        assertEquals("The outcome is unconfirmed. Check again before answering again.", f.client.unavailable(question))
+    }
+
+    @Test fun a_dropped_question_says_why_without_its_text() {
+        val f = Fixture()
+        assertFalse(f.client.merge(question.copy(conversation = "c-2")))
+        assertFalse(f.client.merge(question.copy(text = "Secret\u202E")))
+        assertEquals(2, f.dropped.size)
+        assertTrue(f.dropped[1], f.dropped[1].endsWith("Invalid question text."))
+        assertTrue(f.dropped.none { "Secret" in it || "Choose" in it })
     }
 
     @Test fun failed_send_is_not_pending_and_multi_choice_receipt_uses_definition_order() {
@@ -185,4 +260,73 @@ class QuestionClientTest {
         assertTrue(f.client.questions.isEmpty())
         assertTrue(f.client.pending.isEmpty())
     }
+    @Test fun close_requires_fresh_owned_metadata_and_an_exact_receipt_without_answering() {
+        val q = question.copy(state = QuestionState.Expired, revision = 1)
+        val sent = mutableListOf<Pair<QuestionInfo, String>>()
+        var online = true
+        val timers = mutableListOf<() -> Unit>()
+        val client = QuestionClient(send = { fail("No native answer is sent"); false }, connected = { online },
+            accepts = { it.host == "mac" }, changed = {}, later = { _, fn -> timers += fn },
+            closeSupported = { true }, sendClose = { current, id -> sent += current to id; true })
+        client.merge(q, cached = true)
+        assertFalse(client.close(q))
+        client.authenticated("mac"); client.merge(q); client.synced("mac")
+        online = false; assertFalse(client.close(q))
+        online = true; assertTrue(client.close(q))
+        assertFalse(client.close(q))
+        val id = sent.single().second
+        client.received("other", message("question.closed", "of" to id, "question" to q.id))
+        assertFalse(client.closed[q.key] == true)
+        client.received("mac", message("question.closed", "of" to id, "question" to "another"))
+        assertFalse(client.closed[q.key] == true)
+        client.received("mac", message("question.closed", "of" to id, "question" to q.id))
+        assertTrue(client.closed[q.key] == true)
+        assertEquals(q, client.questions[q.key])
+        timers.forEach { it() }
+        assertNull(client.errors[q.key])
+    }
+
+    @Test fun an_expired_question_has_no_answer_or_skip_path_even_after_reconnection() {
+        val f = Fixture()
+        val expired = question.copy(state = QuestionState.Expired, revision = 1)
+        f.ready(expired)
+        repeat(2) {
+            assertFalse(f.client.offersAnswer(expired))
+            for (answer in listOf(QuestionAnswer.Choices(listOf(0)), QuestionAnswer.Text("Yes"), QuestionAnswer.Skip)) {
+                assertNull(f.client.submit(expired, answer))
+                assertNull(f.client.submit(question, answer))
+            }
+            f.ready(expired)
+        }
+        assertEquals(expired, f.client.questions[expired.key])
+        assertTrue(f.sent.isEmpty())
+        assertTrue(f.timers.isEmpty())
+    }
+
+    @Test fun review_discovery_failure_does_not_remove_native_answer_authority() {
+        val index = NeedsYou()
+        index.received("mac", message("open_items", "revision" to 1, "reset" to true, "complete" to true, "unavailable" to true, "items" to org.json.JSONArray()))
+        assertTrue("mac" in index.staleHosts)
+        val approval = question.copy(id = "approval", choices = emptyList(), approval = RuntimeApprovalDefinition("pwd", "Inspect folder", listOf(RuntimeApprovalAction.Once, RuntimeApprovalAction.Deny)))
+        for ((q, answer) in listOf(question to QuestionAnswer.Choices(listOf(0)), approval to QuestionAnswer.Approval(RuntimeApprovalAction.Once))) {
+            val sent = mutableListOf<QuestionRequest>()
+            val client = QuestionClient(send = { sent += it; true }, connected = { true }, accepts = { true }, changed = {}, later = { _, _ -> })
+            client.authenticated("mac"); client.merge(q); client.synced("mac")
+            assertNotNull(client.submit(q, answer))
+            assertEquals(1, sent.size)
+        }
+    }
+
+    @Test fun legacy_close_errors_have_a_readable_fallback() {
+        val q = question.copy(state = QuestionState.Expired, revision = 1)
+        var id = ""
+        val client = QuestionClient(send = { error("Not an answer") }, connected = { true }, accepts = { true }, changed = {}, later = { _, _ -> }, closeSupported = { true }, sendClose = { _, request -> id = request; true })
+        client.authenticated("mac"); client.merge(q); client.synced("mac")
+        assertTrue(client.close(q))
+        assertTrue(client.failure("mac", id, ""))
+        assertFalse(client.errors[q.key].isNullOrBlank())
+        assertTrue(client.closing.isEmpty())
+        assertFalse(client.closed[q.key] == true)
+    }
+
 }

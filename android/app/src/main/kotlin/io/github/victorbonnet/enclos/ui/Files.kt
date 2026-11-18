@@ -1,6 +1,9 @@
 package io.github.victorbonnet.enclos.ui
 
-import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.os.Build
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
@@ -29,6 +32,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -59,25 +63,33 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import io.github.victorbonnet.enclos.Attachment
+import io.github.victorbonnet.enclos.Attachments
 import io.github.victorbonnet.enclos.FileState
+import io.github.victorbonnet.enclos.Images
 import io.github.victorbonnet.enclos.shareAttachment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/** A file opened from a message: in the image viewer, or else by its type. */
+private data class Opened(val attachment: Attachment, val file: File, val asImage: Boolean)
+
 /**
  * A message's files: an image drawn in the bubble, which opens full screen
- * with Share; HTML opens a page, other files open a document viewer.
- * Each is fetched from the bridge when it is first shown.
+ * with Share; HTML opens a page, other files open a document viewer, as
+ * does an image the phone cannot decode. Each is fetched from the bridge
+ * when it is first shown, or when tapped if [Attachments.fetchesItself]
+ * says it waits: a large file on a metered network.
  */
 @Composable
 fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: (Attachment) -> Unit) {
-    var opened by remember { mutableStateOf<Pair<Attachment, File>?>(null) }
-    opened?.let { (a, file) ->
+    var opened by remember { mutableStateOf<Opened?>(null) }
+    val metered = rememberMetered()
+    opened?.let { (a, file, asImage) ->
         when {
             a.artefact -> ArtefactViewer(a, file) { opened = null }
-            a.image -> Viewer(a, file) { opened = null }
+            asImage -> Viewer(a, file) { opened = null }
             else -> FileViewer(a, file) { opened = null }
         }
     }
@@ -86,43 +98,61 @@ fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: 
             val state = states[a.id]
             // Fetched when first shown, and again when the system cleared
             // the cache since it was here: each time the message is shown.
-            LaunchedEffect(a.id, state) {
+            // A large one waits for a tap on a metered network, so an agent
+            // cannot make the phone pull megabytes over mobile data unasked;
+            // it comes by itself once the phone is on an unmetered one.
+            val itself = Attachments.fetchesItself(a.size, metered)
+            LaunchedEffect(a.id, state, itself) {
                 val gone = state is FileState.Ready && !withContext(Dispatchers.IO) { state.file.isFile }
-                if (state == null || gone) fetch(a)
+                if (itself && (state == null || gone)) fetch(a)
             }
             if (a.image) {
-                ImageFile(a, state, { fetch(a) }) { opened = a to it }
+                ImageFile(a, state, itself, { fetch(a) }, openFile = { opened = Opened(a, it, asImage = false) }) { opened = Opened(a, it, asImage = true) }
             } else {
-                OtherFile(a, state, { fetch(a) }) { opened = a to it }
+                OtherFile(a, state, itself, { fetch(a) }) { opened = Opened(a, it, asImage = false) }
             }
         }
     }
 }
 
+/** An image file as the bubble found it: drawn, gone from the cache, or not something this phone decodes. */
+private sealed interface Decoded {
+    data class Drawn(val bitmap: Bitmap) : Decoded
+    data object Missing : Decoded
+    data object Undecodable : Decoded
+}
+
 @Composable
-private fun ImageFile(a: Attachment, state: FileState?, retry: () -> Unit, open: (File) -> Unit) {
-    val p = palette
+private fun ImageFile(a: Attachment, state: FileState?, itself: Boolean, retry: () -> Unit, openFile: (File) -> Unit, open: (File) -> Unit) {
     val shape = Shapes.control
     when (state) {
         is FileState.Ready -> {
-            val bitmap by produceState<Bitmap?>(null, state.file) { value = decode(state.file, 1080) }
-            val image = bitmap
-            if (image == null) {
+            val decoded by produceState<Decoded?>(null, state.file) {
+                value = withContext(Dispatchers.IO) {
+                    if (!state.file.isFile) Decoded.Missing
+                    else runCatching { decode(state.file, 1080) }.getOrNull()?.let { Decoded.Drawn(it) } ?: Decoded.Undecodable
+                }
+            }
+            when (val d = decoded) {
                 // Decoding, or the file was cleared: a tap fetches it again.
-                Placeholder("Opening the image", retry)
-            } else {
-                Image(
-                    image.asImageBitmap(),
-                    contentDescription = a.name,
+                null, Decoded.Missing -> Placeholder("Opening the image", retry)
+                // A corrupt file, a format this Android does not decode, or one too
+                // large to draw: its line opens the document viewer, with its notice and Share.
+                Decoded.Undecodable -> OtherFile(a, state, itself, retry, openFile)
+                is Decoded.Drawn -> Image(
+                    d.bitmap.asImageBitmap(),
+                    contentDescription = a.shownName,
                     contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth().aspectRatio(image.width.toFloat() / image.height.coerceAtLeast(1))
+                    // Its own shape within 1:3 and 3:1: a thin, tall image is
+                    // drawn inside that box, never taller than three widths.
+                    modifier = Modifier.fillMaxWidth().aspectRatio(Images.ratio(d.bitmap.width, d.bitmap.height))
                         .clip(shape).clickable(onClickLabel = "Open the image", role = Role.Image) { open(state.file) },
                 )
             }
         }
         is FileState.Failed -> Placeholder("The image did not come: ${state.why}. Tap to try again.", retry)
         is FileState.Loading -> Placeholder("Loading the image · ${percent(state.done, state.size)}")
-        null -> Placeholder("Loading the image")
+        null -> if (!itself) Placeholder("Image · ${size(a.size)} · tap to load it", retry) else Placeholder("Loading the image")
     }
 }
 
@@ -140,7 +170,7 @@ private fun Placeholder(text: String, onClick: (() -> Unit)? = null) {
 
 /** A file's name and size. Opening it never starts the share sheet. */
 @Composable
-private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit, open: (File) -> Unit) {
+private fun OtherFile(a: Attachment, state: FileState?, itself: Boolean, retry: () -> Unit, open: (File) -> Unit) {
     val p = palette
     Row(
         Modifier.fillMaxWidth().clip(Shapes.control).border(1.dp, p.line, Shapes.control)
@@ -149,7 +179,9 @@ private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit, open:
                     // Cleared by the system since: fetched again rather than opened missing.
                     is FileState.Ready -> if (state.file.isFile) open(state.file) else retry()
                     is FileState.Failed -> retry()
-                    else -> {}
+                    // A large file, not fetched until asked.
+                    null -> retry()
+                    is FileState.Loading -> {}
                 }
             }
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -158,13 +190,13 @@ private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit, open:
     ) {
         Glyph(Glyphs.compose, p.accent, size = 18.dp)
         Column(Modifier.weight(1f)) {
-            Text(a.name, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(a.shownName, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 when (state) {
                     is FileState.Loading -> "${size(a.size)} · ${percent(state.done, state.size)}"
                     is FileState.Failed -> "Did not come: ${state.why}. Tap to try again."
                     is FileState.Ready -> "${size(a.size)} · ${if (a.artefact) "open page" else "tap to open"}"
-                    null -> size(a.size)
+                    null -> if (!itself) "${size(a.size)} · tap to load it" else size(a.size)
                 },
                 style = Type.meta,
                 color = p.textFaint,
@@ -172,6 +204,40 @@ private fun OtherFile(a: Attachment, state: FileState?, retry: () -> Unit, open:
         }
     }
 }
+
+/**
+ * Whether the network the phone sends on is metered (mobile data, a
+ * hotspot), as Android says, followed as it changes. Through a VPN such as
+ * Tailscale, Android counts the VPN as metered when the network under it
+ * is. With no network, or before Android answers, it counts as metered:
+ * a large file then waits for a tap rather than coming unasked.
+ */
+@Composable
+private fun rememberMetered(): Boolean {
+    val context = LocalContext.current
+    val connectivity = remember(context) { context.getSystemService(ConnectivityManager::class.java) }
+    var metered by remember { mutableStateOf(connectivity?.isActiveNetworkMetered ?: true) }
+    DisposableEffect(connectivity) {
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                metered = !unmetered(capabilities)
+            }
+
+            override fun onLost(network: Network) {
+                metered = true
+            }
+        }
+        connectivity?.registerDefaultNetworkCallback(callback)
+        onDispose { connectivity?.unregisterNetworkCallback(callback) }
+    }
+    return metered
+}
+
+/** Whether Android counts a network as unmetered, also for now only (a 5G plan without a cap, from Android 11). */
+private fun unmetered(capabilities: NetworkCapabilities): Boolean =
+    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) ||
+        (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_TEMPORARILY_NOT_METERED))
 
 /** The viewer's ground: near black in both themes, as photo viewers have it, so the image is the only colour. */
 private val ViewerGround = Color(0xFF0B0C0B)
@@ -199,7 +265,7 @@ private fun Viewer(a: Attachment, file: File, close: () -> Unit) {
             }
         }
         Box(Modifier.fillMaxSize().background(ViewerGround)) {
-            bitmap?.let { Zoomable(it, a.name) { chrome = !chrome } }
+            bitmap?.let { Zoomable(it, a.shownName) { chrome = !chrome } }
             AnimatedVisibility(
                 chrome,
                 enter = fadeIn(Motion.enter(Motion.SHORT)),
@@ -215,9 +281,9 @@ private fun Viewer(a: Attachment, file: File, close: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(Glyphs.back, "Back", close, tint = ViewerText)
-                    Text(a.name, style = Type.small, color = ViewerText.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(a.shownName, style = Type.small, color = ViewerText.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     Box(
-                        Modifier.height(44.dp).clip(Shapes.control).clickable(onClickLabel = "Share the image", role = Role.Button) { share(context, a, file) }
+                        Modifier.height(48.dp).clip(Shapes.control).clickable(onClickLabel = "Share the image", role = Role.Button) { shareAttachment(context, a, file) }
                             .padding(horizontal = 14.dp),
                         contentAlignment = Alignment.Center,
                     ) { Text("Share", style = Type.label, color = ViewerText) }
@@ -302,18 +368,28 @@ private fun Zoomable(bitmap: Bitmap, description: String, onTap: () -> Unit) {
     }
 }
 
-/** Hands the file to another app through the system's share sheet, readable by that app alone. */
-fun share(context: Context, a: Attachment, file: File) {
-    shareAttachment(context, a, file)
-}
-
-/** The image at [file], decoded at about [longest] pixels on its longest side, off the main thread. */
+/**
+ * The image at [file], off the main thread: at most [longest] pixels on its
+ * longest side and [Images.MOST_BYTES] in memory, whatever the file says
+ * ([Images.sampleSize]); null when Android cannot decode it, or it would
+ * still be too large to draw.
+ */
 private suspend fun decode(file: File, longest: Int): Bitmap? = withContext(Dispatchers.IO) {
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(file.path, bounds)
-    var sample = 1
-    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= longest) sample *= 2
-    BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+    try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
+        val sample = Images.sampleSize(bounds.outWidth, bounds.outHeight, longest)
+        val bitmap = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+        if (bitmap != null && !Images.drawable(bitmap.allocationByteCount.toLong())) {
+            bitmap.recycle()
+            null
+        } else {
+            bitmap
+        }
+    } catch (e: OutOfMemoryError) {
+        null
+    }
 }
 
 private fun percent(done: Long, size: Long) = if (size > 0) "${(done * 100 / size).coerceIn(0, 100)} %" else "…"

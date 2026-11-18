@@ -7,6 +7,13 @@
     <!-- The app lock's prompt: a fingerprint or a face, else the screen lock -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
+    <!-- Whether the network is metered (mobile data): a large file then
+         waits for a tap instead of coming by itself -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Android 13 and later: showing what a host's push says -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Select the person's supporting browser for Custom Tabs on Android 11+. -->
     <queries>
         <intent>
@@ -15,11 +22,12 @@
     </queries>
 
     <!-- No backup and no transfer to a new phone: the app holds device keys
-         and will hold conversations. allowBackup="false" and
+         and the conversations kept. allowBackup="false" and
          fullBackupContent cover Android 11 and older; dataExtractionRules
          covers 12 and later, where allowBackup no longer stops
          device-to-device transfer. -->
     <application
+        android:name=".EnclosApp"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -29,20 +37,22 @@
         android:enableOnBackInvokedCallback="true"
         android:theme="@style/Theme.Enclos"
         tools:targetApi="33">
-        <!-- adjustResize: the screen follows the keyboard as it slides,
+        <!-- Portrait only, for now: landscape comes later. Android 16 and
+             later ignore the lock on large screens (tablets, foldables
+             open), where the app then turns with the screen.
+             adjustResize: the screen follows the keyboard as it slides,
              frame by frame, instead of jumping once it is up.
              configChanges uiMode: switching light and dark, by the system
              or in the app, crossfades the screen instead of recreating it.
              singleTask: a pairing link opened from another app reaches the
              app already running (onNewIntent), not a second copy of it. -->
-
         <activity
             android:name=".MainActivity"
             android:configChanges="uiMode"
             android:exported="true"
             android:launchMode="singleTask"
-            android:windowSoftInputMode="adjustResize"
             android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
             tools:ignore="DiscouragedApi,LockedOrientationActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -76,6 +86,23 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/shared_files" />
         </provider>
+        <!-- Pushes from the hosts' bridges (docs/adr/0010): Firebase starts
+             only from EnclosApp, with the settings the build was given, never
+             by itself, and its token is asked for only then. -->
+        <service
+            android:name=".PushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <provider
+            android:name="com.google.firebase.provider.FirebaseInitProvider"
+            android:authorities="${applicationId}.firebaseinitprovider"
+            tools:node="remove" />
+        <meta-data
+            android:name="firebase_messaging_auto_init_enabled"
+            android:value="false" />
     </application>
 
 </manifest>

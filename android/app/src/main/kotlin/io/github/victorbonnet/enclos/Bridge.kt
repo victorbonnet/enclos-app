@@ -13,6 +13,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The most a message may hold before it is sealed: one Noise transport
@@ -44,7 +45,10 @@ internal fun authFields(device: String, signature: String): Array<Pair<String, A
  * One connection to a host's bridge (docs/protocol.md, The device leg): a
  * WebSocket over the tailnet, the Noise handshake, then [first] (`auth` or
  * `pair.request`, built from the session's handshake hash), then JSON
- * messages, each sealed in a Noise transport message.
+ * messages, each sealed in a Noise transport message. [onClosed] is called
+ * once, with why the connection ended, whichever side ended it: a frame
+ * that does not decrypt or a `v` the app does not speak ends it, a message
+ * that is not JSON or of an unknown `type` does not ([inbound]).
  */
 class BridgeConnection(
     private val url: String,
@@ -53,11 +57,19 @@ class BridgeConnection(
     private val noisePrivate: () -> ByteArray,
     private val first: (DeviceSession) -> JSONObject,
     private val onMessage: (JSONObject) -> Unit,
+    /** A message that decrypted but that the app cannot read (not JSON, no `v` or `type`), answered `bad_message`; the connection goes on. */
+    private val onUnreadable: (Unreadable) -> Unit,
     private val onClosed: (String) -> Unit,
 ) {
-    private var socket: WebSocket? = null
+    @Volatile private var socket: WebSocket? = null
     private var handshake: DeviceHandshake? = null
+    /** Set once [first] is sealed and queued: only then may [send] seal anything. */
     @Volatile private var session: DeviceSession? = null
+    private val ended = AtomicBoolean(false)
+
+    private fun end(why: String) {
+        if (ended.compareAndSet(false, true)) onClosed(why)
+    }
 
     fun open() {
         // An address OkHttp cannot build a request from ends the connection,
@@ -65,11 +77,12 @@ class BridgeConnection(
         val request = try {
             Request.Builder().url(url.replaceFirst("https://", "wss://") + "/").build()
         } catch (e: IllegalArgumentException) {
-            onClosed("not an address to connect to: $url")
+            end("not an address to connect to: $url")
             return
         }
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                socket = webSocket
                 try {
                     val h = DeviceHandshake(noisePrivate(), bridgeKey)
                     handshake = h
@@ -84,35 +97,63 @@ class BridgeConnection(
                     val s = session
                     if (s == null) {
                         val opened = handshake!!.finish(bytes.toByteArray())
-                        session = opened
-                        send(first(opened))
+                        // The first message takes the session's first nonce:
+                        // it is sealed and queued before any other send can
+                        // see the session.
+                        synchronized(this@BridgeConnection) {
+                            webSocket.send(opened.encrypt(line(first(opened))).toByteString())
+                            session = opened
+                        }
                     } else {
-                        onMessage(JSONObject(String(s.decrypt(bytes.toByteArray()), Charsets.UTF_8)))
+                        // A bad or unknown message is answered, and the
+                        // connection goes on; another `v` ends it
+                        // (docs/protocol.md, Messages).
+                        when (val next = inbound(String(s.decrypt(bytes.toByteArray()), Charsets.UTF_8))) {
+                            is Inbound.Use -> onMessage(next.message)
+                            is Inbound.Skip -> {
+                                next.answer?.let { this@BridgeConnection.send(it) }
+                                next.unreadable?.let(onUnreadable)
+                            }
+                            is Inbound.End -> {
+                                next.answer?.let { this@BridgeConnection.send(it) }
+                                fail(webSocket, next.why)
+                            }
+                        }
                     }
                 } catch (e: Exception) {
+                    // A handshake or a frame that does not decrypt ends the connection.
                     fail(webSocket, "the bridge sent what the app cannot read: ${e.message}")
                 }
             }
 
+            // The bridge ends the connection: answer its close, and say why
+            // now rather than when the ping next fails.
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(1000, null)
+                end(reason.ifEmpty { "closed by the bridge" })
+            }
+
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                onClosed(t.message ?: "the connection failed")
+                end(t.message ?: "the connection failed")
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                onClosed(reason.ifEmpty { "closed" })
+                end(reason.ifEmpty { "closed" })
             }
         })
     }
 
     private fun fail(webSocket: WebSocket, why: String) {
         webSocket.close(1002, null)
-        onClosed(why)
+        end(why)
     }
 
     /**
      * Sends [message], sealed; nothing before the handshake is done, nor a
      * message larger than one Noise message ([fits]). Whether it went.
+     * Sealing and queueing are one step, so messages go in nonce order.
      */
+    @Synchronized
     fun send(message: JSONObject): Boolean {
         val s = session ?: return false
         val plain = line(message)
@@ -125,8 +166,10 @@ class BridgeConnection(
         return socket?.send(sealed.toByteString()) ?: false
     }
 
-    fun close() {
+    /** Ends the connection from the app's side, saying [why]. */
+    fun close(why: String = "closed") {
         socket?.close(1000, null)
+        end(why)
     }
 
     companion object {

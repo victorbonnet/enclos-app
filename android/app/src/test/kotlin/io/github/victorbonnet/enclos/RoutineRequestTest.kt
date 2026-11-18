@@ -4,6 +4,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RoutineRequestTest {
+    @Test fun routines_are_offered_only_to_the_person_the_host_lets_manage_them() {
+        val host = Agent("mac", "lab/coder", "hermes", listOf("routines"), canManageRoutines = true)
+        assertTrue(host.offersRoutines)
+        assertFalse(host.copy(canManageRoutines = false).offersRoutines) // a guest, or an older host
+        assertFalse(host.copy(capabilities = emptyList()).offersRoutines)
+        val sent = RoutineClient(send = { _, _ -> true }, connected = { true }, supported = { false }, later = { _, _ -> })
+        sent.refresh("mac/lab/coder")
+        assertTrue("no request for an agent whose routines are not offered", sent.pending.isEmpty())
+    }
+
     @Test fun fresh_get_revision_replaces_older_list_before_editing() {
         val listed = RoutineSummary("r1", "old", "Brief", RoutineSchedule.Cron("0 9 * * *"), true, "Old instruction", "Home", true, null, null, null)
         val fetched = listed.copy(revision = "new", preview = "Changed natively")

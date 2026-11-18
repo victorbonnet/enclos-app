@@ -35,6 +35,7 @@ fun RoutinesScreen(model: AppModel, address: String, back: () -> Unit) {
     var creating by rememberSaveable(address) { mutableStateOf(false) }
     var selected by rememberSaveable(address) { mutableStateOf<String?>(null) }
     var deleting by remember { mutableStateOf<RoutineSummary?>(null) }
+    var running by remember { mutableStateOf<RoutineSummary?>(null) }
     var editorDirty by remember { mutableStateOf(false) }
     var discardSheet by remember { mutableStateOf(false) }
     LaunchedEffect(address, live) { if (live) client.refresh(address) }
@@ -49,7 +50,7 @@ fun RoutinesScreen(model: AppModel, address: String, back: () -> Unit) {
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
             Text(address, style = Type.code, color = p.textFaint, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
             Text("Routines run on this agent's host, including while the app is closed.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp))
-            list?.options?.let { Text("Schedule time zone: ${it.timezone}", style = Type.small, color = p.textFaint, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
+            list?.options?.let { Text("Schedule time zone: ${Visible.stripped(it.timezone)}", style = Type.small, color = p.textFaint, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
             if (!live) Text("Connect to an agent that supports routines to read or change its schedules.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
             else if (list != null && !list.fresh && !busy) Text("This list is out of date. Refresh before making changes.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
             if (busy) Text(if (client.pending[address]?.operation == "list") "Loading routines…" else "Waiting for the host…", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
@@ -77,7 +78,7 @@ fun RoutinesScreen(model: AppModel, address: String, back: () -> Unit) {
                     RoutineStatus(routine)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (list.options?.allows("get") == true) ActionButton(if (routine.editable && list.options.allows("update")) "Edit" else "Details", enabled = client.canOperate(address, "get"), onClick = { selected = routine.id; client.get(address, routine.id) })
-                        if (list.options?.allows("run") == true) ActionButton("Run now", enabled = client.canOperate(address, "run") && routine.editable && (routine.enabled || (routine.state == "paused" && "run_paused" in list.options.features)), onClick = { client.act(address, routine, "run") })
+                        if (list.options?.allows("run") == true) ActionButton("Run now", enabled = client.canOperate(address, "run") && routine.editable && (routine.enabled || (routine.state == "paused" && "run_paused" in list.options.features)), onClick = { running = routine })
                         if (list.options?.allows("delete") == true) ActionButton("Delete", enabled = client.canOperate(address, "delete") && routine.editable, onClick = { deleting = routine })
                     }
                 }
@@ -106,6 +107,11 @@ fun RoutinesScreen(model: AppModel, address: String, back: () -> Unit) {
     }
     if (discardSheet) ConfirmDialog("Discard changes?", "Your unsaved routine changes will be lost.", "Discard", onDismiss = { discardSheet = false }, dismissLabel = "Keep editing") {
         discardSheet = false; editorDirty = false; creating = false; selected = null
+    }
+    running?.let { routine ->
+        ConfirmDialog("Run routine now?", "${routine.title} runs once now on the host, unattended, and sends its output to: ${routine.delivery}.", "Run now", onDismiss = { running = null }, enabled = client.canOperate(address, "run")) {
+            client.act(address, routine, "run"); running = null
+        }
     }
     deleting?.let { routine ->
         ConfirmDialog("Delete routine?", "${routine.title} and its saved runtime output may be removed. Its previous conversation messages stay. An execution already running is not stopped.", "Delete", onDismiss = { deleting = null }, enabled = client.canOperate(address, "delete")) {
@@ -162,7 +168,9 @@ private fun RoutineEditor(model: AppModel, address: String, routine: Routine?, o
             if (!editable) Text("This routine can be viewed here. Manage its changes in its runtime.", style = Type.small, color = p.textMuted)
             if (!client.canChange(address)) Text("Refresh the list before saving. An unconfirmed request will not be sent again automatically.", style = Type.small, color = p.textMuted)
             if (!revisionCurrent && !busy) Text("This routine changed or is no longer in the current list. Close and open it again to edit its current definition. Your draft is still here.", style = Type.small, color = p.textMuted)
-            if (!timezoneCurrent) Text("The runtime's time zone changed from $editorTimezone to ${options.timezone}. Close and reopen the editor before saving with the new time zone.", style = Type.small, color = p.textMuted)
+            if (!timezoneCurrent) Text("The runtime's time zone changed from ${Visible.stripped(editorTimezone)} to ${Visible.stripped(options.timezone)}. Close and reopen the editor before saving with the new time zone.", style = Type.small, color = p.textMuted)
+            if (routine != null && (Visible.hasHidden(initial.prompt, lines = true) || Visible.hasHidden(initial.name.orEmpty())))
+                Text("This routine's name or instruction holds invisible or control characters that change how it reads. They are kept as they are when you save.", style = Type.small, color = p.text)
             if (!client.canChange(address) && !busy) ActionButton("Refresh routines", enabled = client.available(address), onClick = { client.refresh(address) })
             FormField(draft.name.orEmpty(), { draft = draft.copy(name = it.takeUnless(String::isBlank)) }, enabled = enabled, label = "Name (optional)", singleLine = true, modifier = Modifier.fillMaxWidth())
             RoutineScheduleFields(schedule, { schedule = it }, editorTimezone, enabled)

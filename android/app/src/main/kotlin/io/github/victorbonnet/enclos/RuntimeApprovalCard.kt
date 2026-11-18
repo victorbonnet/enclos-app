@@ -2,13 +2,11 @@ package io.github.victorbonnet.enclos
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -18,8 +16,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.ui.*
+
+/** What every runtime approval card says first, in the app's words. */
+const val RUNTIME_APPROVAL_FRAME = "The runtime asks to run a command"
 
 /** The native runtime's exact waiting approval, with no inferred/default action. */
 @Composable
@@ -31,23 +35,40 @@ fun RuntimeApprovalCard(client: QuestionClient, question: QuestionInfo) {
     val terminal = question.state != QuestionState.Pending
     // Not saveable: a confirmation never comes back by itself when the card scrolls back or the app returns.
     var confirming by remember(question.host, question.id) { mutableStateOf<RuntimeApprovalAction?>(null) }
+    // The list opens on its newest item, so a tall card shows its buttons first: allowing waits
+    // until the start of the command has been on screen.
+    var startSeen by remember(question.host, question.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(question.text, style = Type.name, color = p.text)
+        // The runtime wrote what follows; this heading is the app's.
+        Text(RUNTIME_APPROVAL_FRAME, style = Type.name, color = p.text)
+        SelectionContainer { Text(Visible.revealed(question.text), style = Type.body, color = p.text) }
+        // Whole and wrapped, never scrolled out of sight; hidden characters and runs of blanks are written out.
         SelectionContainer {
-            Box(Modifier.fillMaxWidth().clip(Shapes.control).background(p.panelDeep).horizontalScroll(rememberScrollState()).padding(12.dp)) {
-                Text(approval.command, style = Type.code, color = p.panelText, softWrap = false)
+            Box(
+                Modifier.fillMaxWidth().clip(Shapes.control).background(p.panelDeep)
+                    .onGloballyPositioned { box ->
+                        val bounds = box.boundsInWindow()
+                        if (!startSeen && bounds.height > 0f && bounds.top <= box.positionInWindow().y + 1f) startSeen = true
+                    }
+                    .padding(12.dp),
+            ) {
+                Text(approval.shownCommand, style = Type.code, color = p.panelText)
             }
         }
-        SelectionContainer { Text(approval.reason, style = Type.body, color = p.text) }
+        if (approval.outsideAscii) Text(OUTSIDE_ASCII_NOTICE, style = Type.small, color = p.text)
+        SelectionContainer { Text(Visible.revealed(approval.reason), style = Type.body, color = p.text) }
         runtimeApprovalScopeNotes(approval).forEach { Text(it, style = Type.small, color = p.textMuted) }
-        // The runtime's own words, under the app's line that says whose they are.
-        approval.scopes?.let { SelectionContainer { Text(it.shownDescription, style = Type.small, color = p.textMuted) } }
-        if (approval.smartDenied) {
+        approval.scopes?.let { scopes ->
+            SelectionContainer { Text(scopes.shownDescription, style = Type.small, color = p.textMuted) }
+        }
+        if (!terminal && approval.smartDenied) {
             Text(if (approval.actions == listOf(RuntimeApprovalAction.Deny)) "Only Deny is available for this request." else "Only Allow once or Deny is available for this request.", style = Type.small, color = p.textMuted)
         }
         Text("Existing sandbox policy still applies. Execution is reported separately.", style = Type.small, color = p.textMuted)
-        approval.actions.forEach { action ->
-            ActionButton(action.label, modifier = Modifier.fillMaxWidth().border(1.dp, if (enabled) p.lineStrong else p.line, Shapes.control), enabled = enabled) {
+        if (!terminal) commandLengthNote(approval, startSeen)?.let { Text(it, style = Type.small, color = p.text) }
+        if (!terminal) approval.actions.forEach { action ->
+            val ready = enabled && actionReady(action, startSeen)
+            ActionButton(action.label, modifier = Modifier.fillMaxWidth().border(1.dp, if (ready) p.lineStrong else p.line, Shapes.control), enabled = ready) {
                 // A grant beyond this one command is confirmed first; Once and Deny are one explicit tap.
                 if (grantConfirmation(approval, action) != null) confirming = action
                 else client.submit(question, QuestionAnswer.Approval(action))
@@ -69,7 +90,7 @@ fun RuntimeApprovalCard(client: QuestionClient, question: QuestionInfo) {
         }
         client.errors[question.key]?.let { Text(it, style = Type.small, color = p.textMuted) }
     }
-    val action = confirming
+    val action = confirming.takeUnless { terminal }
     val text = action?.let { grantConfirmation(approval, it) }
     if (action != null && text != null) {
         ConfirmDialog("${action.label}?", text, action.label, onDismiss = { confirming = null }, enabled = enabled) {
@@ -79,34 +100,68 @@ fun RuntimeApprovalCard(client: QuestionClient, question: QuestionInfo) {
     }
 }
 
-/** The app's line above a runtime's own description of its grants. */
+internal const val OUTSIDE_ASCII_NOTICE = "This command holds characters outside ASCII, some of which look like others. Check each one."
+
+internal const val REVOKE_ALWAYS = "Always allow saves the grant in the runtime until it is removed there (Hermes: the profile's command_allowlist in config.yaml)."
+
+/** A command longer than this many lines, as shown, says next to the buttons where it starts. */
+internal const val LONG_COMMAND_LINES = 4
+
+/** A command longer than this many characters, as shown, says so too: wrapped, it runs over several lines. */
+internal const val LONG_COMMAND_CHARACTERS = 240
+
+/** Deny is always ready; an allow waits until the start of the command has been on screen. */
+internal fun actionReady(action: RuntimeApprovalAction, startSeen: Boolean): Boolean =
+    action == RuntimeApprovalAction.Deny || startSeen
+
+/**
+ * What the app says next to the buttons: for a long command, how long it is and that it
+ * starts above, so its last lines are not taken for all of it; and, until the start of the
+ * command has been on screen, that only Deny is available. None for a short command in view.
+ */
+internal fun commandLengthNote(approval: RuntimeApprovalDefinition, startSeen: Boolean): String? {
+    val shown = approval.shownCommand
+    val lines = approval.shownLines
+    val long = lines > LONG_COMMAND_LINES || shown.length > LONG_COMMAND_CHARACTERS
+    val size = "This command is ${if (lines == 1) "one line" else "$lines lines"} (${shown.length} characters) and starts above."
+    return when {
+        !startSeen && long -> "$size Scroll up to its start to read it all; until then only Deny is available."
+        !startSeen -> "Scroll up to the start of the command to allow it; until then only Deny is available."
+        long -> "$size Read it all before you answer."
+        else -> null
+    }
+}
+
 internal const val SCOPES_FRAME = "The runtime describes these grants as follows:"
 
-/** What each offered scope allows: for a scoped request the runtime's description follows; otherwise the patterns are named. */
+/** What each offered scope allows, naming the runtime's patterns a session or always grant covers. */
 internal fun runtimeApprovalScopeNotes(approval: RuntimeApprovalDefinition): List<String> = buildList {
     if (RuntimeApprovalAction.Once in approval.actions) add("Allow once applies only to this command request.")
     if (approval.scopes != null) {
         add(SCOPES_FRAME)
         return@buildList
     }
-    if (!approval.grantsPatterns) return@buildList
-    add("A session or always grant covers every command matching: ${approval.patterns.joinToString("; ")}. Not only this one.")
+    if (approval.grantsPatterns) {
+        add("A session or always grant covers every command matching: ${approval.patterns.joinToString("; ")}. Not only this one.")
+    }
     if (RuntimeApprovalAction.Session in approval.actions) add("Allow for session lasts for this runtime session.")
-    if (RuntimeApprovalAction.Always in approval.actions) add("Always allow saves the grant in this runtime.")
+    if (RuntimeApprovalAction.Always in approval.actions) add(REVOKE_ALWAYS)
 }
 
 /**
- * The confirmation a grant beyond this one command asks for (Session and Always), or none
- * for Once and Deny. A scoped request repeats the runtime's own description of its grants,
- * never its patterns, which it need not send; a legacy request names its patterns.
+ * The confirmation a grant beyond this one command asks for (Session and Always): how far it
+ * reaches, and for Always where it is revoked. None for Once and Deny, which are one tap.
  */
 internal fun grantConfirmation(approval: RuntimeApprovalDefinition, action: RuntimeApprovalAction): String? {
     if (action == RuntimeApprovalAction.Once || action == RuntimeApprovalAction.Deny) return null
     approval.scopes?.let { return "${action.label} grants more than this command. $SCOPES_FRAME ${it.shownDescription}" }
-    val patterns = approval.patterns.joinToString("; ")
-    return if (action == RuntimeApprovalAction.Session) "Every later command matching $patterns will run without asking, until this runtime session ends."
-    else "Every later command matching $patterns will run without asking, in every conversation using this runtime profile, until the grant is removed in the runtime."
+    return if (action == RuntimeApprovalAction.Always) alwaysConfirmation(approval)
+    else "Every later command matching ${approval.patterns.joinToString("; ")} will run without asking, until this runtime session ends."
 }
+
+/** The confirmation an Always allow asks for: how far the grant reaches, and where it is revoked. */
+internal fun alwaysConfirmation(approval: RuntimeApprovalDefinition): String =
+    "Every later command matching ${approval.patterns.joinToString("; ")} will run without asking, in every conversation using this runtime profile. $REVOKE_ALWAYS"
 
 /**
  * Where the card cannot be answered (offline, before sync, an unconfirmed outcome), the

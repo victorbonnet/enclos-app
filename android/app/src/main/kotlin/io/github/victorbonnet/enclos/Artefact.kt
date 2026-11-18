@@ -3,6 +3,7 @@ package io.github.victorbonnet.enclos
 import java.io.File
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
+import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
 import java.util.UUID
 
@@ -36,10 +37,32 @@ internal class ArtefactDocument(val bytes: ByteArray) {
                 output.toByteArray()
             }
             require(bytes.size <= MAX_BYTES) { "The page is larger than 25 MiB." }
-            // Report a broken encoding rather than showing corrupted text; optional UTF-8 BOM is valid.
-            Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes))
+            checkUtf8(bytes)
             return ArtefactDocument(bytes)
+        }
+
+        /**
+         * Reports a broken encoding rather than showing corrupted text; an
+         * optional UTF-8 BOM is valid. Decodes through a small buffer that is
+         * reused, so a 25 MiB page never also takes 50 MiB of characters.
+         */
+        internal fun checkUtf8(bytes: ByteArray, chunk: Int = 8192) {
+            val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+            val input = ByteBuffer.wrap(bytes)
+            val output = CharBuffer.allocate(chunk)
+            while (true) {
+                val result = decoder.decode(input, output, true)
+                if (result.isError) result.throwException()
+                output.clear()
+                if (result.isUnderflow) break
+            }
+            while (true) {
+                val result = decoder.flush(output)
+                if (result.isError) result.throwException()
+                output.clear()
+                if (result.isUnderflow) break
+            }
         }
     }
 }

@@ -10,7 +10,7 @@ data class QuestionRequest(val id: String, val question: QuestionInfo, val answe
         incoming.key == question.key && incoming.conversation == question.conversation && incoming.agent == question.agent
 
     fun confirms(incoming: QuestionInfo): Boolean = incoming.revision > question.revision &&
-        question.copy(state = incoming.state, revision = incoming.revision, answer = incoming.answer) == incoming &&
+        question.copy(state = incoming.state, revision = incoming.revision, answer = incoming.answer, confirmed = incoming.confirmed) == incoming &&
         if (answer == QuestionAnswer.Skip) incoming.state == QuestionState.Skipped && incoming.answer == null
         else incoming.state == QuestionState.Answered && incoming.answer?.normalized() == answer.normalized()
 
@@ -24,7 +24,45 @@ class QuestionClient(
     private val accepts: (QuestionInfo) -> Boolean,
     private val changed: (QuestionInfo) -> Unit,
     private val later: (Long, () -> Unit) -> Unit,
+    /** Asks the host for a fresh `sync` over its open connection; false when it could not be sent. */
+    private val resync: (String) -> Boolean = { false },
+    /** Why a question was not shown (never its text), for the log. */
+    private val dropped: (String) -> Unit = {},
+    private val closeSupported: (String) -> Boolean = { false },
+    private val sendClose: (QuestionInfo, String) -> Boolean = { _, _ -> false },
 ) {
+    val closed = mutableStateMapOf<QuestionKey, Boolean>()
+    val closing = mutableStateMapOf<QuestionKey, String>()
+    private val closeRequests = mutableMapOf<String, QuestionInfo>()
+
+    fun offersClose(question: QuestionInfo): Boolean = question.state == QuestionState.Expired && question.approval == null && closeSupported(question.host)
+
+    fun closeUnavailable(question: QuestionInfo): String? = when {
+        !offersClose(question) -> "This host cannot close this request."
+        questions[question.key] != question -> "This request changed. Open its latest version."
+        !connected(question.host) -> "Connect to ${question.host} to close this request."
+        fresh[question.host] != true -> "Waiting for the host to sync…"
+        question.key in closing -> "Closing…"
+        else -> null
+    }
+
+    fun close(question: QuestionInfo): Boolean {
+        if (questions[question.key] != question || !offersClose(question) || !connected(question.host) || fresh[question.host] != true || question.key in closing || closed[question.key] == true) return false
+        val id = UUID.randomUUID().toString()
+        closeRequests[id] = question; closing[question.key] = id
+        if (!sendClose(question, id)) {
+            closeRequests.remove(id); closing.remove(question.key)
+            errors[question.key] = "The request was not closed. Reconnect and try again."
+            return false
+        }
+        later(30_000) {
+            if (closeRequests.remove(id) != null) {
+                closing.remove(question.key)
+                errors[question.key] = "Closing was not confirmed. The request may still appear until the next sync."
+            }
+        }
+        return true
+    }
     val questions = mutableStateMapOf<QuestionKey, QuestionInfo>()
     val pending = mutableStateMapOf<QuestionKey, QuestionRequest>()
     val errors = mutableStateMapOf<QuestionKey, String>()
@@ -36,9 +74,12 @@ class QuestionClient(
 
     fun current(conversation: Conversation, id: String?): QuestionInfo? = id?.let { questions[QuestionKey(conversation.host, it)] }?.takeIf { it.belongsTo(conversation) }
 
+    fun offersAnswer(question: QuestionInfo): Boolean = question.state == QuestionState.Pending
+
     fun unavailable(question: QuestionInfo): String? = when {
-        question.state != QuestionState.Pending -> "This question is ${question.state.wire}."
-        uncertain[question.key] == true -> "The outcome is unconfirmed. Reconnect to check it before answering again."
+        !offersAnswer(question) -> "This question is ${question.state.wire}."
+        uncertain[question.key] == true && checking(question.host) -> "Checking the outcome with ${question.host}…"
+        uncertain[question.key] == true -> "The outcome is unconfirmed. Check again before answering again."
         question.key in pending -> "Waiting for the agent to confirm…"
         !connected(question.host) -> "Connect to ${question.host} to answer."
         fresh[question.host] != true -> "Waiting for the host to sync…"
@@ -46,7 +87,14 @@ class QuestionClient(
     }
 
     fun merge(incoming: QuestionInfo, cached: Boolean = false): Boolean {
-        if (!accepts(incoming) || runCatching { incoming.validate() }.isFailure) return false
+        if (!accepts(incoming)) {
+            dropped("question ${incoming.id} from ${incoming.host}: no kept conversation of a paired host")
+            return false
+        }
+        runCatching { incoming.validate() }.exceptionOrNull()?.let {
+            dropped("question ${incoming.id} from ${incoming.host}: ${it.message}")
+            return false
+        }
         if (!cached) syncing[incoming.host]?.add(incoming.key)
         val current = questions[incoming.key]
         val selected = newestQuestion(current, incoming.normalized())
@@ -72,7 +120,7 @@ class QuestionClient(
         later(30_000) {
             if (requests[request.id] == request) {
                 uncertain[current.key] = true
-                errors[current.key] = "The agent has not confirmed the outcome. The answer was not resent. Reconnect to check it."
+                errors[current.key] = "The agent has not confirmed the outcome. The answer was not resent. Check again to see it."
             }
         }
         return request.id
@@ -91,14 +139,19 @@ class QuestionClient(
     }
 
     fun failure(host: String, of: String, reason: String, code: String = ""): Boolean {
+        closeRequests[of]?.takeIf { it.host == host }?.let {
+            closeRequests.remove(of); closing.remove(it.key); errors[it.key] = oneLine(reason, 300).ifBlank { "Could not dismiss this reminder. Try again." }
+            return true
+        }
         val request = requests[of]?.takeIf { it.question.host == host } ?: return false
         finish(request)
-        if (code == "agent_unavailable") {
-            // The bridge can time out before our timer, after native resolution
-            // has already happened. Its error is not proof that retrying is safe.
+        if (code !in REFUSED_BEFORE_SENDING) {
+            // `unconfirmed`: the bridge can time out before our timer, after native
+            // resolution has already happened. Its error is not proof that retrying is
+            // safe; nor is a code this app does not know.
             uncertain[request.question.key] = true
             errors[request.question.key] = reason.ifBlank { "The agent has not confirmed the outcome." } +
-                " The answer was not resent. Reconnect to check the outcome."
+                " The answer was not resent. Check again to see the outcome."
         } else {
             uncertain.remove(request.question.key)
             errors[request.question.key] = reason.ifBlank { "The agent could not accept this answer. Check the current question." }
@@ -107,13 +160,51 @@ class QuestionClient(
     }
 
     fun received(host: String, message: JSONObject): Boolean = when (message.optString("type")) {
-        "question" -> { runCatching { QuestionInfo.from(host, message.getJSONObject("question")) }.getOrNull()?.let { merge(it) }; true }
-        "question.result" -> { runCatching { QuestionInfo.from(host, message.getJSONObject("question")) }.getOrNull()?.let { result(host, message.optString("of"), it) }; true }
+        "question.closed" -> {
+            val id = message.optString("of")
+            closeRequests[id]?.takeIf { it.host == host && it.id == message.optString("question") }?.let {
+                closeRequests.remove(id); closing.remove(it.key); closed[it.key] = true; errors.remove(it.key)
+            }
+            true
+        }
+        "question" -> { parsed(host, message)?.let { merge(it) }; true }
+        "question.result" -> { parsed(host, message)?.let { result(host, message.optString("of"), it) }; true }
         "error" -> failure(host, message.optString("of"), message.optString("message"), message.optString("code"))
         else -> false
     }
 
+    private fun parsed(host: String, message: JSONObject): QuestionInfo? =
+        runCatching { QuestionInfo.from(host, message.getJSONObject("question")) }
+            .onFailure { dropped("${message.optString("type")} from $host could not be read: ${it.javaClass.simpleName}") }
+            .getOrNull()
+
     fun authenticated(host: String) { fresh[host] = false; syncing[host] = mutableSetOf() }
+
+    /** Whether a sync of [host]'s is still running over a live connection. */
+    private fun checking(host: String): Boolean = connected(host) && fresh[host] != true && host in syncing
+
+    /** Whether [question]'s unconfirmed outcome can be checked now, with [checkAgain]. */
+    fun canCheckAgain(question: QuestionInfo): Boolean = offersAnswer(question) &&
+        uncertain[question.key] == true && connected(question.host) && fresh[question.host] == true
+
+    /**
+     * Asks the host for a fresh `sync` over the open connection, so an unconfirmed outcome is
+     * settled without reconnecting: a sync sends every pending question again, and [synced]
+     * then clears the doubt of each one it sent. As at a reconnect, the sync now judges the
+     * outcome, not a late receipt. Nothing is resent to the agent.
+     */
+    fun checkAgain(question: QuestionInfo): Boolean {
+        if (!canCheckAgain(question)) return false
+        fresh[question.host] = false
+        syncing[question.host] = mutableSetOf()
+        if (resync(question.host)) {
+            pending[question.key]?.let(::finish)
+            return true
+        }
+        fresh[question.host] = true
+        syncing.remove(question.host)
+        return false
+    }
 
     fun synced(host: String) {
         fresh[host] = true
@@ -121,6 +212,10 @@ class QuestionClient(
     }
 
     fun ended(host: String) {
+        closeRequests.entries.filter { it.value.host == host }.toList().forEach { (id, q) ->
+            closeRequests.remove(id); closing.remove(q.key)
+            errors[q.key] = "The connection ended before closing was confirmed. Check after reconnecting."
+        }
         fresh[host] = false
         syncing.remove(host)
         pending.values.filter { it.question.host == host }.toList().forEach {
@@ -130,10 +225,30 @@ class QuestionClient(
         }
     }
 
+    fun forgetConversation(host: String, conversation: String) {
+        val keys = questions.values.filter { it.host == host && it.conversation == conversation }.map { it.key }
+        keys.forEach { key ->
+            closed.remove(key); closing.remove(key)
+            closeRequests.entries.removeAll { it.value.key == key }
+            pending[key]?.let(::finish)
+            questions.remove(key); errors.remove(key); uncertain.remove(key); receipts.remove(key)
+            syncing[host]?.remove(key)
+        }
+    }
+
     fun forget(host: String) {
         ended(host)
         questions.keys.filter { it.host == host }.forEach { key -> questions.remove(key); errors.remove(key); uncertain.remove(key); receipts.remove(key) }
         fresh.remove(host)
+        closed.keys.filter { it.host == host }.forEach { closed.remove(it) }
+    }
+
+    private companion object {
+        /**
+         * Codes with which the bridge refuses an answer before writing it to the agent
+         * (enclos `docs/protocol.md`, Errors): nothing was sent, and answering again is safe.
+         */
+        val REFUSED_BEFORE_SENDING = setOf("agent_unavailable", "bad_message", "conflict", "not_found", "unsupported", "not_allowed")
     }
 
     private fun finish(request: QuestionRequest) {

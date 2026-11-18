@@ -1,0 +1,53 @@
+# enclos-protocol's TO_DEVICE_TYPES (crates/enclos-protocol/src/device.rs) on
+# enclos main 070bba51 (#293, after 8a61dadc's `agents.removed.list`), with
+# `usage` and `usage.report` of enclos#290: every type a bridge sends a device. The app's
+# BRIDGE_TYPES must equal it (ProtocolErrorsTest), and it must hold every type
+# of the crate core-ffi pins (core-ffi's tests). Update it from enclos when the
+# pin moves. held_task and held_task.result come from enclos#287 (held tasks,
+# ADR 0066), ahead of the pin: the app reads them in Kotlin, so no core-ffi
+# change needs them. task.detail comes from the enclos PR for #318 (task
+# details), ahead of the pin, read in Kotlin the same way.
+ack
+agent.activity
+agent.avatar
+agent.name
+agents.list
+agents.removed.list
+approval
+attachment.data
+audit.list
+authenticated
+commands
+conversation
+conversation.deleted
+error
+group.state
+held_task
+held_task.board.link
+held_task.result
+message
+operation.progress
+pair.accepted
+pair.refused
+question
+question.result
+routine.response
+runtime.installed
+runtimes.list
+sandbox.created
+sandbox.policy
+sandbox.policy.preview
+sandboxes.list
+synced
+task
+task.detail
+task.removed
+tool
+typing
+usage
+usage.report
+
+open_items
+question.closed
+
+open_item.dismissed

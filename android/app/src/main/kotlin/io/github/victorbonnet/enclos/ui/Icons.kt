@@ -56,30 +56,15 @@ object Glyphs {
     val compose = glyph("compose", strokes = listOf("M12 4H4v16h16v-8", "M10 14v-3l9-9 3 3-9 9z"))
     /** A stored conversation, with its original history kept. */
     val archive = glyph("archive", strokes = listOf(rect(3f, 4f, 18f, 4f), "M5 8v12h14V8", "M9 12h6"))
+    val delete = glyph("delete", strokes = listOf("M4 6h16M9 6V3h6v3M6 6v15h12V6M10 10v7M14 10v7"))
     val more = glyph("more", fills = listOf(rect(3f, 10f, 4f, 4f), rect(10f, 10f, 4f, 4f), rect(17f, 10f, 4f, 4f)))
     val check = glyph("check", stroke = 2.4f, strokes = listOf("M4 12l5 5L20 6"))
     val clock = glyph("clock", strokes = listOf(rect(4f, 4f, 16f, 16f), "M12 8v4h4"))
     val search = glyph("search", strokes = listOf(rect(4f, 4f, 12f, 12f), "M15 15l5 5"))
     val filter = glyph("filter", strokes = listOf("M4 6h16M7 12h10M10 18h4"))
+    val usage = glyph("usage", strokes = listOf("M5 20v-7M12 20V5M19 20v-11"))
     /** Pointing right: something that opens. */
     val chevron = glyph("chevron", strokes = listOf("M9 6l6 6-6 6"))
     /** Clear a field: an addition to the design's set. */
     val clear = glyph("clear", strokes = listOf("M6 6l12 12M18 6L6 18"))
-    /**
-     * Unread only, off: the inbox's bubble in outline, open at its top
-     * right, where an outlined square stands for what is unread. An
-     * addition to the design's set.
-     */
-    val unreadOff = glyph(
-        "unread-off",
-        strokes = listOf("M13 5H4v12h3v3l4-3h9v-6", rect(17f, 4f, 4f, 4f)),
-    )
-    /**
-     * Unread only, on: the same bubble and square, filled; a notch keeps
-     * them apart. An addition to the design's set.
-     */
-    val unreadOn = glyph(
-        "unread-on",
-        fills = listOf("M3 4h11v8h7v6h-9.6L6 22v-4H3z", rect(16f, 3f, 6f, 6f)),
-    )
 }

@@ -1,3 +1,5 @@
+import java.util.Properties
+
 // AGP 9 compiles Kotlin itself (built-in Kotlin): no Kotlin Android plugin.
 plugins {
     alias(libs.plugins.android.application)
@@ -12,15 +14,35 @@ android {
     namespace = "io.github.victorbonnet.enclos"
     // The newest stable SDK platform: platforms;android-37.2
     compileSdk = 37
+    ndkVersion = libs.versions.ndk.get()
     compileSdkMinor = 2
 
     defaultConfig {
         applicationId = "io.github.victorbonnet.enclos"
-        // Android 9: StrongBox and hardware key attestation, for the device key
+        // Android 9: StrongBox, for the device key
         minSdk = 28
         targetSdk = 37
         versionCode = 2
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionName = "0.1.1"
+
+        // Firebase's settings for push, kept out of git (docs/adr/0010):
+        // the properties file at ENCLOS_FIREBASE_PROPERTIES, else
+        // ~/.android/enclos-firebase.properties. Without it every value is
+        // empty, and push is off.
+        val named = System.getenv("ENCLOS_FIREBASE_PROPERTIES")
+        val settings = file(named ?: "${System.getProperty("user.home")}/.android/enclos-firebase.properties")
+        val firebase = Properties()
+        if (settings.isFile) {
+            settings.inputStream().use { firebase.load(it) }
+        } else if (named != null) {
+            throw GradleException("ENCLOS_FIREBASE_PROPERTIES is set, but $settings is not a file")
+        }
+        for (name in listOf("applicationId", "apiKey", "projectId", "senderId")) {
+            val value = firebase.getProperty(name, "")
+            require(value.all { it.isLetterOrDigit() || it in "-_:." }) { "$settings: $name holds characters no Firebase setting has" }
+            buildConfigField("String", "FIREBASE_${name.replace(Regex("([A-Z])"), "_$1").uppercase()}", "\"$value\"")
+        }
     }
 
     // Debug builds, on a laptop and in CI, are signed with the project's one
@@ -46,6 +68,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     // Robolectric reads the app's merged manifest and resources.
@@ -76,6 +99,8 @@ dependencies {
     implementation(libs.commonmark.ext.gfm.tables)
     implementation(libs.commonmark.ext.gfm.strikethrough)
     implementation(libs.commonmark.ext.autolink)
+    implementation(libs.firebase.messaging)
+    implementation(libs.androidx.fragment)
     implementation(libs.jna) {
         artifact {
             type = "aar"
@@ -84,6 +109,9 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     testImplementation(libs.junit)
+    testImplementation(libs.json)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.androidx.test.espresso.core)

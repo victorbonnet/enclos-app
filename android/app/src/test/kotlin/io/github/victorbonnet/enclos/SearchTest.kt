@@ -5,6 +5,23 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class SearchTest {
+    @Test
+    fun pending_search_keeps_previous_matches_but_drops_hidden_conversations() {
+        val hidden = Found(Conversation("mac", "lab/coder", "hidden"), null)
+        val kept = Found(Conversation("mac", "lab/main", "kept"), null)
+        val unrelated = Found(Conversation("mac", "lab/director", "other"), null)
+        val current = listOf(kept, unrelated)
+        // Typing, reading, and incoming messages keep the last completed matches.
+        assertEquals(listOf(kept), inboxSearchResults("new query", current, listOf(hidden, kept)))
+        // The first search and a completed empty search never flash all rows.
+        assertEquals(emptyList<Found>(), inboxSearchResults("first query", current, null))
+        assertEquals(emptyList<Found>(), inboxSearchResults("no matches", current, emptyList()))
+        assertEquals(current, inboxSearchResults("", current, listOf(hidden)))
+        // A matching id on another host does not make an old result visible.
+        val otherHost = kept.copy(conversation = kept.conversation.copy(host = "pi"))
+        assertEquals(emptyList<Found>(), inboxSearchResults("query", listOf(otherHost), listOf(kept)))
+    }
+
     private val weather = Conversation("mac", "lab/main", "c-1", title = "Weather in Lyon", titledBy = "agent")
     private val code = Conversation("mac", "lab/coder", "c-2")
     private val pi = Conversation("pi", "home/main", "c-3")
@@ -91,6 +108,36 @@ class SearchTest {
     }
 
     @Test
+    fun highlights_follow_the_search_rules_on_the_original_text() {
+        // Accents and case, as search ignores them.
+        assertEquals(listOf(0..4), matches("Météo à Lyon demain ?", "meteo"))
+        assertEquals(listOf(0..4, 8..11), matches("Météo à Lyon", "METEO lyon"))
+        // An accent written as its own mark is folded away, and highlighted with its letter.
+        assertEquals(listOf(0..6), matches("Météo", "meteo"))
+        // Spaces collapse as search collapses them.
+        assertEquals(listOf(7..11), matches("rain   light rain", "light"))
+        assertEquals(emptyList<IntRange>(), matches("Météo", "  "))
+        assertEquals(emptyList<IntRange>(), matches("Météo", "paris"))
+    }
+
+    @Test
+    fun the_words_may_be_in_different_messages_and_the_row_shows_the_newest() {
+        // "failing" is in the person's message, "412" in the agent's answer.
+        val found = find("failing 412").single()
+        assertEquals("c-2", found.conversation.id)
+        assertEquals(4L, found.match?.seq)
+    }
+
+    @Test
+    fun each_message_is_folded_once_however_often_it_is_searched() {
+        var folded = 0
+        val folds = Folds { folded++; fold(words(it)) }
+        repeat(3) { search(all, { lines[it].orEmpty() }, { 0 }, "rain", InboxFilter.All, folds::of) }
+        assertEquals(4, folded)
+        assertEquals(2L, search(all, { lines[it].orEmpty() }, { 0 }, "rain", InboxFilter.All, folds::of).single().match?.seq)
+    }
+
+    @Test
     fun an_agent_shows_its_newest_conversations_and_older_unread_ones_expanded_all() {
         // Eight of main's, newest first; o-8, the oldest, has something unread.
         val many = (1..8).map { Conversation("mac", "lab/main", "o-$it") }
@@ -112,19 +159,6 @@ class SearchTest {
         assertEquals(listOf("mac/lab/main"), agents.map { it.address })
         assertEquals(said, agents[0].homeMatch)
         assertEquals(listOf("c-1"), agents[0].under.map { it.conversation.id })
-    }
-
-    @Test
-    fun highlights_follow_the_search_rules_on_the_original_text() {
-        // Accents and case, as search ignores them.
-        assertEquals(listOf(0..4), matches("Météo à Lyon demain ?", "meteo"))
-        assertEquals(listOf(0..4, 8..11), matches("Météo à Lyon", "METEO lyon"))
-        // An accent written as its own mark is folded away, and highlighted with its letter.
-        assertEquals(listOf(0..6), matches("Météo", "meteo"))
-        // Spaces collapse as search collapses them.
-        assertEquals(listOf(7..11), matches("rain   light rain", "light"))
-        assertEquals(emptyList<IntRange>(), matches("Météo", "  "))
-        assertEquals(emptyList<IntRange>(), matches("Météo", "paris"))
     }
 
     @Test

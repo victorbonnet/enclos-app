@@ -63,7 +63,7 @@ pub struct NoiseKeyPair {
 pub fn generate_noise_keypair() -> Result<NoiseKeyPair, CoreError> {
     let keys = noise::generate_keypair().map_err(refused)?;
     Ok(NoiseKeyPair {
-        private_key: keys.private,
+        private_key: keys.private.to_vec(),
         public_key: keys.public,
     })
 }
@@ -72,6 +72,18 @@ pub fn generate_noise_keypair() -> Result<NoiseKeyPair, CoreError> {
 #[uniffi::export]
 pub fn pairing_proof(code: Vec<u8>, handshake_hash: Vec<u8>) -> Vec<u8> {
     pairing::proof(&code, &handshake_hash)
+}
+
+/// Bytes the device's hardware key signs when asking to pair.
+#[uniffi::export]
+pub fn pairing_signature_message(handshake_hash: Vec<u8>) -> Vec<u8> {
+    pairing::Signed::Pair.message(&handshake_hash)
+}
+
+/// Bytes the device's hardware key signs when authenticating a paired connection.
+#[uniffi::export]
+pub fn auth_signature_message(handshake_hash: Vec<u8>) -> Vec<u8> {
+    pairing::Signed::Auth.message(&handshake_hash)
 }
 
 /// Bytes as the protocol writes them in JSON (base64url).
@@ -87,8 +99,18 @@ pub fn decode_bytes(text: String) -> Result<Vec<u8>, CoreError> {
 
 /// Opens a notification preview sealed for this device.
 #[uniffi::export]
-pub fn open_preview(push_key: Vec<u8>, sealed: Vec<u8>) -> Result<Vec<u8>, CoreError> {
-    preview::open(&push_key, &sealed).map_err(refused)
+pub fn open_preview(
+    push_key: Vec<u8>,
+    host: String,
+    seq: i64,
+    sealed: Vec<u8>,
+) -> Result<Vec<u8>, CoreError> {
+    preview::open(
+        &push_key,
+        &preview::PushFields { host: &host, seq },
+        &sealed,
+    )
+    .map_err(refused)
 }
 
 /// The device's side of a Noise handshake with one bridge.
@@ -172,9 +194,56 @@ impl DeviceSession {
 mod tests {
     use super::*;
 
+    /// The app answers `unknown_type` to a type outside its list, which a
+    /// JVM test checks against this copy: the copy must hold every type the
+    /// pinned protocol sends a device, so moving the pin to a crate with a
+    /// new type fails here until the copy and the app's list have it.
+    #[test]
+    fn the_apps_copy_of_the_bridge_types_holds_the_pinned_crates() {
+        let copy: Vec<&str> =
+            include_str!("../../android/app/src/test/resources/to-device-types.txt")
+                .lines()
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .collect();
+        for kind in enclos_protocol::device::TO_DEVICE_TYPES {
+            assert!(copy.contains(kind), "to-device-types.txt lacks {kind}");
+        }
+    }
+
     #[test]
     fn reports_the_crate_version() {
         assert_eq!(core_version(), env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn exported_signature_messages_bind_the_session_and_purpose() {
+        let hash = vec![7; 32];
+        let pair = pairing_signature_message(hash.clone());
+        let auth = auth_signature_message(hash.clone());
+        assert_eq!(pair, [b"enclos pair v1".as_slice(), &hash].concat());
+        assert_eq!(auth, [b"enclos auth v1".as_slice(), &hash].concat());
+        assert_ne!(pair, auth);
+        assert_ne!(pair, pairing_signature_message(vec![8; 32]));
+    }
+
+    #[test]
+    fn a_preview_requires_the_host_and_sequence_it_was_sealed_for() {
+        let key = vec![4; 32];
+        let sealed = preview::seal(
+            &key,
+            &preview::PushFields {
+                host: "ubuntu",
+                seq: 7,
+            },
+            b"preview",
+        )
+        .unwrap();
+        assert_eq!(
+            open_preview(key.clone(), "ubuntu".into(), 7, sealed.clone()).unwrap(),
+            b"preview"
+        );
+        assert!(open_preview(key.clone(), "pi".into(), 7, sealed.clone()).is_err());
+        assert!(open_preview(key, "ubuntu".into(), 8, sealed).is_err());
     }
 
     #[test]
@@ -187,6 +256,15 @@ mod tests {
         let (answer, mut bridge_session) = responder.answer().unwrap();
         let session = handshake.finish(answer).unwrap();
         assert!(handshake.hello().is_err(), "a handshake is used once");
+        // The app's selected path is raw bytes, not the pinned typed HeldTask.
+        // An optional field unknown to that pin must reach Kotlin intact.
+        for raw in [
+            br#"{"type":"held_task","held_task":{"resumable":false}}"#.as_slice(),
+            br#"{"type":"held_task.result","held_task":{"resumable":true}}"#.as_slice(),
+        ] {
+            let encrypted = bridge_session.encrypt(raw).unwrap();
+            assert_eq!(session.decrypt(encrypted).unwrap(), raw);
+        }
         let sealed = session.encrypt(b"hi".to_vec()).unwrap();
         assert_eq!(bridge_session.decrypt(&sealed).unwrap(), b"hi");
         assert_eq!(

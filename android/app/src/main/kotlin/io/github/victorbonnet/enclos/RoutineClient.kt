@@ -70,7 +70,11 @@ class RoutineClient(
     }
 
     fun act(address: String, routine: RoutineSummary, action: String, enabled: Boolean? = null): String? {
-        if (!canOperate(address, action) || !current(address, routine)) return null
+        if (!canOperate(address, action)) return null
+        if (!current(address, routine)) {
+            errors[address] = "This routine changed or is no longer listed since you chose it. Check it and try again."
+            return null
+        }
         if (action == "run" && !routine.enabled && !(routine.state == "paused" && "run_paused" in lists[address]?.options?.features.orEmpty())) return null
         if (action !in setOf("run", "delete", "set_enabled")) return null
         val fields = mutableListOf<Pair<String, Any?>>("routine" to routine.id, "revision" to routine.revision)
@@ -89,7 +93,7 @@ class RoutineClient(
         if (m.optString("type") == "error") {
             finish(request)
             stale(request.address)
-            errors[request.address] = m.optString("message").ifBlank { "The host could not complete the request. Refresh to check its routines." }
+            errors[request.address] = routineErrorText(m.optString("message"))
             return true
         }
         if (m.optString("type") != "routine.response" || !request.matches(host, m.optString("of"), m.optString("agent"))) return false
@@ -144,4 +148,15 @@ class RoutineClient(
         details.keys.filter { it.startsWith("$host/") }.forEach { details.remove(it) }
         errors.keys.filter { it.startsWith("$host/") }.forEach { errors.remove(it) }
     }
+}
+
+/**
+ * What the person reads when the host refuses a routine request. The message comes from the
+ * bridge or, through it, from the runtime in the sandbox, so it is quoted and said to be the
+ * host's, never shown as the app's own words, and drawn without hidden characters.
+ */
+fun routineErrorText(message: String): String {
+    val said = Visible.stripped(message).trim()
+    return if (said.isEmpty()) "The host could not complete the request. Refresh to check its routines."
+    else "The host replied: \u201C$said\u201D Refresh to check its routines."
 }

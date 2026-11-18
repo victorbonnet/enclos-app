@@ -38,10 +38,11 @@ import java.io.File
 /**
  * Read-only PDF content. AndroidX parses and renders in its isolated service;
  * PdfView keeps bitmaps near the viewport and supplies its own scroll and zoom.
- * The containing viewer owns Back, Share and Open with.
+ * The containing viewer owns Back, Share and Open in another app; [elsewhere]
+ * says which of them a failure can turn to.
  */
 @Composable
-fun PdfPreview(file: File, modifier: Modifier = Modifier) {
+fun PdfPreview(file: File, elsewhere: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current.applicationContext
     val session = remember(file, context) { PdfPreviewSession() }
     LaunchedEffect(session) {
@@ -55,14 +56,14 @@ fun PdfPreview(file: File, modifier: Modifier = Modifier) {
             if (displayed == true) {
                 awaitCancellation()
             } else if (session.notice == null) {
-                session.notice = "This PDF could not be displayed. You can still open it in another app or share it."
+                session.notice = "This PDF could not be displayed. $elsewhere"
             }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             session.notice = when (error) {
-                is PdfPasswordException -> "This PDF needs a password. Open it in another app to unlock it."
-                else -> "This PDF could not be opened. You can still open it in another app or share it."
+                is PdfPasswordException -> "This PDF needs a password. $elsewhere"
+                else -> "This PDF could not be opened. $elsewhere"
             }
         } finally {
             // Detach the view before closing the document it renders. beta01's
@@ -107,7 +108,7 @@ fun PdfPreview(file: File, modifier: Modifier = Modifier) {
                             } catch (error: Exception) {
                                 if (error is CancellationException) throw error
                                 host.removeAllViews()
-                                session.notice = "The PDF viewer is unavailable. You can still open it in another app or share it."
+                                session.notice = "The PDF viewer is unavailable. $elsewhere"
                                 session.firstContent.complete(false)
                             }
                         }

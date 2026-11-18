@@ -1,9 +1,9 @@
 package io.github.victorbonnet.enclos
 
 import android.content.Context
-import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Base64
 
 /** A host the device is paired with. */
 data class Host(
@@ -31,57 +31,73 @@ data class Host(
 class Hosts(context: Context) {
     private val prefs = context.getSharedPreferences("hosts", Context.MODE_PRIVATE)
 
-    private fun b64(bytes: ByteArray) = Base64.encodeToString(bytes, Base64.NO_WRAP)
-    private fun unb64(text: String) = Base64.decode(text, Base64.NO_WRAP)
-
     fun all(): List<Host> {
-        val array = JSONArray(prefs.getString("hosts", "[]"))
-        var unwrapped = false
-        val hosts = (0 until array.length()).map { i ->
-            val o = array.getJSONObject(i)
-            Host(
-                name = o.getString("name"),
-                url = o.getString("url"),
-                bridgeKey = unb64(o.getString("bridgeKey")),
-                deviceId = o.getString("deviceId"),
-                noiseKeyWrapped = unb64(o.getString("noiseKey")),
-                keyAlias = o.getString("keyAlias"),
-                // An earlier version kept the push key as it came: wrapped now, and written back.
-                pushKeyWrapped = if (o.has("pushKeyWrapped")) {
-                    unb64(o.getString("pushKeyWrapped"))
-                } else {
-                    unwrapped = true
-                    Keys.wrap(unb64(o.getString("pushKey")))
-                },
-            )
-        }
-        if (unwrapped) save(hosts)
+        val (hosts, migrated) = decodeHosts(prefs.getString("hosts", null) ?: "[]", Keys::wrap)
+        if (migrated) save(hosts)
         return hosts
     }
 
+    /** Keeps [host], in place of the host of the same name if one is paired. */
     fun add(host: Host) {
         save(all().filter { it.name != host.name } + host)
     }
 
     private fun save(hosts: List<Host>) {
-        val array = JSONArray()
-        hosts.forEach { h ->
-            array.put(
-                JSONObject()
-                    .put("name", h.name)
-                    .put("url", h.url)
-                    .put("bridgeKey", b64(h.bridgeKey))
-                    .put("deviceId", h.deviceId)
-                    .put("noiseKey", b64(h.noiseKeyWrapped))
-                    .put("keyAlias", h.keyAlias)
-                    .put("pushKeyWrapped", b64(h.pushKeyWrapped)),
-            )
-        }
         // Written at once: a key must not stay in the clear, or be lost, if the app stops right after.
-        prefs.edit().putString("hosts", array.toString()).commit()
+        prefs.edit().putString("hosts", encodeHosts(hosts)).commit()
     }
 
     fun remove(name: String) {
         save(all().filter { it.name != name })
     }
+}
+
+// Standard base64 with padding and no line breaks, as android.util.Base64's
+// NO_WRAP wrote it in earlier versions.
+private fun b64(bytes: ByteArray): String = Base64.getEncoder().encodeToString(bytes)
+private fun unb64(text: String): ByteArray = Base64.getDecoder().decode(text)
+
+/** [hosts] as the preferences keep them: a JSON array, bytes in base64. */
+fun encodeHosts(hosts: List<Host>): String {
+    val array = JSONArray()
+    hosts.forEach { h ->
+        array.put(
+            JSONObject()
+                .put("name", h.name)
+                .put("url", h.url)
+                .put("bridgeKey", b64(h.bridgeKey))
+                .put("deviceId", h.deviceId)
+                .put("noiseKey", b64(h.noiseKeyWrapped))
+                .put("keyAlias", h.keyAlias)
+                .put("pushKeyWrapped", b64(h.pushKeyWrapped)),
+        )
+    }
+    return array.toString()
+}
+
+/**
+ * The hosts [json] holds, and whether one was migrated and must be written
+ * back: an earlier version kept the push key as it came, which [wrap] wraps now.
+ */
+fun decodeHosts(json: String, wrap: (ByteArray) -> ByteArray): Pair<List<Host>, Boolean> {
+    val array = JSONArray(json)
+    var migrated = false
+    val hosts = (0 until array.length()).map { i ->
+        val o = array.getJSONObject(i)
+        Host(
+            name = o.getString("name"),
+            url = o.getString("url"),
+            bridgeKey = unb64(o.getString("bridgeKey")),
+            deviceId = o.getString("deviceId"),
+            noiseKeyWrapped = unb64(o.getString("noiseKey")),
+            keyAlias = o.getString("keyAlias"),
+            pushKeyWrapped = if (o.has("pushKeyWrapped")) {
+                unb64(o.getString("pushKeyWrapped"))
+            } else {
+                migrated = true
+                wrap(unb64(o.getString("pushKey")))
+            },
+        )
+    }
+    return hosts to migrated
 }

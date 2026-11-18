@@ -6,6 +6,14 @@ import org.json.JSONObject
 private fun JSONObject.routineText(key: String): String? = if (isNull(key)) null else optString(key).takeIf(String::isNotBlank)
 private fun JSONObject.routineStrings(key: String): List<String> = optJSONArray(key)?.let { a -> (0 until a.length()).map(a::getString) }.orEmpty()
 
+/**
+ * Text the runtime wrote for the person to read (a name, label or status), shown without the
+ * characters that would change how it reads ([Visible.stripped]). Identifiers and the definition,
+ * which go back to the runtime, are kept as they came.
+ */
+private fun JSONObject.routineLabel(key: String, lines: Boolean = false): String? = if (isNull(key)) null else Visible.stripped(optString(key), lines).takeIf(String::isNotBlank)
+private fun JSONObject.shownLabel(key: String): String = Visible.stripped(getString(key))
+
 data class RoutineChoice(val id: String, val label: String)
 data class RoutineModelChoice(val id: String, val label: String, val provider: String?)
 fun routineModelKey(provider: String?, model: String): String = "${provider?.length ?: -1}:${provider.orEmpty()}${model.length}:$model"
@@ -33,8 +41,25 @@ data class RoutineOptions(val timezone: String, val features: Set<String>, val s
         return operations?.contains(operation) ?: (operation != "run" || "run" in features)
     }
     companion object {
-        fun from(m: JSONObject): RoutineOptions = RoutineOptions(m.getString("timezone"), m.routineStrings("features").toSet(), choices(m.optJSONArray("skills")), m.optJSONArray("models")?.let { a -> (0 until a.length()).map { a.getJSONObject(it).let { model -> RoutineModelChoice(model.getString("id"), model.getString("label"), model.routineText("provider")) } } }.orEmpty(), choices(m.optJSONArray("toolsets")), if (m.isNull("operations")) null else m.getJSONArray("operations").let { a -> (0 until a.length()).map(a::getString).toSet() })
-        fun choices(a: JSONArray?): List<RoutineChoice> = a?.let { (0 until it.length()).map { i -> it.getJSONObject(i).let { c -> RoutineChoice(c.getString("id"), c.getString("label")) } } }.orEmpty()
+        fun from(m: JSONObject): RoutineOptions = RoutineOptions(
+            timezone = m.getString("timezone"),
+            features = m.routineStrings("features").toSet(),
+            skills = choices(m.optJSONArray("skills")),
+            models = m.optJSONArray("models")?.let { a ->
+                (0 until a.length()).map { a.getJSONObject(it).let { model -> RoutineModelChoice(model.getString("id"), model.shownLabel("label"), model.routineText("provider")) } }
+            }.orEmpty(),
+            toolsets = choices(m.optJSONArray("toolsets")),
+            operations = operations(m),
+        )
+
+        /**
+         * `operations`, missing or null: a runtime that predates it, whose legacy controls stay
+         * (null). A list, even empty: exactly those operations. Anything else is unreadable.
+         */
+        private fun operations(m: JSONObject): Set<String>? =
+            if (m.isNull("operations")) null else m.getJSONArray("operations").let { a -> (0 until a.length()).map(a::getString).toSet() }
+
+        fun choices(a: JSONArray?): List<RoutineChoice> = a?.let { (0 until it.length()).map { i -> it.getJSONObject(i).let { c -> RoutineChoice(c.getString("id"), c.shownLabel("label")) } } }.orEmpty()
     }
 }
 
@@ -56,7 +81,7 @@ data class RoutineSummary(
 ) {
     val title: String get() = name ?: preview.take(80).ifBlank { "Unnamed routine" }
     companion object {
-        fun from(m: JSONObject) = RoutineSummary(m.getString("id"), m.getString("revision"), m.routineText("name"), routineScheduleFrom(m.getJSONObject("schedule")), m.getBoolean("enabled"), m.optString("prompt_preview"), m.optString("delivery_label"), m.optBoolean("editable"), m.routineText("next_run_at"), m.routineText("last_run_at"), m.routineText("last_status"), m.routineText("state"), m.routineText("paused_reason"), m.routineText("last_error"))
+        fun from(m: JSONObject) = RoutineSummary(m.getString("id"), m.getString("revision"), m.routineLabel("name"), routineScheduleFrom(m.getJSONObject("schedule")), m.getBoolean("enabled"), Visible.stripped(m.optString("prompt_preview"), lines = true), Visible.stripped(m.optString("delivery_label")), m.optBoolean("editable"), m.routineText("next_run_at"), m.routineText("last_run_at"), m.routineLabel("last_status"), m.routineLabel("state"), m.routineLabel("paused_reason", lines = true), m.routineLabel("last_error", lines = true))
     }
 }
 
