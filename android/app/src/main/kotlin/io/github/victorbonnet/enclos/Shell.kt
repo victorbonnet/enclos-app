@@ -220,6 +220,7 @@ private fun can(capability: String): String? = when (capability) {
     "titles" -> "names conversations"
     "commands" -> "lists its commands"
     "attachments" -> "sends files"
+    "model" -> "lets its model be chosen"
     else -> null
 }
 
@@ -229,7 +230,7 @@ private fun can(capability: String): String? = when (capability) {
  * connection, what it can do); its commands and shared photo controls.
  */
 @Composable
-fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (String) -> Unit, start: (Agent) -> Unit, openRoutines: () -> Unit) {
+fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (String) -> Unit, start: (Agent) -> Unit, openRoutines: () -> Unit, openModel: () -> Unit = {}) {
     val p = palette
     val agent = model.agents.firstOrNull { it.address == address }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
@@ -287,6 +288,19 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                             Column(Modifier.weight(1f)) {
                                 Text("Routines", style = Type.name, color = p.text)
                                 Text("Scheduled work this agent runs on its host.", style = Type.small, color = p.textMuted)
+                            }
+                            Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+                        }
+                    }
+                }
+            }
+            if ("model" in agent.capabilities && agent.canManageModel) {
+                Section("Model") {
+                    SettingRow(Modifier.clickable(onClickLabel = "Choose its model", onClick = openModel)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text(model.models.options[agent.address]?.current?.label ?: "Model", style = Type.name, color = p.text)
+                                Text("The provider and model it uses for all its conversations.", style = Type.small, color = p.textMuted)
                             }
                             Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
                         }

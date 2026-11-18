@@ -119,6 +119,16 @@ Advanced settings are offered only when supported: skills loaded before the inst
 
 The page supports editing, explicit pause/resume, running now and confirmed deletion. Deletion removes the runtime definition and may remove its saved output; it does not promise to stop an already-running execution. Controls wait for correlated replies and show failures beside the affected flow. Definition revisions prevent an old editor replacing another edit; a conflict requires reloading. Offline controls are disabled with a connection explanation. A timeout or disconnect after dispatch can mean the outcome is unknown: refresh before deciding whether to try again. Mutations are neither queued offline nor automatically resent. Management initially requires the host's person; the bridge enforces this and validates delivery choices, independently of the app.
 
+### An agent's model
+
+**Android built; iOS not started.** An agent whose channel advertises `model`, listed with `can_manage_model` (the host's person only), has a **Model** section on its page, showing the provider and model once read, that opens the agent's **Model** page. The runtime keeps the setting and its catalogue (enclos ADR 0069, proposed; enclos `docs/protocol.md`, An agent's model); the phone keeps nothing across restarts. The choice is the agent's own, for all its conversations; a model a conversation sets with the runtime's `/model` command still wins there.
+
+The page reads the agent's model on opening and on Refresh: **Now:** with the provider and model, then the providers the runtime lists, one per row. A provider the agent cannot use yet (no login or key) is shown disabled, in the faint colour, with what the runtime says to do on the host; it cannot be chosen, and no credential is ever entered on the phone. Choosing a provider loads its models, each row its label with its id under it when they differ, the current one marked; a provider offering more than the runtime lists says so. When the runtime takes ids it does not list, **Another model ID** accepts one. **Save** is enabled only for a usable provider and a model other than the current one, on fresh options, with no request pending.
+
+A runtime that applies a change on the agent's next turn saves at once and says so (`Saved. … answers from the agent's next message.`). One that applies it only once its service restarts says, before saving, that every agent the service serves restarts after the turns running now, and asks to confirm. A change made since the page was read (another phone, or on the host) is refused by the runtime: the page says so and must be refreshed before saving again. Requests are never queued or resent; a timeout or a lost connection after sending leaves the outcome unknown, the options stale, and the page says to refresh before trying again. The page uses the app's rows, sections, check glyph, form field, primary button and shared dialog, in both themes.
+
+iOS will offer the same section, page and rules natively (SwiftUI list rows and a confirmation alert).
+
 ### Agent display names
 
 The agent page offers **Rename** for its shared display name, using the same field and actions as the app's other editors. The host stores this name and supplies it to every connected app that can see the agent ([enclos ADR 0051](https://github.com/victorbonnet/enclos/blob/main/docs/adr/0051-agent-display-names-belong-to-the-bridge.md), proposed). This is shared agent presentation metadata, rather than a private phone preference. Only the host's person on a still-paired device may change it.
@@ -324,6 +334,8 @@ It is off until the person turns it on in Settings, Security, which needs a scre
 Push notifications (the bridge encrypts a preview for the device; the app decrypts it and fetches the message over the tailnet; two actions only, Reply and Mark read), sharing (ADR 0043), landscape, the notification card of the design.
 
 ## To verify
+
+**An agent's model**: `ModelClientTest` covers the requests, correlation, stale options, refusals, timeouts and connection loss on Robolectric's `org.json`. Not checked on a device: the page's rows, disabled providers and their setup text, long model lists, the custom id field, the restart confirmation, both themes and accessibility; nor the full flow against a real Hermes or OpenClaw agent, another phone changing the model meanwhile, and the agent answering from the new model on its next message.
 
 The Android filter control was checked in an isolated preview on a Pixel 11 Pro: all four toggle combinations, the menu staying open after each change, one accessible switch row per option, and active-button emphasis clearing when both are off. Full Inbox data filtering and view-switch restoration remain in the checks below.
 

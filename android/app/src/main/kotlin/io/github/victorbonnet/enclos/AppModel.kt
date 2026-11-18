@@ -23,7 +23,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 /** An agent of a host, as its bridge lists it: `name` is `<sandbox>/<agent>`. */
-data class Agent(val host: String, val name: String, val runtime: String, val capabilities: List<String>, val avatarRevision: Long = 0, val avatarVersion: String? = null, val canEditAvatar: Boolean = false, val supportsAvatars: Boolean = false, val displayName: String? = null, val nameRevision: Long = 0, val canEditName: Boolean = false, val supportsNames: Boolean = false) {
+data class Agent(val host: String, val name: String, val runtime: String, val capabilities: List<String>, val avatarRevision: Long = 0, val avatarVersion: String? = null, val canEditAvatar: Boolean = false, val supportsAvatars: Boolean = false, val displayName: String? = null, val nameRevision: Long = 0, val canEditName: Boolean = false, val supportsNames: Boolean = false, val canManageModel: Boolean = false) {
     val sandbox: String get() = name.substringBefore('/')
     val agent: String get() = name.substringAfter('/')
     /** The shared human name; canonical identifiers never change when it does. */
@@ -196,6 +196,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         send = { host, command -> connections[host]?.send(command) == true },
         connected = ::connected,
         supported = { address -> agents.any { it.address == address && "routines" in it.capabilities } },
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+    )
+    val models = ModelClient(
+        send = { host, command -> connections[host]?.send(command) == true },
+        connected = ::connected,
+        supported = { address -> agents.any { it.address == address && "model" in it.capabilities && it.canManageModel } },
         later = { wait, action -> main.postDelayed({ action() }, wait) },
     )
     val agentImages = AgentImages(application,
@@ -581,6 +587,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun connect(host: Host) {
         agentNames.ended(host.name)
         routines.ended(host.name)
+        models.ended(host.name)
         questions.ended(host.name)
         connections.remove(host.name)?.close()
         // While retrying, why the last attempt ended stays on screen.
@@ -612,6 +619,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections.remove(host.name)
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
         routines.ended(host.name)
+        models.ended(host.name)
         questions.ended(host.name)
         agentNames.ended(host.name)
         agentImages.ended(host.name)
@@ -663,6 +671,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (m.optString("type") in setOf("question", "question.result", "error") && questions.received(host.name, m)) return
         if (m.optString("type") in setOf("agent.name", "error") && agentNames.received(host.name, m)) return
         if (m.optString("type") in setOf("routine.response", "error") && routines.received(host.name, m)) return
+        if (m.optString("type") in setOf("model.response", "error") && models.received(host.name, m)) return
         when (m.optString("type")) {
             "sandbox.policy", "sandbox.policy.preview" -> {
                 val of = m.optString("of")
@@ -728,6 +737,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                             nameRevision = a.optLong("name_revision").coerceAtLeast(0),
                             canEditName = a.optBoolean("can_edit_name"),
                             supportsNames = a.has("can_edit_name"),
+                            canManageModel = a.optBoolean("can_manage_model"),
                         )),
                     )
                 }
@@ -1231,7 +1241,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun clearCache() {
         paired.forEach { questions.forget(it.name) }
         paired.forEach { agentNames.forget(it.name) }
-        paired.forEach { routines.forget(it.name) }
+        paired.forEach { routines.forget(it.name); models.forget(it.name) }
         archiveRequests.clear(); archivePending.clear(); archiveProblems.clear()
         agentImages.clear(paired.map { it.name })
         sandboxPolicies.clear(); policyBusy.clear(); policyFresh.clear(); policyErrors.clear(); policyReviews.clear(); policyRequests.clear()
@@ -1276,6 +1286,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         agentImages.forget(host)
         agentNames.forget(host)
         routines.forget(host)
+        models.forget(host)
         forgetPolicy(host)
         val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
         conversations.removeAll { it.host == host }
