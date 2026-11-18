@@ -5,10 +5,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.ui.*
@@ -66,7 +69,14 @@ fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (St
                         Text(card.reason, style = Type.small, color = palette.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
                         if (model.heldTasks.offersResume(card)) {
                             PrimaryButton("Resume task", enabled = model.heldTasks.canResume(card)) { model.heldTasks.resume(card) }
-                            model.heldTasks.unavailable(card)?.let { Text(it, style = Type.small, color = palette.textMuted) }
+                        }
+                        val unavailable = model.heldTasks.unavailable(card)
+                        unavailable?.let { Text(it, style = Type.small, color = palette.textMuted) }
+                        if (card.state == HeldTaskState.Held && !card.resumable) {
+                            if (card.resume.isNotBlank() && card.resume != unavailable) {
+                                Text(card.resume, style = Type.small, color = palette.textMuted)
+                            }
+                            TaskBoardAction(model, card)
                         }
                         RequestSecondaryButton("View task") {
                             model.focusedRequest = null
@@ -104,6 +114,55 @@ fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (St
             model.reminderDismissals.errors[current.key]?.let { Text(it, style = Type.small, color = palette.textMuted) }
         }
     }
+}
+
+@Composable
+private fun TaskBoardAction(model: AppModel, card: HeldTask) {
+    val context = LocalContext.current
+    val link = model.taskBoardLink(card)
+    var editing by rememberSaveable(card.host, card.agent) { mutableStateOf(false) }
+    PrimaryButton("Open task board") {
+        if (link == null) editing = true else openWebLink(context, link)
+    }
+    if (link != null) TextLink("Edit task board link") { editing = true }
+    if (!editing) return
+
+    var draft by rememberSaveable(card.host, card.agent, link) { mutableStateOf(link.orEmpty()) }
+    val destination = taskBoardDestination(draft)
+    val p = palette
+    AlertDialog(
+        onDismissRequest = { editing = false },
+        containerColor = p.surface,
+        shape = Shapes.bubble,
+        title = { Text("Task board link", style = Type.heading, color = p.text) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FormField(draft, { draft = it }, label = "HTTPS address", placeholder = "https://")
+                Text("Enter the board address for ${model.agentLabel("${card.host}/${card.agent}")} on ${card.host}.", style = Type.small, color = p.textMuted)
+                if (draft.isNotBlank() && destination == null) {
+                    Text("Enter a valid HTTPS address without a username or password.", style = Type.small, color = p.textMuted)
+                }
+            }
+        },
+        confirmButton = {
+            ActionButton("Save and open", enabled = destination != null) {
+                destination?.let {
+                    model.setTaskBoardLink(card, it)
+                    editing = false
+                    openWebLink(context, it.address)
+                }
+            }
+        },
+        dismissButton = {
+            Row {
+                if (link != null) ActionButton("Remove link") {
+                    model.setTaskBoardLink(card, null)
+                    editing = false
+                }
+                ActionButton("Cancel") { editing = false }
+            }
+        },
+    )
 }
 
 @Composable

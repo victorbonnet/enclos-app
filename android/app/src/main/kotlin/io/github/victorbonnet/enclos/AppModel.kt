@@ -533,6 +533,22 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val pairLinkError = mutableStateOf<String?>(null)
 
     private val settings = application.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    private val taskBoardLinks = mutableStateMapOf<String, String>().apply {
+        settings.all.forEach { (key, value) ->
+            if (key.startsWith("task-board/") && value is String) put(key, value)
+        }
+    }
+
+    /** The board link the person entered for this agent on this paired host. */
+    fun taskBoardLink(card: HeldTask): String? = taskBoardLinks["task-board/${card.host}/${card.agent}"]
+
+    fun setTaskBoardLink(card: HeldTask, destination: LinkDestination?) {
+        val key = "task-board/${card.host}/${card.agent}"
+        val address = destination?.address
+        if (address == null) taskBoardLinks.remove(key) else taskBoardLinks[key] = address
+        settings.edit { if (address == null) remove(key) else putString(key, address) }
+    }
+
     /** Light or dark: the system's until the person chooses, then theirs, kept on this device. */
     val theme = mutableStateOf(ThemeChoice.read(settings.getString("theme", null)))
 
@@ -2103,6 +2119,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
         provisioningEnded(host)
+        val boardLinks = taskBoardLinks.keys.filter { it.startsWith("task-board/$host/") }
+        settings.edit { boardLinks.forEach { remove(it) } }
+        boardLinks.forEach { taskBoardLinks.remove(it) }
         unreadable.remove(host)
         sandboxes.remove(host)
         provisioning.keys.filter { it == host || it.startsWith("$host/") }.forEach { provisioning.remove(it) }

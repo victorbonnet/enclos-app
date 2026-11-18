@@ -71,6 +71,10 @@ object WebLinks {
 /** A web link's host (ASCII) and full address (ASCII), as the confirmation shows them. */
 data class LinkDestination(val host: String, val address: String)
 
+/** A task board address entered by the person, opened by the browser over HTTPS. */
+fun taskBoardDestination(text: String): LinkDestination? =
+    WebLinks.destination(text.trim())?.takeIf { it.address.startsWith("https://") }
+
 /** What a tap on a message's web link does: open it, ask first, or refuse it. */
 sealed interface MessageLink {
     data class Open(val address: String) : MessageLink

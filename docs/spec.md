@@ -379,6 +379,8 @@ The optional `resumable` field is a strict JSON boolean: absent means true for o
 
 A false card opens with "Held task" and shows the runtime's instruction plainly, without a Resume prefix or action; when blank it says "This task cannot be resumed from the app." Its metadata, error and real state remain. The local error disclosure wraps and has a minimum 48dp touch target.
 
+**Task board from Needs you.** A held task's request sheet explains why Resume is unavailable. For a held task the runtime cannot resume through the app, the sheet shows the runtime's instruction and offers **Open task board**. The first tap asks for the board's HTTPS address. **Save and open** opens it in the browser, where the dashboard handles sign-in. The phone keeps the address for that agent on that paired host across launches. **Edit task board link** changes or removes it. Forgetting or replacing the pairing removes its links. The app uses the address the person enters and treats the runtime's instruction as plain text. Android implements the board link.
+
 **Resume.** It is the one action, and only while the card is held and resumable. It is enabled when the host is connected, its sync since the connection opened has ended, and no resume of this card is waiting for its answer; otherwise the card says why. A tap sends `held_task.resume` with the card's agent, task and bridge revision, under a fresh request id, and nothing else; there is no confirmation, as resuming widens no access: the work runs again under the sandbox's existing policy. A card that changed since it was drawn is not resumed. The answer is matched by that id: `held_task.result` shows the card resumed from this phone. An `error` for it shows on the card:
 
 | Code | The card says | Resume |

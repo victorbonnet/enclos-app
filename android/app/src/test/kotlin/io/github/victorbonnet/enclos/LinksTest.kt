@@ -51,6 +51,17 @@ class LinksTest {
     }
 
     @Test
+    fun a_task_board_link_keeps_the_dashboard_port_and_board_path_over_https() {
+        assertEquals(
+            "https://host.tail.example:8443/kanban?board=reviews",
+            taskBoardDestination("  HTTPS://host.tail.example:8443/kanban?board=reviews\n")?.address,
+        )
+        listOf("http://host.tail.example/kanban", "https://user:pass@host.tail.example/kanban", "intent://board", "").forEach {
+            assertNull(it, taskBoardDestination(it))
+        }
+    }
+
+    @Test
     fun pages_can_open_only_a_deliberate_main_frame_web_navigation() {
         val url = "https://enclos.dev"
         val document = ArtefactDocument(byteArrayOf()).url
