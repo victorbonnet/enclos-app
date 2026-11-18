@@ -58,6 +58,9 @@ fun RuntimeApprovalCard(client: QuestionClient, question: QuestionInfo) {
         if (approval.outsideAscii) Text(OUTSIDE_ASCII_NOTICE, style = Type.small, color = p.text)
         SelectionContainer { Text(Visible.revealed(approval.reason), style = Type.body, color = p.text) }
         runtimeApprovalScopeNotes(approval).forEach { Text(it, style = Type.small, color = p.textMuted) }
+        approval.scopes?.let { scopes ->
+            SelectionContainer { Text(scopes.shownDescription, style = Type.small, color = p.textMuted) }
+        }
         if (!terminal && approval.smartDenied) {
             Text(if (approval.actions == listOf(RuntimeApprovalAction.Deny)) "Only Deny is available for this request." else "Only Allow once or Deny is available for this request.", style = Type.small, color = p.textMuted)
         }
@@ -81,6 +84,9 @@ fun RuntimeApprovalCard(client: QuestionClient, question: QuestionInfo) {
             }
         } else {
             unavailable?.let { Text(it, style = Type.small, color = p.textMuted) }
+            nativeAnswerNote(question, unavailable, question.key in client.pending)?.let {
+                SelectionContainer { Text(it, style = Type.small, color = p.textMuted) }
+            }
         }
         client.errors[question.key]?.let { Text(it, style = Type.small, color = p.textMuted) }
     }
@@ -126,9 +132,15 @@ internal fun commandLengthNote(approval: RuntimeApprovalDefinition, startSeen: B
     }
 }
 
+internal const val SCOPES_FRAME = "The runtime describes these grants as follows:"
+
 /** What each offered scope allows, naming the runtime's patterns a session or always grant covers. */
 internal fun runtimeApprovalScopeNotes(approval: RuntimeApprovalDefinition): List<String> = buildList {
     if (RuntimeApprovalAction.Once in approval.actions) add("Allow once applies only to this command request.")
+    if (approval.scopes != null) {
+        add(SCOPES_FRAME)
+        return@buildList
+    }
     if (approval.grantsPatterns) {
         add("A session or always grant covers every command matching: ${approval.patterns.joinToString("; ")}. Not only this one.")
     }
@@ -140,16 +152,27 @@ internal fun runtimeApprovalScopeNotes(approval: RuntimeApprovalDefinition): Lis
  * The confirmation a grant beyond this one command asks for (Session and Always): how far it
  * reaches, and for Always where it is revoked. None for Once and Deny, which are one tap.
  */
-internal fun grantConfirmation(approval: RuntimeApprovalDefinition, action: RuntimeApprovalAction): String? = when (action) {
-    RuntimeApprovalAction.Session ->
-        "Every later command matching ${approval.patterns.joinToString("; ")} will run without asking, until this runtime session ends."
-    RuntimeApprovalAction.Always -> alwaysConfirmation(approval)
-    RuntimeApprovalAction.Once, RuntimeApprovalAction.Deny -> null
+internal fun grantConfirmation(approval: RuntimeApprovalDefinition, action: RuntimeApprovalAction): String? {
+    if (action == RuntimeApprovalAction.Once || action == RuntimeApprovalAction.Deny) return null
+    approval.scopes?.let { return "${action.label} grants more than this command. $SCOPES_FRAME ${it.shownDescription}" }
+    return if (action == RuntimeApprovalAction.Always) alwaysConfirmation(approval)
+    else "Every later command matching ${approval.patterns.joinToString("; ")} will run without asking, until this runtime session ends."
 }
 
 /** The confirmation an Always allow asks for: how far the grant reaches, and where it is revoked. */
 internal fun alwaysConfirmation(approval: RuntimeApprovalDefinition): String =
     "Every later command matching ${approval.patterns.joinToString("; ")} will run without asking, in every conversation using this runtime profile. $REVOKE_ALWAYS"
+
+/**
+ * Where the card cannot be answered (offline, before sync, an unconfirmed outcome), the
+ * runtime's own instructions for answering it there, marked as the runtime's. None while a
+ * decision of this device's awaits its receipt, or for a legacy request, which has none.
+ */
+internal fun nativeAnswerNote(question: QuestionInfo, unavailable: String?, pending: Boolean): String? {
+    val fallback = question.approval?.scopes?.fallback ?: return null
+    if (question.state != QuestionState.Pending || unavailable == null || pending) return null
+    return "The runtime says it can also be answered there: ${Visible.revealed(fallback)}"
+}
 
 internal fun runtimeApprovalStatus(question: QuestionInfo): String? = when (question.state) {
     QuestionState.Pending -> null

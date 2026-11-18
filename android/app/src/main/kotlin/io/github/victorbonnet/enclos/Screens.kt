@@ -1747,14 +1747,7 @@ private fun MentionSuggestions(offered: List<String>, photoOf: (String) -> Photo
 @Composable
 private fun GroupStrip(status: GroupStatus, turnOf: String?, onStop: () -> Unit) {
     val p = palette
-    val text = when (status.state) {
-        "working" -> if (turnOf != null) "$turnOf is answering · round ${status.round + 1} of ${status.maxRounds}" else "Working"
-        "settled" -> "Settled"
-        "bounded" -> if (status.reason == "max_replies") "Paused: reply limit reached" else "Paused after ${status.maxRounds} rounds"
-        "stopped" -> "Stopped"
-        "failed" -> "Failed" + (status.reason?.let { ": $it" } ?: "")
-        else -> return
-    }
+    val text = status.label(turnOf) ?: return
     Column(Modifier.fillMaxWidth()) {
         Hairline()
         Row(
@@ -1767,7 +1760,7 @@ private fun GroupStrip(status: GroupStatus, turnOf: String?, onStop: () -> Unit)
                 text,
                 style = Type.small,
                 color = if (status.state == "working") p.accent else p.textMuted,
-                maxLines = 1,
+                maxLines = if (status.state == "stopped") Int.MAX_VALUE else 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
