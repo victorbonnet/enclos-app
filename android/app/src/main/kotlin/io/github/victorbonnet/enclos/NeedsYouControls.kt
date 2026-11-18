@@ -69,13 +69,10 @@ fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (St
                         Text(card.reason, style = Type.small, color = palette.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
                         if (model.heldTasks.offersResume(card)) {
                             PrimaryButton("Resume task", enabled = model.heldTasks.canResume(card)) { model.heldTasks.resume(card) }
-                        }
-                        val unavailable = model.heldTasks.unavailable(card)
-                        unavailable?.let { Text(it, style = Type.small, color = palette.textMuted) }
-                        if (card.state == HeldTaskState.Held && !card.resumable) {
-                            if (card.resume.isNotBlank() && card.resume != unavailable) {
-                                Text(card.resume, style = Type.small, color = palette.textMuted)
-                            }
+                            model.heldTasks.unavailable(card)?.let { Text(it, style = Type.small, color = palette.textMuted) }
+                        } else if (card.state == HeldTaskState.Held && !card.resumable) {
+                            val instruction = card.resume.ifBlank { "This task cannot be resumed from the app." }
+                            Text(instruction, style = Type.small, color = palette.textMuted)
                             TaskBoardAction(model, card)
                         }
                         RequestSecondaryButton("View task") {
@@ -118,16 +115,21 @@ fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (St
 
 @Composable
 private fun TaskBoardAction(model: AppModel, card: HeldTask) {
+    val agent = AgentKey(card.host, card.agent)
+    if (model.forgetting.isRemoved(agent) || agent in model.forgetting.forgotten) return
     val context = LocalContext.current
-    val link = model.taskBoardLink(card)
+    val link = model.taskBoardLinks[agent]
     var editing by rememberSaveable(card.host, card.agent) { mutableStateOf(false) }
     PrimaryButton("Open task board") {
-        if (link == null) editing = true else openWebLink(context, link)
+        if (link == null) editing = true else openWebLink(context, link.address)
     }
-    if (link != null) TextLink("Edit task board link") { editing = true }
+    if (link != null) {
+        Text("Opens ${link.host}", style = Type.small, color = palette.textMuted)
+        TextLink("Edit task board link") { editing = true }
+    }
     if (!editing) return
 
-    var draft by rememberSaveable(card.host, card.agent, link) { mutableStateOf(link.orEmpty()) }
+    var draft by rememberSaveable(card.host, card.agent, link?.address) { mutableStateOf(link?.address.orEmpty()) }
     val destination = taskBoardDestination(draft)
     val p = palette
     AlertDialog(
@@ -142,12 +144,13 @@ private fun TaskBoardAction(model: AppModel, card: HeldTask) {
                 if (draft.isNotBlank() && destination == null) {
                     Text("Enter a valid HTTPS address without a username or password.", style = Type.small, color = p.textMuted)
                 }
+                destination?.let { Text("Opens ${it.host}", style = Type.small, color = p.textMuted) }
             }
         },
         confirmButton = {
             ActionButton("Save and open", enabled = destination != null) {
                 destination?.let {
-                    model.setTaskBoardLink(card, it)
+                    model.taskBoardLinks.set(agent, it)
                     editing = false
                     openWebLink(context, it.address)
                 }
@@ -156,7 +159,7 @@ private fun TaskBoardAction(model: AppModel, card: HeldTask) {
         dismissButton = {
             Row {
                 if (link != null) ActionButton("Remove link") {
-                    model.setTaskBoardLink(card, null)
+                    model.taskBoardLinks.forget(agent)
                     editing = false
                 }
                 ActionButton("Cancel") { editing = false }
