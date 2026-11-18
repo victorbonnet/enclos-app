@@ -196,9 +196,13 @@ object Markdown {
     }
 }
 
-/** A message's markdown, as blocks: paragraphs, headings, lists, quotes, code and tables. */
+/**
+ * An agent's markdown, as blocks: paragraphs, headings, lists, quotes, code
+ * and tables. A message's, or a task's body or comment; [place] names where
+ * a link is left from when the person is asked to confirm it.
+ */
 @Composable
-fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier) {
+fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier, place: String = "this conversation") {
     val document = remember(text) { Markdown.parse(text) }
     val context = LocalContext.current
     // A web link waiting for the person to confirm it, as a page's link does.
@@ -219,7 +223,7 @@ fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier) {
         }
     }
     leaving?.let { destination ->
-        WebsiteConfirmation(destination, "this conversation", dismiss = { leaving = null }) {
+        WebsiteConfirmation(destination, place, dismiss = { leaving = null }) {
             leaving = null
             openWebLink(context, destination.address)
         }
