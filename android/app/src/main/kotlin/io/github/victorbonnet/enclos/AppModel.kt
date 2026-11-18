@@ -391,6 +391,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         resync = { host -> connections[host]?.send(message("sync", "since" to since(host), "open_items" to true)) == true },
         dropped = { why -> android.util.Log.d("enclos", "held task not shown: $why") },
     )
+    internal val taskBoard = TaskBoardClient(
+        send = { host, command -> connections[host]?.send(command) == true },
+        current = ::currentTaskBoard,
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+    )
     val deletion = ConversationDeletion(
         connected = ::connected,
         send = { host, command -> connections[host]?.send(command) == true },
@@ -768,6 +773,21 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun offersHeldTaskDetails(card: HeldTask): Boolean = connected(card.host) && hostSupports(card.host, "held_task.get") &&
         agents.any { it.host == card.host && it.name == card.agent && "held_task_details" in it.capabilities }
 
+    internal fun openHeldTaskBoard(card: HeldTask, launch: (String) -> Unit) {
+        val host = paired.firstOrNull { it.name == card.host } ?: return
+        taskBoard.open(card, host.url, launch)
+    }
+
+    private fun currentTaskBoard(card: HeldTask): Boolean {
+        val item = focusedRequest ?: return false
+        val agent = AgentKey(card.host, card.agent)
+        return foreground && connected(card.host) && hostSupports(card.host, HELD_TASK_BOARD) &&
+            item.kind == "held_task" && item.host == card.host && item.agent == card.agent && item.id == card.task &&
+            card.state == HeldTaskState.Held && !card.resumable && heldTasks.cards[card.key] == card &&
+            attentionItems.any { it.key == item.key } &&
+            !forgetting.isRemoved(agent) && agent !in forgetting.forgotten
+    }
+
     fun offersTaskDetails(address: String) = agents.any { it.address == address && "task_details" in it.capabilities }
 
     /** The task the agent at [address] (`host/sandbox/agent`) is working on, as its activity names it, when the phone keeps that task. */
@@ -1032,6 +1052,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         needsYou.ended(host.name)
         reminderDismissals.ended(host.name)
         heldTasks.ended(host.name)
+        taskBoard.ended(host.name)
         // What the agents were doing comes again after `agents.list`; a sync the old connection began drops nothing.
         activities.ended(host.name)
         tasks.ended(host.name)
@@ -1093,6 +1114,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         needsYou.ended(host.name)
         reminderDismissals.ended(host.name)
         heldTasks.ended(host.name)
+        taskBoard.ended(host.name)
         agentNames.ended(host.name)
         agentImages.ended(host.name)
         approvalsFresh[host.name] = false
@@ -1143,6 +1165,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     fun background() {
         foreground = false
+        taskBoard.clear()
         if (PushTokens.current(getApplication()) == null) return
         connections.values.toList().forEach { it.close() }
     }
@@ -1152,6 +1175,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun received(host: Host, m: JSONObject) {
+        if (taskBoard.received(host.name, m)) return
         if (provisioningClient.received(host.name, m)) return
         if (deletion.received(host.name, m)) return
         if (forgetting.received(host.name, m)) return
@@ -2060,6 +2084,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     fun clearCache() {
         audit.clear()
+        taskBoard.clear()
         // Every host syncs again from the start: what was skipped comes again.
         unreadable.clear()
         paired.forEach { deletion.ended(it.name) }
@@ -2121,6 +2146,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
         provisioningEnded(host)
+        taskBoard.ended(host)
         taskBoardLinks.forget(host)
         unreadable.remove(host)
         sandboxes.remove(host)

@@ -23,6 +23,7 @@ conversation.deleted
 error
 group.state
 held_task
+held_task.board.link
 held_task.result
 message
 operation.progress

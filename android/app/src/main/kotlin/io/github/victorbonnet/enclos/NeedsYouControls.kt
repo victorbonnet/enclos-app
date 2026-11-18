@@ -117,19 +117,39 @@ fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (St
 private fun TaskBoardAction(model: AppModel, card: HeldTask) {
     val agent = AgentKey(card.host, card.agent)
     if (model.forgetting.isRemoved(agent) || agent in model.forgetting.forgotten) return
+    val connected = model.connected(card.host)
+    if (connected && !model.hostSupports(card.host, HELD_TASK_BOARD)) {
+        val saved = model.taskBoardLinks[agent]
+        if (saved == null) {
+            Text("Update enclos on ${card.host} to open the task board here.", style = Type.small, color = palette.textMuted)
+        } else {
+            SavedTaskBoardAction(model, card, agent, saved)
+        }
+        return
+    }
     val context = LocalContext.current
-    val link = model.taskBoardLinks[agent]
+    val opening = model.taskBoard.isOpening(card.key)
+    DisposableEffect(card.key, card.revision) {
+        onDispose { model.taskBoard.cancel(card.key) }
+    }
+    PrimaryButton(if (opening) "Opening task board…" else "Open task board", enabled = connected && !opening) {
+        model.openHeldTaskBoard(card) { url -> openWebLink(context, url) }
+    }
+    model.taskBoard.error(card.key)?.let { Text(it, style = Type.small, color = palette.textMuted) }
+    if (!connected) Text("Connect to ${card.host} to open the task board.", style = Type.small, color = palette.textMuted)
+}
+
+/** Older bridges can still open a dashboard address the person previously saved. */
+@Composable
+private fun SavedTaskBoardAction(model: AppModel, card: HeldTask, agent: AgentKey, link: LinkDestination) {
+    val context = LocalContext.current
     var editing by rememberSaveable(card.host, card.agent) { mutableStateOf(false) }
-    PrimaryButton("Open task board") {
-        if (link == null) editing = true else openWebLink(context, link.address)
-    }
-    if (link != null) {
-        Text("Opens ${link.host}", style = Type.small, color = palette.textMuted)
-        TextLink("Edit task board link") { editing = true }
-    }
+    PrimaryButton("Open task board") { openWebLink(context, link.address) }
+    Text("Opens ${link.host}", style = Type.small, color = palette.textMuted)
+    TextLink("Edit task board link") { editing = true }
     if (!editing) return
 
-    var draft by rememberSaveable(card.host, card.agent, link?.address) { mutableStateOf(link?.address.orEmpty()) }
+    var draft by rememberSaveable(card.host, card.agent, link.address) { mutableStateOf(link.address) }
     val destination = taskBoardDestination(draft)
     val p = palette
     AlertDialog(
@@ -158,7 +178,7 @@ private fun TaskBoardAction(model: AppModel, card: HeldTask) {
         },
         dismissButton = {
             Row {
-                if (link != null) ActionButton("Remove link") {
+                ActionButton("Remove link") {
                     model.taskBoardLinks.forget(agent)
                     editing = false
                 }
