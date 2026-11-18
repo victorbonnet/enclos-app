@@ -300,7 +300,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Column(Modifier.weight(1f)) {
                                 Text(model.models.options[agent.address]?.current?.label ?: "Model", style = Type.name, color = p.text)
-                                Text("The provider and model it uses for all its conversations.", style = Type.small, color = p.textMuted)
+                                Text("The model provider and model it uses for all its conversations.", style = Type.small, color = p.textMuted)
                             }
                             Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
                         }
@@ -311,7 +311,8 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 Info("Runtime", agent.runtime.replaceFirstChar { it.uppercase() })
                 Info("Sandbox", agent.sandbox)
                 Info("Host", "${agent.host} · ${if (model.connected(agent.host)) "connected" else model.status[agent.host] ?: "not connected"}")
-                val does = agent.capabilities.mapNotNull(::can)
+                // Choosing the model is the host's person's alone.
+                val does = agent.capabilities.filter { it != "model" || agent.canManageModel }.mapNotNull(::can)
                 Info("Can", if (does.isEmpty()) "known once its host reaches it" else does.joinToString(", "))
             }
             if (commands.isNotEmpty()) {

@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 /** A model provider and one of its models; the provider is absent when the runtime names only a model. */
 data class ModelSelection(val provider: String?, val model: String) {
-    val label: String get() = provider?.let { "$it / $model" } ?: model
+    val label: String get() = provider?.let { "$model ($it)" } ?: model
     companion object {
         fun from(o: JSONObject?): ModelSelection? = o?.let {
             ModelSelection(it.optString("provider").takeUnless { _ -> it.isNull("provider") || it.optString("provider").isBlank() }, it.getString("model"))
@@ -86,7 +86,7 @@ class ModelClient(
         later(75_000) {
             if (requests[request.id] == request) {
                 finish(request)
-                stale(address)
+                if (action != "models") stale(address)
                 errors[address] = if (action == "set") "The host has not confirmed the change. Refresh and check the agent's model before trying again. The request was not resent."
                 else "The host did not reply. Refresh to try again."
             }
@@ -100,9 +100,11 @@ class ModelClient(
         return request.id
     }
 
+    /** Reads the options again, and drops the model lists read before them. */
     fun refresh(address: String): String? {
         if (address in pending) return null
         stale(address)
+        models.keys.filter { it.startsWith("$address\n") }.forEach { models.remove(it) }
         return request(address, "options")
     }
 
@@ -117,6 +119,7 @@ class ModelClient(
         return request(address, "set", "provider" to provider, "model" to model.trim(), "revision" to current.revision)
     }
 
+    /** Marks the options out of date: Save waits for a refresh. */
     private fun stale(address: String) { options[address]?.let { options[address] = it.copy(fresh = false) } }
     private fun finish(request: ModelRequest) { requests.remove(request.id); if (pending[request.address] == request) pending.remove(request.address) }
 
@@ -126,7 +129,8 @@ class ModelClient(
         if (request.address.substringBefore('/') != host) return false
         if (m.optString("type") == "error") {
             finish(request)
-            stale(request.address)
+            // A model list that failed changed nothing: the options stay.
+            if (request.action != "models") stale(request.address)
             errors[request.address] = m.optString("message").ifBlank { "The host could not complete the request. Refresh to check the agent's model." }
             return true
         }
@@ -138,7 +142,7 @@ class ModelClient(
             when (expected) {
                 "options" -> options[address] = ModelOptions.from(m)
                 "models" -> {
-                    require(m.getString("provider") == request.provider) { "The host replied for another provider." }
+                    require(m.getString("provider") == request.provider) { "The host replied for another model provider." }
                     val a = m.getJSONArray("models")
                     val listed = (0 until a.length()).map { i -> a.getJSONObject(i).let { ModelChoice(it.getString("id"), it.optString("label").ifBlank { it.getString("id") }) } }
                     models[modelsKey(address, request.provider!!)] = ProviderModels(request.provider, listed, m.optBoolean("limited"))
@@ -154,7 +158,7 @@ class ModelClient(
             errors.remove(address)
         } catch (_: Exception) {
             finish(request)
-            stale(address)
+            if (request.action != "models") stale(address)
             errors[address] = "The host's reply could not be read. Refresh to check the outcome before trying again."
         }
         return true

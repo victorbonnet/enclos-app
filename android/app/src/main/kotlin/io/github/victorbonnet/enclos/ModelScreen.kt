@@ -23,6 +23,7 @@ fun ModelScreen(model: AppModel, address: String, back: () -> Unit) {
     val client = model.models
     val p = palette
     val live = client.available(address)
+    val hostConnected = model.connected(address.substringBefore('/'))
     val options = client.options[address]
     val busy = address in client.pending
     var provider by rememberSaveable(address) { mutableStateOf<String?>(null) }
@@ -30,11 +31,21 @@ fun ModelScreen(model: AppModel, address: String, back: () -> Unit) {
     var typed by rememberSaveable(address) { mutableStateOf("") }
     var confirming by remember { mutableStateOf(false) }
     LaunchedEffect(address, live) { if (live) client.refresh(address) }
-    // Start from the agent's model once it is known.
-    LaunchedEffect(options?.current) { if (provider == null) provider = options?.current?.provider }
-    LaunchedEffect(address, provider, options?.revision) {
+    // Start from the agent's model once it is known, if the runtime lists
+    // its model provider.
+    LaunchedEffect(options?.current, options?.providers) {
+        if (provider == null) provider = options?.current?.provider?.takeIf { current -> options.providers.any { it.id == current } }
+    }
+    // A save changes the revision: what was picked or typed is the model now.
+    LaunchedEffect(options?.revision) { chosen = null; typed = "" }
+    // The picked model provider's models, loaded again once nothing else is
+    // pending or the host is back, and after a refresh dropped them; after
+    // a failure, only when the person asks (the row below, or Refresh), so
+    // that a lasting one does not loop.
+    val failed = client.errors[address] != null
+    LaunchedEffect(address, provider, options?.revision, busy, live, failed) {
         val picked = provider ?: return@LaunchedEffect
-        if (options?.providers?.any { it.id == picked } == true && client.models[client.modelsKey(address, picked)] == null) client.load(address, picked)
+        if (live && !busy && !failed && options?.providers?.any { it.id == picked } == true && client.models[client.modelsKey(address, picked)] == null) client.load(address, picked)
     }
     val target = (typed.trim().takeIf { it.isNotEmpty() } ?: chosen)
     val canSave = provider != null && target != null && client.canSet(address) &&
@@ -51,13 +62,17 @@ fun ModelScreen(model: AppModel, address: String, back: () -> Unit) {
             Text(address, style = Type.code, color = p.textFaint, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
             Text("The model this agent uses for all its conversations, as its runtime on the host keeps it.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp))
             options?.current?.let { Text("Now: ${it.label}", style = Type.label, color = p.text, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
-            if (!live) Text("Connect to this agent's host to read or change its model.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
+            if (!hostConnected) Text("Connect to this agent's host to read or change its model.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
+            else if (!live) Text("This agent's runtime does not offer its model right now. Its channel may be reconnecting.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
             else if (options != null && !options.fresh && !busy) Text("This is out of date. Refresh before changing the model.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
             if (busy) Text(when (client.pending[address]?.action) { "set" -> "Saving…"; "models" -> "Loading models…"; else -> "Loading…" }, style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
             client.errors[address]?.let { Text(it, style = Type.small, color = p.text, modifier = Modifier.padding(16.dp)) }
             client.notices[address]?.let { Text(it, style = Type.small, color = p.accent, modifier = Modifier.padding(16.dp)) }
+            options?.current?.provider?.takeIf { current -> options.providers.none { it.id == current } }?.let { current ->
+                Text("Its model provider, $current, is not among those the runtime lists. Choose one below.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            }
             if (options != null) {
-                Section("Provider") {
+                Section("Model provider") {
                     options.providers.forEach { row ->
                         val selected = row.id == provider
                         SettingRow(Modifier.clickable(enabled = row.usable, onClickLabel = "Choose ${row.label}") { if (!selected) { provider = row.id; chosen = null; typed = "" } }) {
@@ -87,8 +102,11 @@ fun ModelScreen(model: AppModel, address: String, back: () -> Unit) {
                                 }
                             }
                         }
-                        if (listed != null && listed.models.isEmpty()) SettingRow { Text("The runtime lists no model for this provider.", style = Type.small, color = p.textMuted) }
-                        if (listed?.limited == true) SettingRow { Text("This provider offers more models than are listed.", style = Type.small, color = p.textMuted) }
+                        if (listed == null && !busy) SettingRow(Modifier.clickable(enabled = live, onClickLabel = "Load its models") { client.load(address, picked) }) {
+                            Text(if (live) "Its models could not be loaded. Tap to try again." else "Its models load once the host is connected.", style = Type.small, color = p.textMuted)
+                        }
+                        if (listed != null && listed.models.isEmpty()) SettingRow { Text("The runtime lists no model for this model provider.", style = Type.small, color = p.textMuted) }
+                        if (listed?.limited == true) SettingRow { Text("This model provider offers more models than are listed.", style = Type.small, color = p.textMuted) }
                         if (options.customModels) {
                             FormField(typed, { typed = it }, enabled = live, label = "Another model ID", singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
                         }

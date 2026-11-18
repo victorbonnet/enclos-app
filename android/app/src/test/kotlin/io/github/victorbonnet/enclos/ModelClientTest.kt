@@ -136,6 +136,25 @@ class ModelClientTest {
         assertTrue(f.sent.isEmpty())
     }
 
+    @Test fun a_refresh_drops_the_model_lists_read_before() {
+        val f = Fixture(); ready(f)
+        val id = f.client.load(address, "provider-a")!!
+        f.client.received("mac", JSONObject().put("type", "model.response").put("agent", "lab/main").put("of", id).put("result", "models")
+            .put("provider", "provider-a").put("models", JSONArray().put(JSONObject().put("id", "model-2").put("label", "Model Two"))))
+        assertNotNull(f.client.models[f.client.modelsKey(address, "provider-a")])
+        f.client.refresh(address)!!
+        assertNull(f.client.models[f.client.modelsKey(address, "provider-a")])
+    }
+
+    @Test fun a_model_list_that_fails_leaves_the_options_fresh() {
+        val f = Fixture(); ready(f)
+        val id = f.client.load(address, "provider-a")!!
+        f.client.received("mac", JSONObject().put("type", "error").put("of", id).put("code", "agent_unavailable").put("message", "Hermes could not read its model inventory."))
+        assertTrue("Save stays available", f.client.options[address]!!.fresh)
+        assertEquals("Hermes could not read its model inventory.", f.client.errors[address])
+        assertNotNull(f.client.set(address, "provider-a", "model-2"))
+    }
+
     @Test fun a_runtime_that_restarts_says_so() {
         val f = Fixture()
         val id = f.client.refresh(address)!!
