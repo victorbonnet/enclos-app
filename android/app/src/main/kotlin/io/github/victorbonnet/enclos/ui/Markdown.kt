@@ -65,6 +65,7 @@ import org.commonmark.node.HtmlInline
 import org.commonmark.node.Image
 import org.commonmark.node.IndentedCodeBlock
 import org.commonmark.node.Link
+import org.commonmark.node.ListBlock
 import org.commonmark.node.ListItem
 import org.commonmark.node.Node
 import org.commonmark.node.OrderedList
@@ -74,6 +75,7 @@ import org.commonmark.node.StrongEmphasis
 import org.commonmark.node.ThematicBreak
 import org.commonmark.parser.Parser
 import java.net.URI
+import org.commonmark.node.Block as BlockNode
 import org.commonmark.node.Text as TextNode
 
 /**
@@ -103,6 +105,44 @@ object Markdown {
     private val parser = Parser.builder().extensions(extensions).build()
 
     fun parse(text: String): Node = parser.parse(text)
+
+    /**
+     * How deep quotes and lists are drawn inside one another; deeper, a
+     * block's words are drawn plain ([flatWords]). Each level is a few
+     * layouts deep (a quote's is an intrinsic-height row), and an agent's
+     * text can nest a hundred, where the parser stops (`>>>>…`).
+     */
+    const val MOST_DEPTH = 8
+
+    /**
+     * The words under [root] without the marks, on one line, read without
+     * recursion however deep it nests: what a block past [MOST_DEPTH] shows.
+     */
+    fun flatWords(root: Node): String {
+        val out = StringBuilder()
+        var node: Node? = root.firstChild
+        while (node != null) {
+            when (node) {
+                is TextNode -> out.append(node.literal)
+                is Code -> out.append(node.literal)
+                is HtmlInline -> out.append(node.literal)
+                is FencedCodeBlock -> out.append(' ').append(node.literal)
+                is IndentedCodeBlock -> out.append(' ').append(node.literal)
+                is HtmlBlock -> out.append(' ').append(node.literal)
+                // Blocks, cells and line breaks part words.
+                is SoftLineBreak, is HardLineBreak, is TableCell, is BlockNode -> out.append(' ')
+            }
+            // Its first child, else the next node after it within [root].
+            var next: Node? = node.firstChild
+            var at: Node = node
+            while (next == null && at !== root) {
+                next = at.next
+                at = at.parent ?: break
+            }
+            node = next
+        }
+        return out.toString().replace(Regex("\\s+"), " ").trim()
+    }
 
     /**
      * The words without the marks, on one line: for a preview. (CommonMark's
@@ -196,9 +236,14 @@ object Markdown {
     }
 }
 
-/** A message's markdown, as blocks: paragraphs, headings, lists, quotes, code and tables. */
+/**
+ * An agent's markdown, as blocks: paragraphs, headings, lists, quotes, code
+ * and tables, quotes and lists [Markdown.MOST_DEPTH] deep. A message's, or a
+ * task's body or comment; [place] names where a link is left from when the
+ * person is asked to confirm it.
+ */
 @Composable
-fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier) {
+fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier, place: String = "this conversation") {
     val document = remember(text) { Markdown.parse(text) }
     val context = LocalContext.current
     // A web link waiting for the person to confirm it, as a page's link does.
@@ -215,34 +260,39 @@ fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier) {
     }
     CompositionLocalProvider(LocalLinkOpener provides open) {
         Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Blocks(document, color)
+            Blocks(document, color, depth = 0)
         }
     }
     leaving?.let { destination ->
-        WebsiteConfirmation(destination, "this conversation", dismiss = { leaving = null }) {
+        WebsiteConfirmation(destination, place, dismiss = { leaving = null }) {
             leaving = null
             openWebLink(context, destination.address)
         }
     }
 }
 
-/** Opens a message's link from its text and address: [MarkdownText] provides it. */
+/** Opens a link in [MarkdownText]'s text, from its text and address: [MarkdownText] provides it. */
 private val LocalLinkOpener = staticCompositionLocalOf<(String, String) -> Unit> { { _, _ -> } }
 
-/** The block children of [parent], in order. */
+/** The block children of [parent], in order, [depth] quotes and lists deep. */
 @Composable
-private fun Blocks(parent: Node, color: Color) {
+private fun Blocks(parent: Node, color: Color, depth: Int) {
     var node = parent.firstChild
     while (node != null) {
-        Block(node, color)
+        Block(node, color, depth)
         node = node.next
     }
 }
 
 @Composable
-private fun Block(node: Node, color: Color) {
+private fun Block(node: Node, color: Color, depth: Int) {
     val p = palette
     val open = LocalLinkOpener.current
+    if (depth >= Markdown.MOST_DEPTH && (node is ListBlock || node is BlockQuote)) {
+        // Deeper than drawing goes: its words, plain.
+        Text(Markdown.flatWords(node), style = Type.message, color = color)
+        return
+    }
     when (node) {
         is Paragraph -> Text(inlines(node, p, open), style = Type.message, color = color)
         is Heading -> Text(
@@ -258,25 +308,25 @@ private fun Block(node: Node, color: Color) {
             ),
             color = color,
         )
-        is BulletList -> ListItems(node, color) { _ -> "•" }
-        is OrderedList -> ListItems(node, color) { i -> "${(node.markerStartNumber ?: 1) + i}." }
+        is BulletList -> ListItems(node, color, depth + 1) { _ -> "•" }
+        is OrderedList -> ListItems(node, color, depth + 1) { i -> "${(node.markerStartNumber ?: 1) + i}." }
         is BlockQuote -> Row(Modifier.height(IntrinsicSize.Min)) {
             // A quote: an accent bar as tall as the quote, its text muted.
             Box(Modifier.width(2.dp).fillMaxHeight().background(p.accent))
-            Column(Modifier.padding(start = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Blocks(node, p.textMuted) }
+            Column(Modifier.padding(start = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Blocks(node, p.textMuted, depth + 1) }
         }
         is FencedCodeBlock -> CodeBlock(node.literal)
         is IndentedCodeBlock -> CodeBlock(node.literal)
         is HtmlBlock -> Text(node.literal.trimEnd(), style = Type.message, color = color)
         is ThematicBreak -> Hairline()
         is TableBlock -> Table(node, color)
-        else -> Blocks(node, color)
+        else -> Blocks(node, color, depth)
     }
 }
 
 /** A list: each item's marker in mono, then its blocks. */
 @Composable
-private fun ListItems(list: Node, color: Color, marker: (Int) -> String) {
+private fun ListItems(list: Node, color: Color, depth: Int, marker: (Int) -> String) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         var item = list.firstChild
         var i = 0
@@ -284,7 +334,7 @@ private fun ListItems(list: Node, color: Color, marker: (Int) -> String) {
             if (item is ListItem) {
                 Row {
                     Text(marker(i), style = Type.message.copy(fontFamily = Type.mono, fontSize = 13.sp), color = palette.textFaint, modifier = Modifier.widthIn(min = 18.dp).padding(end = 6.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) { Blocks(item, color) }
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) { Blocks(item, color, depth) }
                 }
                 i++
             }

@@ -11,6 +11,14 @@ import org.junit.Test
 
 class MarkdownTest {
     @Test
+    fun text_nested_past_what_is_drawn_reads_as_its_words_however_deep() {
+        // As deep as the parser nests (about a hundred); past that it keeps the marks as text.
+        assertEquals("deep", Markdown.flatWords(Markdown.parse(">".repeat(100) + " deep")))
+        assertEquals("a b c d | x", Markdown.flatWords(Markdown.parse("# a\n\n- b\n- `c`\n\n> d | x")))
+        assertEquals("", Markdown.flatWords(Markdown.parse("")))
+    }
+
+    @Test
     fun a_preview_keeps_the_words_and_drops_the_marks() {
         val reply = """
             # Format Test

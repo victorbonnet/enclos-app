@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
@@ -29,6 +30,7 @@ import io.github.victorbonnet.enclos.ui.AgentInitial
 import io.github.victorbonnet.enclos.ui.Gap
 import io.github.victorbonnet.enclos.ui.Glyph
 import io.github.victorbonnet.enclos.ui.Glyphs
+import io.github.victorbonnet.enclos.ui.MarkdownText
 import io.github.victorbonnet.enclos.ui.Shapes
 import io.github.victorbonnet.enclos.ui.TaskMark
 import io.github.victorbonnet.enclos.ui.Type
@@ -42,7 +44,9 @@ import kotlinx.coroutines.delay
  * asked in, when this phone holds it; then what its runtime holds of it,
  * fetched as the sheet opens ([TaskDetails]): its body, related work,
  * comments and history. Read only: no edit, no comment. Every text is the
- * sandbox's, drawn as plain text, never markdown or links.
+ * sandbox's: the body and comments are markdown, drawn as a message's
+ * ([MarkdownText]) and selectable to copy; everything else is plain text,
+ * never markdown or links.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -136,7 +140,9 @@ private fun TaskSheetContent(model: AppModel, task: AgentTask, openChat: (String
 private fun TaskDetailSections(model: AppModel, task: AgentTask, detail: TaskDetail, now: Long, name: (String) -> String) {
     val p = palette
     detail.body?.let {
-        Text(it, style = Type.message, color = p.text, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp))
+        SelectionContainer {
+            MarkdownText(it, p.text, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), place = "this task")
+        }
     }
     if (detail.related.isNotEmpty()) {
         Section("Related work") {
@@ -189,7 +195,7 @@ private fun TaskDetailSections(model: AppModel, task: AgentTask, detail: TaskDet
                             else Text(c.author, style = Type.code, color = p.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                             Text(Times.ago(c.time, now), style = Type.meta, color = p.textFaint, maxLines = 1)
                         }
-                        Text(c.text, style = Type.small, color = p.text)
+                        SelectionContainer { MarkdownText(c.text, p.text, place = "this task") }
                     }
                 }
             }
