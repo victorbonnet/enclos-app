@@ -266,6 +266,7 @@ data class Pairing(
 
 /** What the screens show, kept across the screens and updated on the main thread. */
 class AppModel(application: Application) : AndroidViewModel(application) {
+    init { java.io.File(application.cacheDir, "outgoing-camera").deleteRecursively() }
     private val hosts = Hosts(application)
     /** What the bridges sent, kept on the phone: shown at once when the app starts. */
     private val store = Store(application)
@@ -1440,7 +1441,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     save { conversation(started) }
                 }
                 // The person's own, as the bridge stored it: sent.
-                if (line.from != "agent") outgoing.shown(id, line.text)
+                if (line.from != "agent") {
+                    outgoing.stored(host.name, id, m.getString("id"))
+                    outgoing.shown(id, line.text)
+                }
                 if (line.from == "agent") {
                     val agent = m.getString("agent")
                     // Only a reply answers the person; any other kind (notify,
@@ -1517,6 +1521,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "ack" -> {
                 val request = m.optString("of")
+                outgoing.acknowledged(host.name, request)
                 val archive = archiveRequests[request]?.takeIf { it.host == host.name }
                 if (archive != null) {
                     // The bridge sends canonical metadata directly before this ack.
@@ -1670,6 +1675,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Drops [id] if it is still a draft (no message sent): a new conversation's screen left, or its agent changed. */
     fun dropDraft(id: String) {
         if (!drafts.remove(id)) return
+        outgoing.forget(listOf(id))
         conversations.removeAll { it.id == id }
     }
 
@@ -1920,9 +1926,62 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * bridge refuse it, before the bridge shows it back, it comes back to the
      * field ([Outgoing]).
      */
+    internal fun offersFiles(c: Conversation) = fileSendAvailable(c.group, hostSupports(c.host, "message.begin"),
+        agents.any { it.host == c.host && it.name == c.agent && "incoming_files" in it.capabilities })
+
+    private val fileWorker = Executors.newSingleThreadExecutor()
+    private fun sendFiles(c: Conversation, text: String): String? {
+        val state = outgoing.files
+        if (!offersFiles(c) || !connected(c.host)) return "Files are unavailable for this agent."
+        if (outgoing.waitingHost(c.host)) return "Wait for the current message."
+        val files = state.drafts[c.id].orEmpty().toList()
+        if (files.size !in 1..4 || files.any { !validSendFile(it.name, it.mime, it.bytes.size) }) return "Invalid files."
+        val id = state.id(c.id, text)
+        val begin = message("message.begin", "conversation" to c.id, "text" to text,
+            "files" to files.map { it.declaration() }).put("id", id)
+        if (!fits(begin)) return "Message is too long."
+        val connection = connections[c.host] ?: return "Not connected."
+        if (c.id in drafts) {
+            for (frame in firstSent(c, true, text).dropLast(1)) {
+                if (!connection.send(message(frame.type, *frame.fields.toTypedArray()))) return "Not connected."
+            }
+        }
+        outgoing.send(c.id, c.host, text) { id }
+        val token = Any()
+        state.active[c.id] = token
+        state.progress[c.id] = 0
+        fileWorker.execute {
+            var ok = false
+            try {
+                ok = state.active[c.id] === token && connection.sendPaced(begin)
+                if (ok) for ((n, part) in fileParts(id, files).withIndex()) {
+                    if (state.active[c.id] !== token || !state.current(c.id, id) || !connection.sendPaced(part)) { ok = false; break }
+                    main.post { if (c.id in state.progress) state.progress[c.id] = ((n + 1) * 100 / files.sumOf { (it.bytes.size + 44_999) / 45_000 }) }
+                }
+            } finally {
+                if (!ok) connection.close("File send interrupted")
+                main.post {
+                    if (state.active[c.id] === token) {
+                        if (!ok) outgoing.ended(c.host, "File send interrupted; resend the whole message.")
+                        if (!ok) state.active.remove(c.id)
+                        state.progress.remove(c.id)
+                        if (ok) main.postDelayed({
+                            if (state.active[c.id] === token && outgoing.pending(c.id, id)) {
+                                outgoing.timedOut(c.id, id)
+                                connection.close("File receipt timed out")
+                            }
+                        }, 60_000)
+                    }
+                }
+            }
+        }
+        return null
+    }
+
     fun send(conversation: Conversation, text: String): String? {
         if (ConversationKey(conversation.host, conversation.id) in deletion.pending) return "This conversation is being deleted."
         if (ConversationKey(conversation.host, conversation.id) in deletion.deleted) return "This conversation was deleted."
+        if (outgoing.files.drafts[conversation.id].orEmpty().isNotEmpty()) return sendFiles(conversation, text)
         said.remove(conversation.host)
         // A draft becomes a conversation on the bridge with its first message
         // ([firstSent]); it stays a draft until the bridge sends it back, so a
@@ -2259,6 +2318,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        outgoing.clear()
+        fileWorker.shutdownNow()
+        main.removeCallbacksAndMessages(null)
         PushTokens.changed = null
         agentImages.close()
         connections.values.forEach { it.close() }

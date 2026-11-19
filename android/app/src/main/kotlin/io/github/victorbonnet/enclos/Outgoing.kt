@@ -14,6 +14,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
  * Nothing is queued to go later: the person sends it again.
  */
 class Outgoing {
+    internal val files = SendingFiles()
     /** By conversation: what the person wrote and has not sent yet. */
     val unsent: SnapshotStateMap<String, String> = mutableStateMapOf()
 
@@ -21,7 +22,7 @@ class Outgoing {
     val notSent: SnapshotStateMap<String, String> = mutableStateMapOf()
 
     /** A message handed to the connection: [id] is its frame's, [back] whether its text was put back in the field since. */
-    private data class Sent(val host: String, val id: String, val text: String, val back: Boolean = false)
+    private data class Sent(val host: String, val id: String, val text: String, val back: Boolean = false, val withFiles: Boolean = false)
 
     /** By conversation: what was sent and the bridge has not shown back yet, oldest first. */
     private val sent = mutableStateMapOf<String, List<Sent>>()
@@ -56,7 +57,7 @@ class Outgoing {
         val id = transmit() ?: return false
         notSent.remove(conversation)
         unsent.remove(conversation)
-        sent[conversation] = sent[conversation].orEmpty() + Sent(host, id, text)
+        sent[conversation] = sent[conversation].orEmpty().filterNot { it.id == id } + Sent(host, id, text, withFiles = files.drafts[conversation].orEmpty().isNotEmpty())
         return true
     }
 
@@ -69,7 +70,7 @@ class Outgoing {
     fun shown(conversation: String, text: String) {
         val now = sent[conversation] ?: return
         // One still waited for first: one put back may have been sent again since.
-        val at = now.indexOfFirst { it.text == text && !it.back }.takeIf { it >= 0 } ?: now.indexOfFirst { it.text == text }
+        val at = now.indexOfFirst { it.text == text && !it.back && !it.withFiles }.takeIf { it >= 0 } ?: now.indexOfFirst { it.text == text && !it.withFiles }
         if (at < 0) return
         if (now[at].back && unsent[conversation] == text) {
             unsent.remove(conversation)
@@ -78,11 +79,34 @@ class Outgoing {
         put(conversation, now.filterIndexed { i, _ -> i != at })
     }
 
+    internal fun waitingHost(host: String) = sent.values.flatten().any { it.host == host && it.withFiles && !it.back }
+    internal fun pending(c: String, id: String) = sent[c].orEmpty().any { it.id == id && !it.back }
+    internal fun timedOut(c: String, id: String) {
+        val one = sent[c].orEmpty().firstOrNull { it.id == id && !it.back } ?: return
+        ended(one.host, "Receipt timed out; check history and retry explicitly.")
+    }
+    internal fun stored(host: String, conversation: String, id: String) {
+        if (sent[conversation].orEmpty().any { it.host == host && it.id == id && it.withFiles })
+            acknowledged(host, id)
+    }
+
+    internal fun acknowledged(host: String, id: String) {
+        for ((c, now) in sent.toList()) {
+            val one = now.firstOrNull { it.host == host && it.id == id && it.withFiles } ?: continue
+            if (one.back && unsent[c] == one.text) unsent.remove(c)
+            notSent.remove(c)
+            files.forget(c)
+            put(c, now - one)
+        }
+    }
+
     /** The connection to [host] ended: what went over it and was not shown back goes back in its field, [why] said. */
     fun ended(host: String, why: String) {
         for ((conversation, now) in sent.toList()) {
             val lost = now.filter { it.host == host && !it.back }
             if (lost.isEmpty()) continue
+            files.active.remove(conversation)
+            files.progress.remove(conversation)
             restore(conversation, lost.map { it.text }, why)
             put(conversation, now.map { if (it in lost) it.copy(back = true) else it })
         }
@@ -92,7 +116,9 @@ class Outgoing {
     fun refused(of: String, why: String): String? {
         for ((conversation, now) in sent.toList()) {
             val one = now.firstOrNull { it.id == of } ?: continue
-            restore(conversation, listOf(one.text), why)
+            files.active.remove(conversation)
+            files.progress.remove(conversation)
+            if (!one.back) restore(conversation, listOf(one.text), why) else notSent[conversation] = why
             // Refused, it will not be shown back.
             put(conversation, now - one)
             return conversation
@@ -103,6 +129,7 @@ class Outgoing {
     /** Forgets everything of [conversations] (a host forgotten, the cache cleared). */
     fun forget(conversations: Collection<String>) {
         conversations.forEach {
+            files.forget(it)
             unsent.remove(it)
             notSent.remove(it)
             sent.remove(it)
@@ -111,6 +138,7 @@ class Outgoing {
 
     /** Forgets everything (the cache cleared). */
     fun clear() {
+        files.clear()
         unsent.clear()
         notSent.clear()
         sent.clear()
