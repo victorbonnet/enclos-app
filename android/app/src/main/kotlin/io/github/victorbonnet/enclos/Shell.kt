@@ -536,8 +536,14 @@ private fun ScopedUsageSection(model: AppModel, host: String, sandbox: String, a
                         Text("Nothing priced in dollars in this window.", style = Type.small, color = p.textMuted)
                     }
                     spent?.let { c ->
-                        if (c.unpriced > 0) Text("Some tokens are of a model the host has no price for: the cost is at least this.", style = Type.small, color = p.textFaint)
-                        if (c.included > 0) Text("Tokens on a subscription count against its limits, not in dollars.", style = Type.small, color = p.textFaint)
+                        if (costLeavesOut(c)) Text("Some tokens are of a model the host has no price for: the cost is at least this.", style = Type.small, color = p.textFaint)
+                        else if (c.allMicros == 0L && c.unpriced > 0) Text("Its tokens are of a model the host has no price for: the cost is unknown.", style = Type.small, color = p.textFaint)
+                        if (c.included > 0) Text(
+                            if (c.includedUsdMicros > 0) "Tokens on a subscription count against its limits, not in dollars: they are priced at list price, as if paid, to show how heavy the usage is."
+                            else "Tokens on a subscription count against its limits, not in dollars.",
+                            style = Type.small,
+                            color = p.textFaint,
+                        )
                     }
                     // An agent's own: whether its plugin reports its calls outside the app.
                     val outside = usage.outside && (row?.outside ?: true)

@@ -68,33 +68,63 @@ data class UsageTotal(val calls: Long = 0, val tokens: Tokens = Tokens()) {
 
 /**
  * What usage cost, as the host estimates it from its price list (docs/spec.md, Usage: Cost;
- * enclos's docs/protocol.md, Usage, Cost): millionths of a US dollar for the tokens it has a
- * price for, the tokens on a subscription, and those of a model it has no price for, whose
- * cost is unknown, never $0. Each part adds up. An estimate, never a bill.
+ * enclos's docs/protocol.md, Usage, Cost): millionths of a US dollar for the paid tokens it has
+ * a price for ([usdMicros]); the tokens on a subscription ([included]), what those with a list
+ * price would cost if paid ([includedUsdMicros]) and how many have none ([includedUnpriced]);
+ * and the paid tokens of a model it has no price for ([unpriced]), whose cost is unknown, never
+ * $0. Each part adds up. An estimate, never a bill.
  */
-data class UsageCost(val usdMicros: Long = 0, val included: Long = 0, val unpriced: Long = 0) {
-    operator fun plus(other: UsageCost) =
-        UsageCost(sum(usdMicros, other.usdMicros), sum(included, other.included), sum(unpriced, other.unpriced))
+data class UsageCost(
+    val usdMicros: Long = 0,
+    val included: Long = 0,
+    val unpriced: Long = 0,
+    /** What the [included] tokens with a list price would cost if paid: how heavy an agent on a subscription is. */
+    val includedUsdMicros: Long = 0,
+    /** Those of the [included] tokens whose model has no list price. */
+    val includedUnpriced: Long = 0,
+) {
+    /** The dollars shown: paid, and a subscription's at list price. */
+    val allMicros: Long get() = sum(usdMicros, includedUsdMicros)
+
+    operator fun plus(other: UsageCost) = UsageCost(
+        sum(usdMicros, other.usdMicros),
+        sum(included, other.included),
+        sum(unpriced, other.unpriced),
+        sum(includedUsdMicros, other.includedUsdMicros),
+        sum(includedUnpriced, other.includedUnpriced),
+    )
 
     companion object {
         /** A `cost` object; null when there is none, or one of its parts is not a whole number of at least 0. */
         fun of(json: JSONObject?): UsageCost? {
             if (json == null) return null
-            val parts = listOf("usd_micros", "included", "unpriced").map { k -> if (json.has(k)) count(json, k) ?: return null else 0L }
-            return UsageCost(parts[0], parts[1], parts[2])
+            val parts = listOf("usd_micros", "included", "unpriced", "included_usd_micros", "included_unpriced").map { k ->
+                if (json.has(k)) count(json, k) ?: return null else 0L
+            }
+            return UsageCost(parts[0], parts[1], parts[2], parts[3], parts[4])
         }
     }
 }
 
 /**
- * A cost read at a glance, as enclos's CLI writes it: `~$1.24`; `≥~$1.24` when some tokens
- * have no price; `included` when all are on a subscription; `?` when none could be priced in
- * dollars.
+ * A cost read at a glance, as enclos's CLI writes it, a subscription's tokens priced at list
+ * price as if paid: `~$1.24`; `~$12.40 (included)` when all of it is on a subscription and no
+ * paid token is unknown; `~$13.64 (~$12.40 included)` otherwise; `≥` before it when some tokens,
+ * paid or on a subscription, have no price; `included` for a subscription's tokens alone with no
+ * list price; `?` when paid tokens have no price and nothing could be priced.
  */
 fun costText(c: UsageCost): String {
-    if (c.usdMicros == 0L && (c.included > 0 || c.unpriced > 0)) return if (c.unpriced == 0L) "included" else "?"
-    return (if (c.unpriced > 0) "≥" else "") + "~" + dollarsText(c.usdMicros)
+    if (c.allMicros == 0L && (c.included > 0 || c.unpriced > 0)) return if (c.unpriced == 0L) "included" else "?"
+    val included = when {
+        c.includedUsdMicros == 0L -> ""
+        c.usdMicros == 0L && c.unpriced == 0L -> " (included)"
+        else -> " (~${dollarsText(c.includedUsdMicros)} included)"
+    }
+    return (if (c.unpriced > 0 || c.includedUnpriced > 0) "≥" else "") + "~" + dollarsText(c.allMicros) + included
 }
+
+/** Whether [c] shows a cost that leaves some tokens out: one shown as at least what it says. */
+fun costLeavesOut(c: UsageCost): Boolean = c.allMicros > 0 && (c.unpriced > 0 || c.includedUnpriced > 0)
 
 /**
  * The cost to show beside [total]: none when the runtime counted no token, whose cost no price
@@ -289,10 +319,10 @@ data class HostUsage(
 
 /**
  * The most agents a `usage.report` without series lists, by name (enclos's docs/protocol.md,
- * Usage): 110 since the report carries costs. An older host lists up to 190; a report of 110
+ * Usage): 100 since the report carries costs. An older host lists up to 190; a report of 100
  * or more is then taken as cut, so an agent left out is unknown rather than unused.
  */
-const val MAX_REPORT_AGENTS = 110
+const val MAX_REPORT_AGENTS = 100
 
 /** How long the agents list and an agent's page keep a host's last day before asking again. */
 const val RECENT_USAGE_FRESH_SECONDS = 120L
@@ -418,11 +448,12 @@ private fun sandboxesOf(report: JSONObject): Pair<List<SandboxUsage>, Int> {
 
 /**
  * The bars of a sandbox's or an agent's [sum] over [window], in tokens or, with [cost], in
- * millionths of a dollar priced (what has no price is left out of a bar, as it is of the sum):
+ * millionths of a dollar, paid and a subscription's at list price (what has no price is left out
+ * of a bar, as it is of the sum):
  * one bar a bucket, as [usageBars] makes them, under one name, [scope].
  */
 fun sumBars(sum: List<UsagePoint>, scope: String, cost: Boolean, window: UsageWindow, now: Long, offset: Long): List<UsageBar> =
-    usageBars(listOf(UsageSeries(scope, sum.map { UsagePoint(it.at, it.calls, if (cost) it.cost?.usdMicros else it.tokens) })), window, now, offset)
+    usageBars(listOf(UsageSeries(scope, sum.map { UsagePoint(it.at, it.calls, if (cost) it.cost?.allMicros else it.tokens) })), window, now, offset)
 
 /**
  * What a screen reader says of a sandbox's or an agent's chart: its window, what it measures and

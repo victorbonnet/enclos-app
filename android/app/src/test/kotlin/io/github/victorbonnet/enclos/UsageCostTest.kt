@@ -18,12 +18,25 @@ class UsageCostTest {
         assertEquals("~$1.23", costText(UsageCost(1_234_567, included = 10)))
         assertEquals("≥~$1.23", costText(UsageCost(1_234_567, unpriced = 10)))
         assertEquals("included", costText(UsageCost(included = 10)))
-        assertEquals("?", costText(UsageCost(included = 10, unpriced = 3)))
         assertEquals("?", costText(UsageCost(unpriced = 3)))
         assertEquals("~$0.00", costText(UsageCost()))
         assertEquals("~<$0.01", costText(UsageCost(4_999)))
         assertEquals("~$0.01", costText(UsageCost(5_000)))
         assertEquals("$1,234.57", dollarsText(1_234_567_890))
+        // A subscription priced at list price, as if paid.
+        assertEquals("~$12.40 (included)", costText(UsageCost(included = 1_000, includedUsdMicros = 12_400_000)))
+        assertEquals("~$13.64 (~$12.40 included)", costText(UsageCost(1_240_000, included = 1_000, includedUsdMicros = 12_400_000)))
+        // Paid tokens with no price beside it: not all included, at least.
+        assertEquals("≥~$12.40 (~$12.40 included)", costText(UsageCost(included = 1_000, unpriced = 7, includedUsdMicros = 12_400_000)))
+        // Some of the subscription's tokens with no list price: at least.
+        val part = UsageCost(included = 1_000, includedUsdMicros = 12_400_000, includedUnpriced = 5)
+        assertEquals("≥~$12.40 (included)", costText(part))
+        assertTrue(costLeavesOut(part))
+        // A subscription's tokens alone with no list price: included.
+        assertEquals("included", costText(UsageCost(included = 10, includedUnpriced = 10)))
+        // Paid tokens with no price beside a subscription's: unknown.
+        assertEquals("?", costText(UsageCost(included = 10, unpriced = 3)))
+        assertTrue(!costLeavesOut(UsageCost(included = 10, unpriced = 3)))
     }
 
     @Test fun a_cost_object_is_read_whole_or_not_at_all() {
@@ -35,6 +48,10 @@ class UsageCostTest {
         assertNull(UsageCost.of(JSONObject("""{"usd_micros":"12"}""")))
         assertEquals(UsageCost(3, 4, 5), UsageCost(1, 2, 3) + UsageCost(2, 2, 2))
         assertEquals(Long.MAX_VALUE, (UsageCost(Long.MAX_VALUE) + UsageCost(1)).usdMicros)
+        assertEquals(UsageCost(included = 3, includedUsdMicros = 9), UsageCost.of(JSONObject("""{"included":3,"included_usd_micros":9}""")))
+        assertEquals(UsageCost(included = 3, includedUnpriced = 3), UsageCost.of(JSONObject("""{"included":3,"included_unpriced":3}""")))
+        assertNull(UsageCost.of(JSONObject("""{"included_usd_micros":-9}""")))
+        assertEquals(12L, (UsageCost(includedUsdMicros = 5) + UsageCost(includedUsdMicros = 7)).includedUsdMicros)
     }
 
     @Test fun a_report_with_costs_keeps_each_agents_and_sandboxes_cost_and_a_scopes_sum() {
@@ -71,8 +88,11 @@ class UsageCostTest {
         val dollars = sumBars(sum, "h/lab", cost = true, UsageWindow.Week, now, 0)
         assertEquals(8, dollars.size)
         assertEquals(750_000L, dollars[dollars.size - 2].tokens)
-        // A bucket all on a subscription has no dollars: no bar.
+        // A bucket all on a subscription with no list price has no dollars: no bar.
         assertEquals(0L, dollars.last().tokens)
+        // One priced at list price has its bar.
+        val listed = sum.dropLast(1) + UsagePoint(today, 1, 40, UsageCost(included = 40, includedUsdMicros = 500_000))
+        assertEquals(500_000L, sumBars(listed, "h/lab", cost = true, UsageWindow.Week, now, 0).last().tokens)
         val tokens = sumBars(sum, "h/lab", cost = false, UsageWindow.Week, now, 0)
         assertEquals(listOf(60L, 40L), tokens.takeLast(2).map { it.tokens })
         assertEquals(listOf("h/lab"), tokens.last().parts.map { it.first })
