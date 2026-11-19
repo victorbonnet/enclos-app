@@ -8,14 +8,16 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.runtime.saveable.rememberSaveable
 import io.github.victorbonnet.enclos.ui.*
-import androidx.compose.material3.AssistChip
+import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -29,33 +31,32 @@ import java.util.concurrent.Executors
 
 /** System grants only; no media or storage permission and no persisted URI grants. */
 @Composable
-internal fun FileComposer(model: AppModel, c: Conversation, composer: @Composable (@Composable () -> Unit) -> Unit) {
-    val context = LocalContext.current
+internal fun FileComposer(model: AppModel, c: Conversation, composer: @Composable (@Composable () -> Unit, Boolean) -> Unit) {
+    val context = LocalContext.current.applicationContext
     val state = model.outgoing.files
-    var menu by remember(c.id) { mutableStateOf(false) }
-    var preparing by remember(c.id) { mutableStateOf(false) }
-    var error by remember(c.id) { mutableStateOf<String?>(null) }
+    val preparing = c.id in state.preparing
+
     var cameraPath by rememberSaveable(c.id) { mutableStateOf<String?>(null) }
     val camera = cameraPath?.let(::File)
-    var disposed by remember(c.id) { mutableStateOf(false) }
-    DisposableEffect(c.id) { onDispose { disposed = true } }
-    val busy = preparing || model.outgoing.waiting(c.id) || c.id in state.progress
     val main = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
     fun prepare(uris: List<Uri>, photo: Boolean, temporary: File? = null) {
-        if (busy || uris.isEmpty()) { temporary?.delete(); return }
+        if (c.id in state.preparing || model.outgoing.waiting(c.id) || c.id in state.progress || uris.isEmpty()) { temporary?.delete(); return }
         val before = state.drafts[c.id].orEmpty()
-        if (before.size + uris.size > 4) { error = "Choose at most four files."; temporary?.delete(); return }
+        if (before.size + uris.size > 4) { state.errors[c.id] = "Choose at most four files."; temporary?.delete(); return }
         val generation = state.generation
-        preparing = true
+        val token = Any()
+        state.preparing[c.id] = token
+        state.errors.remove(c.id)
         filePreparation.execute {
             val result = runCatching { uris.map { prepareSendFile(context, it, photo) } }
             temporary?.delete()
             main.post {
-                preparing = false
-                // Cache clear, deletion, or navigation must not resurrect a discarded draft.
-                if (!disposed && generation == state.generation && model.conversations.any { it.id == c.id && it.host == c.host } && state.drafts[c.id].orEmpty() == before) {
+                if (state.preparing[c.id] !== token) return@post
+                state.preparing.remove(c.id)
+                // ViewModel ownership survives rotation; invalidation cannot resurrect discarded drafts.
+                if (generation == state.generation && model.conversations.any { it.id == c.id && it.host == c.host } && state.drafts[c.id].orEmpty() == before) {
                     result.onSuccess { state.drafts[c.id] = before + it }
-                        .onFailure { error = it.message ?: "Could not read file." }
+                        .onFailure { state.errors[c.id] = it.message ?: "Could not read file." }
                 }
             }
         }
@@ -66,39 +67,89 @@ internal fun FileComposer(model: AppModel, c: Conversation, composer: @Composabl
         val file = camera
         cameraPath = null
         state.cameras.remove(c.id)
-        if (accepted && file != null && file.exists()) prepare(listOf(Uri.fromFile(file)), true, file) else file?.delete()
+        if (accepted && file != null && file.isFile && file.length() > 0) {
+            prepare(listOf(Uri.fromFile(file)), true, file)
+        } else {
+            file?.delete()
+            if (accepted) state.errors[c.id] = "Camera photo is no longer available. Take it again."
+        }
     }
-    Column {
-        composer {
-            if (model.offersFiles(c)) TextButton(
+    FileComposerControls(
+        names = state.drafts[c.id].orEmpty().map { it.name },
+        offersFiles = model.offersFiles(c), preparing = preparing,
+        waiting = model.outgoing.waiting(c.id), progress = state.progress[c.id],
+        error = state.errors[c.id], onRemove = { state.remove(c.id, it) },
+        onCamera = {
+            val dir = File(context.cacheDir, "outgoing-camera").apply { mkdirs() }
+            val file = File(dir, "${UUID.randomUUID()}.jpg")
+            state.cameras.remove(c.id)?.delete()
+            state.cameras[c.id] = file
+            cameraPath = file.path
+            runCatching { take.launch(FileProvider.getUriForFile(context, "${context.packageName}.files", file)) }
+                .onFailure { file.delete(); state.cameras.remove(c.id); cameraPath = null; state.errors[c.id] = "Camera unavailable." }
+        },
+        onPhotos = { runCatching { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }.onFailure { state.errors[c.id] = "Photos unavailable." } },
+        onFiles = { runCatching { documents.launch(arrayOf("*/*")) }.onFailure { state.errors[c.id] = "Files unavailable." } },
+    ) { attach, enabled -> composer(attach, enabled) }
+
+}
+
+/** Presentation shared by chat and isolated fixtures; no model or transport required. */
+@Composable
+internal fun FileComposerControls(
+    names: List<String>,
+    offersFiles: Boolean = true,
+    online: Boolean = true,
+    preparing: Boolean = false,
+    waiting: Boolean = false,
+    progress: Int? = null,
+    error: String? = null,
+    onCamera: () -> Unit,
+    onPhotos: () -> Unit,
+    onFiles: () -> Unit,
+    onRemove: (Int) -> Unit,
+    composer: @Composable (@Composable () -> Unit, Boolean) -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    val busy = preparing || waiting || progress != null
+    Column(Modifier.fillMaxWidth().background(palette.bg)) {
+        composer({
+            if (offersFiles) TextButton(
                 modifier = Modifier.size(48.dp).semantics { contentDescription = "Attach files" },
-                enabled = !busy && state.drafts[c.id].orEmpty().size < 4,
+                enabled = !busy && names.size < 4,
                 onClick = { menu = !menu },
             ) { Text("+", style = Type.message, color = palette.accent) }
+        }, online && !busy)
+        // A bounded, scrollable area keeps all actions reachable with large system text.
+        Column(Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp)) {
+            if (menu && offersFiles) {
+                listOf("Camera" to onCamera, "Photos" to onPhotos, "Files" to onFiles).forEach { (label, action) ->
+                    TextButton(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        enabled = !busy && names.size < 4,
+                        onClick = { menu = false; action() },
+                    ) { Text(label, style = Type.message, color = palette.accent) }
+                }
+            }
+            names.forEachIndexed { index, name ->
+                TextButton(
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    enabled = !busy, onClick = { onRemove(index) },
+                ) { Text("$name · Remove", style = Type.small, color = palette.text) }
+            }
+            if (busy) {
+                if (progress != null) LinearProgressIndicator(
+                    progress = { progress.coerceIn(0, 100) / 100f }, modifier = Modifier.fillMaxWidth(),
+                )
+                else LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text(when {
+                    preparing -> "Preparing files…"
+                    progress != null -> "Sending files: $progress%"
+                    else -> "Waiting for receipt…"
+                }, style = Type.small, color = palette.textMuted)
+            }
+            error?.let { Text(it, style = Type.small, color = palette.text) }
         }
-        if (menu) {
-            TextButton(enabled = !busy, onClick = {
-                menu = false
-                val dir = File(context.cacheDir, "outgoing-camera").apply { mkdirs() }
-                val file = File(dir, "${UUID.randomUUID()}.jpg")
-                state.cameras.remove(c.id)?.delete()
-                state.cameras[c.id] = file
-                cameraPath = file.path
-                runCatching { take.launch(FileProvider.getUriForFile(context, "${context.packageName}.files", file)) }
-                    .onFailure { file.delete(); state.cameras.remove(c.id); cameraPath = null; error = "Camera unavailable." }
-            }) { Text("Camera") }
-            TextButton(enabled = !busy, onClick = { menu = false; runCatching { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }.onFailure { error = "Photos unavailable." } }) { Text("Photos") }
-            TextButton(enabled = !busy, onClick = { menu = false; runCatching { documents.launch(arrayOf("*/*")) }.onFailure { error = "Files unavailable." } }) { Text("Files") }
-        }
-        state.drafts[c.id].orEmpty().forEachIndexed { index, file ->
-            AssistChip(enabled = !busy, onClick = { state.remove(c.id, index) }, label = { Text("${file.name} · Remove") })
-        }
-        if (busy) {
-            val percent = state.progress[c.id]
-            if (percent != null) LinearProgressIndicator(progress = { percent / 100f })
-            Text(when { preparing -> "Preparing files…"; percent != null -> "Sending files: $percent%"; else -> "Waiting for receipt…" }, style = Type.small, color = palette.textMuted)
-        }
-        error?.let { Text(it) }
     }
 }
 

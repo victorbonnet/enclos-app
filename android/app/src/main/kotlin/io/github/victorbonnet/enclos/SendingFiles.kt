@@ -32,6 +32,8 @@ internal class SendingFiles {
         private set
     val active = java.util.concurrent.ConcurrentHashMap<String, Any>()
     val cameras = mutableMapOf<String, java.io.File>()
+    val preparing = mutableStateMapOf<String, Any>()
+    val errors = mutableStateMapOf<String, String>()
     val drafts = mutableStateMapOf<String, List<SendFile>>()
     val progress = mutableStateMapOf<String, Int>()
     private val ids = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -49,8 +51,8 @@ internal class SendingFiles {
         ids.remove(c)
         payloads.remove(c)
     }
-    fun forget(c: String) { cameras.remove(c)?.delete(); generation++; active.remove(c); drafts.remove(c); progress.remove(c); ids.remove(c); texts.remove(c); payloads.remove(c) }
-    fun clear() { cameras.values.forEach { it.delete() }; cameras.clear(); generation++; active.clear(); drafts.clear(); progress.clear(); ids.clear(); texts.clear(); payloads.clear() }
+    fun forget(c: String) { preparing.remove(c); errors.remove(c); cameras.remove(c)?.delete(); generation++; active.remove(c); drafts.remove(c); progress.remove(c); ids.remove(c); texts.remove(c); payloads.remove(c) }
+    fun clear() { preparing.clear(); errors.clear(); cameras.values.forEach { it.delete() }; cameras.clear(); generation++; active.clear(); drafts.clear(); progress.clear(); ids.clear(); texts.clear(); payloads.clear() }
 }
 
 /** Lazy ordered frames, bounded to one decoded chunk at a time; retries start from zero. */

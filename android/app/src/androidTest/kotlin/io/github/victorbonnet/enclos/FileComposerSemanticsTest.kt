@@ -9,12 +9,12 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class FileComposerSemanticsTest {
-    @Test fun capture_composer_with_large_draft_online_and_offline() {
+    @Test fun capture_shared_composer_with_large_text_online_and_offline() {
         val runner = InstrumentationRegistry.getInstrumentation()
         for (dark in listOf(false, true)) for (offline in listOf(false, true)) {
             val activity = runner.startActivitySync(Intent().setClassName(runner.targetContext,
                 "io.github.victorbonnet.enclos.FileComposerProbeActivity")
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("dark", dark).putExtra("offline", offline))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("dark", dark).putExtra("offline", offline).putExtra("font", 2f).putExtra("width", 320))
             try {
                 runner.waitForIdleSync()
                 val image = runner.uiAutomation.takeScreenshot()

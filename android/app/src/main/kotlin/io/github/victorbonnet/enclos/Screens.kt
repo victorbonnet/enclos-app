@@ -1671,7 +1671,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         // that could not go (too long) stays, saying why.
         val notSent = model.outgoing.notSent[id]?.let { "Not sent: $it." }
         val away = if (live) null else "Not connected to ${conversation.host}: send once it's back."
-        FileComposer(model, conversation) { attach ->
+        FileComposer(model, conversation) { attach, filesReady ->
         Composer(
             draft,
             {
@@ -1679,7 +1679,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 model.outgoing.write(id, it)
             },
             if (conversation.group) "Message the group, @ to address" else "Message $agent",
-            canSend = live && !model.outgoing.waiting(id) && id !in model.outgoing.files.progress,
+            canSend = live && filesReady,
             hasFiles = model.outgoing.files.drafts[id].orEmpty().isNotEmpty(),
             attachment = attach,
             notice = listOfNotNull(unsent, notSent, away).joinToString(" ").ifEmpty { null },

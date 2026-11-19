@@ -1979,6 +1979,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun send(conversation: Conversation, text: String): String? {
+        if (conversation.id in outgoing.files.preparing) return "Wait for file preparation."
         if (ConversationKey(conversation.host, conversation.id) in deletion.pending) return "This conversation is being deleted."
         if (ConversationKey(conversation.host, conversation.id) in deletion.deleted) return "This conversation was deleted."
         if (outgoing.files.drafts[conversation.id].orEmpty().isNotEmpty()) return sendFiles(conversation, text)

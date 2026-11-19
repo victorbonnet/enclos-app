@@ -8,6 +8,23 @@ import java.util.Base64
 
 @RunWith(RobolectricTestRunner::class)
 class SendingFilesTest {
+    @Test fun discard_invalidates_inflight_preparation_and_errors() {
+        val state = SendingFiles()
+        val token = Any()
+        state.preparing["c"] = token
+        state.errors["c"] = "Could not read file."
+        val generation = state.generation
+        state.forget("c")
+        assertNull(state.preparing["c"])
+        assertNull(state.errors["c"])
+        assertTrue(state.generation > generation)
+        state.preparing["other"] = Any()
+        state.errors["other"] = "Camera unavailable."
+        state.clear()
+        assertTrue(state.preparing.isEmpty())
+        assertTrue(state.errors.isEmpty())
+    }
+
     @Test fun both_capabilities_are_required_and_groups_never_send_files() {
         for (group in listOf(false, true)) for (bridge in listOf(false, true)) for (agent in listOf(false, true))
             assertEquals(!group && bridge && agent, fileSendAvailable(group, bridge, agent))
