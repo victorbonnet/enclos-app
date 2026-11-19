@@ -67,6 +67,43 @@ data class UsageTotal(val calls: Long = 0, val tokens: Tokens = Tokens()) {
 }
 
 /**
+ * What usage cost, as the host estimates it from its price list (docs/spec.md, Usage: Cost;
+ * enclos's docs/protocol.md, Usage, Cost): millionths of a US dollar for the tokens it has a
+ * price for, the tokens on a subscription, and those of a model it has no price for, whose
+ * cost is unknown, never $0. Each part adds up. An estimate, never a bill.
+ */
+data class UsageCost(val usdMicros: Long = 0, val included: Long = 0, val unpriced: Long = 0) {
+    operator fun plus(other: UsageCost) =
+        UsageCost(sum(usdMicros, other.usdMicros), sum(included, other.included), sum(unpriced, other.unpriced))
+
+    companion object {
+        /** A `cost` object; null when there is none, or one of its parts is not a whole number of at least 0. */
+        fun of(json: JSONObject?): UsageCost? {
+            if (json == null) return null
+            val parts = listOf("usd_micros", "included", "unpriced").map { k -> if (json.has(k)) count(json, k) ?: return null else 0L }
+            return UsageCost(parts[0], parts[1], parts[2])
+        }
+    }
+}
+
+/**
+ * A cost read at a glance, as enclos's CLI writes it: `~$1.24`; `≥~$1.24` when some tokens
+ * have no price; `included` when all are on a subscription; `?` when none could be priced in
+ * dollars.
+ */
+fun costText(c: UsageCost): String {
+    if (c.usdMicros == 0L && (c.included > 0 || c.unpriced > 0)) return if (c.unpriced == 0L) "included" else "?"
+    return (if (c.unpriced > 0) "≥" else "") + "~" + dollarsText(c.usdMicros)
+}
+
+/** Millionths of a dollar as dollars and cents: `$1.24`, `<$0.01` for less than half a cent but more than none. */
+fun dollarsText(micros: Long): String {
+    if (micros in 1 until 5_000) return "<$0.01"
+    val cents = micros / 10_000 + if (micros % 10_000 >= 5_000) 1 else 0
+    return "$" + "%,d".format(Locale.ROOT, cents / 100) + "." + "%02d".format(Locale.ROOT, cents % 100)
+}
+
+/**
  * The windows the app offers; the bridge sums from the start of the hour that holds the
  * window's start. Each has its bars' size: the last day by the hour, a week or a month by
  * the day.
@@ -77,8 +114,11 @@ enum class UsageWindow(val label: String, val seconds: Long, val bucket: Long) {
     Month("30 days", 30 * 24 * 3600, 86_400),
 }
 
-/** What an agent used in one bucket of a series: its start (Unix seconds), calls and every token, null when the runtime counted none. */
-data class UsagePoint(val at: Long, val calls: Long, val tokens: Long?)
+/**
+ * What an agent used in one bucket of a series: its start (Unix seconds), calls and every
+ * token, null when the runtime counted none; and, in a sandbox's or an agent's sum, its cost.
+ */
+data class UsagePoint(val at: Long, val calls: Long, val tokens: Long?, val cost: UsageCost? = null)
 
 /** One agent's usage over time, as its bridge answered: the buckets that saw a call. */
 data class UsageSeries(val agent: String, val points: List<UsagePoint>)
@@ -155,8 +195,19 @@ fun usageSlots(known: List<String>, shown: List<String>, slots: Int = 8): Map<St
     return taken
 }
 
-/** What one agent (`sandbox/agent`) used over a window; [outside] when its calls outside the app are counted too. */
-data class AgentUsage(val agent: String, val total: UsageTotal, val outside: Boolean = false)
+/**
+ * What one agent (`sandbox/agent`) used over a window; [outside] when its calls outside the app
+ * are counted too, and [cost] from a host that estimates it (`usage.cost`).
+ */
+data class AgentUsage(val agent: String, val total: UsageTotal, val outside: Boolean = false, val cost: UsageCost? = null)
+
+/** What one sandbox's agents used over a window, all of them summed, with its cost. */
+data class SandboxUsage(val sandbox: String, val total: UsageTotal, val cost: UsageCost)
+
+/** A report's agent row; null when it is not one. */
+private fun agentOf(a: JSONObject?): AgentUsage? = a?.optString("agent")?.ifBlank { null }?.let {
+    AgentUsage(it, UsageTotal.of(a.optJSONObject("total")), a.optBoolean("outside"), UsageCost.of(a.optJSONObject("cost")))
+}
 
 /**
  * A host's usage: the rows of [window], as its bridge last answered, and the window [asked]
@@ -168,6 +219,10 @@ data class HostUsage(
     val agents: List<AgentUsage> = emptyList(),
     /** Each heavy agent's usage over [window], when the bridge gives series; heaviest first. */
     val series: List<UsageSeries> = emptyList(),
+    /** Each sandbox's total and cost, from a host that estimates cost; heaviest first. */
+    val sandboxes: List<SandboxUsage> = emptyList(),
+    /** For one sandbox or agent: its usage over [window], every agent summed, each bucket with its cost. */
+    val sum: List<UsagePoint> = emptyList(),
     /** Whether it counts the agents' calls outside the app too: for the host's person. */
     val outside: Boolean = false,
     /** Where the bridge's sums start (Unix seconds), once it answered. */
@@ -202,21 +257,20 @@ data class HostUsage(
         if (request != of) return this
         val list = report.optJSONArray("agents")
             ?: return failed(of, "The host's usage could not be read.")
-        val read = (0 until list.length()).map { i ->
-            list.optJSONObject(i)?.let { a ->
-                a.optString("agent").ifBlank { null }?.let { AgentUsage(it, UsageTotal.of(a.optJSONObject("total")), a.optBoolean("outside")) }
-            }
-        }
+        val read = (0 until list.length()).map { i -> agentOf(list.optJSONObject(i)) }
         val agents = read.filterNotNull().distinctBy { it.agent }.sortedByDescending { it.total.tokens.total }
         val unread = read.count { it == null }
         val (series, unreadSeries) = seriesOf(report)
+        val (sandboxes, unreadSandboxes) = sandboxesOf(report)
+        val (sum, unreadSum) = pointsOf(report.optJSONArray("sum"))
         val said = listOfNotNull(
             "$unread rows".takeIf { unread > 0 },
-            "$unreadSeries chart entries".takeIf { unreadSeries > 0 },
+            "$unreadSandboxes sandbox rows".takeIf { unreadSandboxes > 0 },
+            "${unreadSeries + unreadSum} chart entries".takeIf { unreadSeries + unreadSum > 0 },
         )
         return copy(
             window = asked ?: window, agents = agents, since = count(report, "since"), loaded = true, request = null, asked = null,
-            series = series, outside = report.optBoolean("outside"), at = askedAt, offset = askedOffset,
+            series = series, sandboxes = sandboxes, sum = sum, outside = report.optBoolean("outside"), at = askedAt, offset = askedOffset,
             error = if (said.isEmpty()) null else "The host sent ${said.joinToString(" and ")} the app could not read.",
         )
     }
@@ -225,8 +279,12 @@ data class HostUsage(
         if (request == of) copy(request = null, asked = null, error = why.ifBlank { "The host could not return its usage." }) else this
 }
 
-/** The most agents a `usage.report` without series lists, by name (enclos's docs/protocol.md, Usage). */
-const val MAX_REPORT_AGENTS = 190
+/**
+ * The most agents a `usage.report` without series lists, by name (enclos's docs/protocol.md,
+ * Usage): 110 since the report carries costs. An older host lists up to 190; a report of 110
+ * or more is then taken as cut, so an agent left out is unknown rather than unused.
+ */
+const val MAX_REPORT_AGENTS = 110
 
 /** How long the agents list and an agent's page keep a host's last day before asking again. */
 const val RECENT_USAGE_FRESH_SECONDS = 120L
@@ -264,11 +322,7 @@ data class RecentUsage(
     fun received(of: String, report: JSONObject): RecentUsage {
         if (request != of) return this
         val list = report.optJSONArray("agents") ?: return failed(of, "The host's usage could not be read.")
-        val read = (0 until list.length()).mapNotNull { i ->
-            list.optJSONObject(i)?.let { a ->
-                a.optString("agent").ifBlank { null }?.let { AgentUsage(it, UsageTotal.of(a.optJSONObject("total")), a.optBoolean("outside")) }
-            }
-        }
+        val read = (0 until list.length()).mapNotNull { i -> agentOf(list.optJSONObject(i)) }
         val unread = list.length() - read.size
         return RecentUsage(
             agents = read.associateBy { it.agent },
@@ -310,22 +364,72 @@ private fun seriesOf(report: JSONObject): Pair<List<UsageSeries>, Int> {
             unread++
             return@mapNotNull null
         }
-        val points = s.optJSONArray("points")
-        UsageSeries(agent, (0 until (points?.length() ?: 0)).mapNotNull { j ->
-            val p = points!!.optJSONObject(j)
-            val at = p?.let { count(it, "at") }
-            val calls = p?.let { count(it, "calls") }
-            val tokens = p?.let { count(it, "tokens") }
-            if (p == null || at == null || calls == null || (p.has("tokens") && tokens == null)) {
-                unread++
-                return@mapNotNull null
-            }
-            UsagePoint(at, calls, tokens)
-        }.sortedBy { it.at })
+        val (points, unreadPoints) = pointsOf(s.optJSONArray("points"))
+        unread += unreadPoints
+        UsageSeries(agent, points)
     }
     val once = read.distinctBy { it.agent }
     unread += read.size - once.size + (once.size - MAX_CHART_SERIES).coerceAtLeast(0)
     return once.take(MAX_CHART_SERIES) to unread
+}
+
+/**
+ * Points of a series or a sum, oldest first, and how many the app could not read: a point
+ * without a start or calls, or whose `tokens` or `cost` is there but not one, is counted, never
+ * read as 0.
+ */
+private fun pointsOf(list: org.json.JSONArray?): Pair<List<UsagePoint>, Int> {
+    var unread = 0
+    val read = (0 until (list?.length() ?: 0)).mapNotNull { j ->
+        val p = list!!.optJSONObject(j)
+        val at = p?.let { count(it, "at") }
+        val calls = p?.let { count(it, "calls") }
+        val tokens = p?.let { count(it, "tokens") }
+        val cost = p?.let { UsageCost.of(it.optJSONObject("cost")) }
+        if (p == null || at == null || calls == null || (p.has("tokens") && tokens == null) || (p.has("cost") && cost == null)) {
+            unread++
+            return@mapNotNull null
+        }
+        UsagePoint(at, calls, tokens, cost)
+    }
+    return read.sortedBy { it.at } to unread
+}
+
+/** A report's `sandboxes`, heaviest first, each once, and how many rows the app could not read. */
+private fun sandboxesOf(report: JSONObject): Pair<List<SandboxUsage>, Int> {
+    val list = report.optJSONArray("sandboxes") ?: return emptyList<SandboxUsage>() to 0
+    val read = (0 until list.length()).map { i ->
+        list.optJSONObject(i)?.let { s ->
+            val name = s.optString("sandbox").ifBlank { null }
+            val cost = UsageCost.of(s.optJSONObject("cost"))
+            if (name == null || cost == null) null else SandboxUsage(name, UsageTotal.of(s.optJSONObject("total")), cost)
+        }
+    }
+    return read.filterNotNull().distinctBy { it.sandbox }.sortedByDescending { it.total.tokens.total } to read.count { it == null }
+}
+
+/**
+ * The bars of a sandbox's or an agent's [sum] over [window], in tokens or, with [cost], in
+ * millionths of a dollar priced (what has no price is left out of a bar, as it is of the sum):
+ * one bar a bucket, as [usageBars] makes them, under one name, [scope].
+ */
+fun sumBars(sum: List<UsagePoint>, scope: String, cost: Boolean, window: UsageWindow, now: Long, offset: Long): List<UsageBar> =
+    usageBars(listOf(UsageSeries(scope, sum.map { UsagePoint(it.at, it.calls, if (cost) it.cost?.usdMicros else it.tokens) })), window, now, offset)
+
+/** The cost of a [sum], every bucket added; null when no bucket has one. */
+fun sumCost(sum: List<UsagePoint>): UsageCost? =
+    sum.mapNotNull { it.cost }.takeIf { it.isNotEmpty() }?.reduce(UsageCost::plus)
+
+/**
+ * What a screen reader says of a sandbox's or an agent's chart: its window, what it measures and
+ * the bucket of the most. The total beside the chart gives the whole.
+ */
+fun sumSummary(bars: List<UsageBar>, window: UsageWindow, cost: Boolean, bucketLabel: (Long) -> String): String {
+    val what = if (cost) "Estimated cost" else "Tokens"
+    val peak = bars.maxByOrNull { it.tokens }?.takeIf { it.tokens > 0 }
+        ?: return "$what over the last ${window.label}: none."
+    val amount = if (cost) dollarsText(peak.tokens) else "${tokensText(peak.tokens)} tokens"
+    return "$what over the last ${window.label}, a bar per ${if (window.bucket < 86_400) "hour" else "day"}. The most: ${bucketLabel(peak.at)}, $amount."
 }
 
 /**

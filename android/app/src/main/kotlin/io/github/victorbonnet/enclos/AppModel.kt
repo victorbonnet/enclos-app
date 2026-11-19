@@ -292,6 +292,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val hostUsage = mutableStateMapOf<String, HostUsage>()
     /** Each host's last 24 hours by agent, for the agents list and an agent's page. */
     val recentUsage = mutableStateMapOf<String, RecentUsage>()
+    /**
+     * By `host/sandbox` or `host/sandbox/agent`: that sandbox's or agent's usage over the window
+     * last asked for, with its cost by bucket, for its page (docs/spec.md, Usage: Cost).
+     */
+    val scopedUsage = mutableStateMapOf<String, HostUsage>()
     private val hostCapabilities = mutableStateMapOf<String, Set<String>>()
     /** By host: the last error its bridge sent, such as an agent it could not reach. */
     val said = mutableStateMapOf<String, String>()
@@ -695,6 +700,37 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         }, 15_000)
     }
 
+    /** Whether [host]'s bridge estimates cost and answers a window of one sandbox or agent (`usage.cost`). */
+    fun canReadCost(host: String) = canReadUsage(host) && hostSupports(host, "usage.cost") && hostSupports(host, "usage.series")
+
+    /**
+     * Ask [host] what [sandbox], or its [agent], used over [window], by the window's bucket, days
+     * at this phone's midnight: its total and its sum over time, each bucket with its cost.
+     */
+    fun loadScopedUsage(host: String, sandbox: String, agent: String?, window: UsageWindow) {
+        if (!canReadCost(host)) return
+        val key = listOfNotNull(host, sandbox, agent).joinToString("/")
+        val now = System.currentTimeMillis()
+        val offset = java.util.TimeZone.getDefault().getOffset(now) / 1000L
+        val request = message("usage.get", "since" to (now / 1000 - window.seconds).coerceAtLeast(0))
+        request.put("bucket", window.bucket)
+        request.put("offset", offset)
+        request.put("sandbox", sandbox)
+        agent?.let { request.put("agent", it) }
+        val id = request.getString("id")
+        scopedUsage[key] = (scopedUsage[key] ?: HostUsage()).loading(id, window, now / 1000, offset)
+        if (connections[host]?.send(request) != true) {
+            scopedUsage[key] = scopedUsage.getValue(key).failed(id, "The usage request could not be sent. Reconnect and try again.")
+            return
+        }
+        main.postDelayed({
+            scopedUsage[key]?.let { scopedUsage[key] = it.failed(id, "The host did not return its usage. Try again.") }
+        }, 15_000)
+    }
+
+    /** The scoped usage windows of [host]: their keys. */
+    private fun scopedOf(host: String) = scopedUsage.keys.filter { it.startsWith("$host/") }
+
     /**
      * Ask [host] what each agent used over the last 24 hours, unless an answer younger than
      * [RECENT_USAGE_FRESH_SECONDS] or a request is out: the screens that show it call this
@@ -723,6 +759,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         }
         hostUsage[host]?.let { state ->
             state.request?.let { hostUsage[host] = state.failed(it, "The connection ended. Reconnect to refresh the usage.") }
+        }
+        scopedOf(host).forEach { key ->
+            scopedUsage[key]?.let { state ->
+                state.request?.let { scopedUsage[key] = state.failed(it, "The connection ended. Reconnect to refresh the usage.") }
+            }
         }
     }
 
@@ -1252,6 +1293,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     hostUsage.remove(host.name)
                     recentUsage.remove(host.name)
                 }
+                if (!hostSupports(host.name, "usage.cost")) scopedOf(host.name).forEach { scopedUsage.remove(it) }
                 pendingApprovalActions.keys.filter { it.startsWith("${host.name}/") }.forEach { pendingApprovalActions.remove(it) }
                 approvals.keys.filter { approvals[it]?.host == host.name }.forEach { approvals.remove(it) }
                 saving.execute { approvalCache.edit { approvalCache.all.keys.filter { it.startsWith("${host.name}/") }.forEach { remove(it) } } }
@@ -1276,6 +1318,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 val of = m.optString("of")
                 hostUsage[host.name]?.let { hostUsage[host.name] = it.received(of, m) }
                 recentUsage[host.name]?.let { recentUsage[host.name] = it.received(of, m) }
+                scopedOf(host.name).forEach { key -> scopedUsage[key]?.let { scopedUsage[key] = it.received(of, m) } }
             }
             // A model call of an agent's turn: the turn's usage, and the conversation's new total.
             "usage" -> {
@@ -1483,6 +1526,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (recentUsage[host.name]?.request == usageOf) {
                     recentUsage[host.name]?.let { recentUsage[host.name] = it.failed(usageOf, m.optString("message")) }
+                    return
+                }
+                scopedOf(host.name).firstOrNull { scopedUsage[it]?.request == usageOf }?.let { key ->
+                    scopedUsage[key]?.let { scopedUsage[key] = it.failed(usageOf, m.optString("message")) }
                     return
                 }
                 val auditOf = m.optString("of")
@@ -2132,6 +2179,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         usage.clear()
         hostUsage.clear()
         recentUsage.clear()
+        scopedUsage.clear()
         fetching.clear()
         asked.clear()
         files.clear()
@@ -2165,6 +2213,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         audit.remove(host)
         hostUsage.remove(host)
         recentUsage.remove(host)
+        scopedOf(host).forEach { scopedUsage.remove(it) }
         hostCapabilities.remove(host)
         clashes.remove(host)
         clashAgents.remove(host)
