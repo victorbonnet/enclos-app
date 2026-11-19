@@ -18,6 +18,8 @@ junit = "4.13.2"
 json = "20260814"
 androidx-test-runner = "1.7.0"
 androidx-test-ext-junit = "1.3.0"
+robolectric = "4.17"
+androidx-test-espresso = "3.7.0"
 
 [libraries]
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "androidx-compose-bom" }
@@ -53,11 +55,21 @@ firebase-messaging = { module = "com.google.firebase:firebase-messaging", versio
 androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "androidx-fragment" }
 # Unit tests on the JVM, for what needs no phone
 junit = { module = "junit:junit", version.ref = "junit" }
-# org.json for those tests: android.jar's copy is a stub off the phone
+# org.json for those tests: android.jar's copy is a stub off the phone (Robolectric tests use Android's own)
 json = { module = "org.json:json", version.ref = "json" }
-# Instrumented tests, on a phone or an emulator, for what needs Android itself (SQLite)
+# Instrumented tests, on a phone or an emulator, for what needs a real device
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidx-test-runner" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidx-test-ext-junit" }
+# Android's own classes on the JVM, for the tests that need them: the
+# store's SQLite, Compose, Android's own org.json
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
+# Compose tests wait for idle through Espresso. The Espresso ui-test-junit4
+# brings (3.5.0) calls InputManager.getInstance(), which Robolectric's
+# Android 17 no longer has; 3.7.0 asks the context for it
+androidx-test-espresso-core = { module = "androidx.test.espresso:espresso-core", version.ref = "androidx-test-espresso" }
+# The empty activity Compose tests show their content in, in debug builds only
+androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }

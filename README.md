@@ -24,7 +24,7 @@ With an updated bridge, the host's person can create a sandbox and install a run
 
 ## Build
 
-Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK, the NDK version named in `android/gradle/libs.versions.toml` (`sdkmanager "ndk;<version>"`), JDK 17 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).
+Needs Rust (the version in `rust-toolchain.toml` is installed by `rustup`), the Android SDK, the NDK version named in `android/gradle/libs.versions.toml` (`sdkmanager "ndk;<version>"`), JDK 21 and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk).
 
 ```sh
 just android

@@ -242,6 +242,7 @@ private fun can(capability: String): String? = when (capability) {
     "activity" -> "says what it is doing"
     "tasks" -> "reports its tasks"
     "task_details" -> "shares its tasks' details"
+    "model" -> "lets its model be chosen"
     else -> null
 }
 
@@ -253,7 +254,7 @@ private fun can(capability: String): String? = when (capability) {
  * controls.
  */
 @Composable
-fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (String) -> Unit, start: (Agent) -> Unit, openRoutines: () -> Unit) {
+fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (String) -> Unit, start: (Agent) -> Unit, openRoutines: () -> Unit, openModel: () -> Unit) {
     val p = palette
     val agent = model.agents.firstOrNull { it.address == address }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
@@ -358,11 +359,25 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                     }
                 }
             }
+            if (agent.offersModel) {
+                Section("Model") {
+                    SettingRow(Modifier.clickable(onClickLabel = "Choose its model", onClick = openModel)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text(model.models.options[agent.address]?.current?.label ?: "Model", style = Type.name, color = p.text)
+                                Text("The model provider and model it uses for all its conversations.", style = Type.small, color = p.textMuted)
+                            }
+                            Glyph(Glyphs.chevron, p.textFaint, size = 16.dp)
+                        }
+                    }
+                }
+            }
             Section("Runs on") {
                 Info("Runtime", agent.runtime.replaceFirstChar { it.uppercase() })
                 Info("Sandbox", agent.sandbox)
                 Info("Host", "${agent.host} · ${if (model.connected(agent.host)) "connected" else model.links[agent.host].shown()}")
-                val does = agent.capabilities.mapNotNull(::can)
+                // Choosing the model is the host's person's alone.
+                val does = agent.capabilities.filter { it != "model" || agent.offersModel }.mapNotNull(::can)
                 Info("Can", if (does.isEmpty()) "known once its host reaches it" else does.joinToString(", "))
             }
             if (commands.isNotEmpty()) {
