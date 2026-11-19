@@ -94,8 +94,30 @@ class FileComposerControlsTest {
             node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
             assertEquals("label=$label: expected one text layout", 1, layouts.size)
             val layout = layouts.single()
-            val diagnostic = "label=$label size=${layout.size} lineCount=${layout.lineCount} " +
-                "didOverflowWidth=${layout.didOverflowWidth} didOverflowHeight=${layout.didOverflowHeight}"
+            val semantics = node.fetchSemanticsNode()
+            val input = layout.layoutInput
+            val diagnostic = buildString {
+                appendLine("label=$label size=${layout.size} lineCount=${layout.lineCount} " +
+                    "hasVisualOverflow=${layout.hasVisualOverflow} " +
+                    "didOverflowWidth=${layout.didOverflowWidth} didOverflowHeight=${layout.didOverflowHeight}")
+                appendLine("constraints=${input.constraints} text=${input.text.text} " +
+                    "maxLines=${input.maxLines} softWrap=${input.softWrap} overflow=${input.overflow} " +
+                    "layoutDirection=${input.layoutDirection}")
+                appendLine("font/style=${input.style} density=${input.density.density} " +
+                    "fontScale=${input.density.fontScale}")
+                appendLine("paragraphWidth=${layout.multiParagraph.width} " +
+                    "paragraphHeight=${layout.multiParagraph.height} " +
+                    "didExceedMaxLines=${layout.multiParagraph.didExceedMaxLines}")
+                appendLine("nodeBoundsInRoot=${semantics.boundsInRoot} " +
+                    "nodeBoundsInWindow=${semantics.boundsInWindow} nodeSize=${semantics.size}")
+                for (line in 0 until layout.lineCount) {
+                    appendLine("line=$line start=${layout.getLineStart(line)} " +
+                        "end=${layout.getLineEnd(line)} visibleEnd=${layout.getLineEnd(line, visibleEnd = true)} " +
+                        "top=${layout.getLineTop(line)} bottom=${layout.getLineBottom(line)} " +
+                        "left=${layout.getLineLeft(line)} right=${layout.getLineRight(line)} " +
+                        "ellipsis=${layout.isLineEllipsized(line)}")
+                }
+            }
             assertFalse(diagnostic, layout.hasVisualOverflow)
             if (label.contains(name)) {
                 assertTrue("$diagnostic: full filename must wrap", layout.lineCount > 1)
