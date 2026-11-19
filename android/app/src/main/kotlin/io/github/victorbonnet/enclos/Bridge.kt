@@ -168,12 +168,17 @@ class BridgeConnection(
 
     /** OkHttp send is enqueue-only. Pace uploads before sealing so no nonce is skipped. */
     fun sendPaced(frame: JSONObject): Boolean {
+        if (Thread.currentThread().isInterrupted) { close("File send interrupted"); return false }
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60)
         while (!ended.get() && (socket?.queueSize() ?: return false) > 128_000) {
             if (System.nanoTime() > deadline) { close("Sending files timed out"); return false }
-            Thread.sleep(10)
+            try { Thread.sleep(10) } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                close("File send interrupted")
+                return false
+            }
         }
-        return !ended.get() && send(frame)
+        return !Thread.currentThread().isInterrupted && !ended.get() && send(frame)
     }
 
     /** Ends the connection from the app's side, saying [why]. */

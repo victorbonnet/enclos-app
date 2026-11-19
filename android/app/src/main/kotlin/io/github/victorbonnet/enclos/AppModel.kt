@@ -1452,7 +1452,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 }
                 // The person's own, as the bridge stored it: sent.
                 if (line.from != "agent") {
-                    outgoing.stored(host.name, id, m.getString("id"))
                     outgoing.shown(id, line.text)
                 }
                 if (line.from == "agent") {
@@ -1631,6 +1630,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** The screen of [conversation] was left: a draft with nothing sent goes, as if never started. */
     fun left(conversation: String) {
         if (conversation !in drafts || !lines[conversation].isNullOrEmpty()) return
+        outgoing.forget(setOf(conversation))
         drafts -= conversation
         conversations.removeAll { it.id == conversation }
     }
@@ -1926,7 +1926,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Buttons send exactly their label and keep any text already in the composer's draft. */
     fun sendSuggested(conversation: Conversation, line: Line, reply: String): String? {
-        return outgoing.sendSuggested(conversation.id, line, reply, lines[conversation.id].orEmpty()) { send(conversation, it) }
+        return outgoing.sendSuggested(conversation.id, line, reply, lines[conversation.id].orEmpty()) { send(conversation, it, includeFiles = false) }
     }
 
     /**
@@ -1940,13 +1940,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         agents.any { it.host == c.host && it.name == c.agent && "incoming_files" in it.capabilities })
 
     private val fileWorker = Executors.newSingleThreadExecutor()
-    private fun sendFiles(c: Conversation, text: String): String? {
+    private fun sendFiles(c: Conversation, text: String, retry: SendingFiles.Retry? = null): String? {
         val state = outgoing.files
         if (!offersFiles(c) || !connected(c.host)) return "Files are unavailable for this agent."
         if (outgoing.waitingHost(c.host)) return "Wait for the current message."
-        val files = state.drafts[c.id].orEmpty().toList()
+        if (retry == null && c.id in state.retries) return "Retry or discard the original file message first."
+        val files = retry?.files ?: state.drafts[c.id].orEmpty().toList()
         if (files.size !in 1..4 || files.any { !validSendFile(it.name, it.mime, it.bytes.size) }) return "Invalid files."
-        val id = state.id(c.id, text)
+        val id = retry?.id ?: state.id(c.id, text)
         val begin = message("message.begin", "conversation" to c.id, "text" to text,
             "files" to files.map { it.declaration() }).put("id", id)
         if (!fits(begin)) return "Message is too long."
@@ -1956,7 +1957,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 if (!connection.send(message(frame.type, *frame.fields.toTypedArray()))) return "Not connected."
             }
         }
-        outgoing.send(c.id, c.host, text) { id }
+        outgoing.send(c.id, c.host, text, withFiles = true, preserveDraft = retry != null) { id }
         val token = Any()
         state.active[c.id] = token
         state.progress[c.id] = 0
@@ -1966,7 +1967,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 ok = state.active[c.id] === token && connection.sendPaced(begin)
                 if (ok) for ((n, part) in fileParts(id, files).withIndex()) {
                     if (state.active[c.id] !== token || !state.current(c.id, id) || !connection.sendPaced(part)) { ok = false; break }
-                    main.post { if (c.id in state.progress) state.progress[c.id] = ((n + 1) * 100 / files.sumOf { (it.bytes.size + 44_999) / 45_000 }) }
+                    main.post { if (state.active[c.id] === token && c.id in state.progress) state.progress[c.id] = ((n + 1) * 100 / files.sumOf { (it.bytes.size + 44_999) / 45_000 }) }
                 }
             } finally {
                 if (!ok) connection.close("File send interrupted")
@@ -1988,11 +1989,16 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         return null
     }
 
-    fun send(conversation: Conversation, text: String): String? {
-        if (conversation.id in outgoing.files.preparing) return "Wait for file preparation."
+    internal fun retryFiles(c: Conversation): String? {
+        val retry = outgoing.files.retries[c.id] ?: return "No original message to retry."
+        return sendFiles(c, retry.text, retry)
+    }
+
+    fun send(conversation: Conversation, text: String, includeFiles: Boolean = true): String? {
+        if (includeFiles && conversation.id in outgoing.files.preparing) return "Wait for file preparation."
         if (ConversationKey(conversation.host, conversation.id) in deletion.pending) return "This conversation is being deleted."
         if (ConversationKey(conversation.host, conversation.id) in deletion.deleted) return "This conversation was deleted."
-        if (outgoing.files.drafts[conversation.id].orEmpty().isNotEmpty()) return sendFiles(conversation, text)
+        if (includeFiles && outgoing.files.drafts[conversation.id].orEmpty().isNotEmpty()) return sendFiles(conversation, text)
         said.remove(conversation.host)
         // A draft becomes a conversation on the bridge with its first message
         // ([firstSent]); it stays a draft until the bridge sends it back, so a
@@ -2004,7 +2010,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (!fits(out)) {
             return "Too long to send: ${text.toByteArray(Charsets.UTF_8).size / 1000} KB, and at most about 63 KB go at once."
         }
-        val sent = outgoing.send(conversation.id, conversation.host, text) transmit@{
+        val sent = outgoing.send(conversation.id, conversation.host, text, withFiles = false) transmit@{
             if (!connected(conversation.host)) return@transmit null
             val connection = connections[conversation.host] ?: return@transmit null
             for ((i, frame) in frames.withIndex()) {
@@ -2181,6 +2187,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val ids = conversations.filter { it.host == name }.map { it.id }.toSet()
         val attached = ids.flatMap { lines[it].orEmpty() }.flatMap { it.attachments }
         unreadable.remove(name)
+        outgoing.files.forgetHost(name)
         outgoing.forget(ids)
         drafts -= ids
         ids.forEach {
@@ -2313,6 +2320,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         taskDetails.forget(host)
         saving.execute { taskCache.edit { taskCache.all.keys.filter { it.startsWith("$host/") }.forEach { remove(it) } } }
         val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
+        outgoing.files.forgetHost(host)
+        outgoing.forget(ids)
         conversations.removeAll { it.host == host }
         ids.forEach { lines.remove(it) }
         ids.forEach { usage.remove(it); turnUsage.remove(it) }

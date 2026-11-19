@@ -9,6 +9,25 @@ import java.util.Base64
 
 @RunWith(RobolectricTestRunner::class)
 class SendingFilesTest {
+    @Test fun lifecycle_tokens_survive_metadata_and_siblings_but_not_discard_or_host_reset() {
+        val state = SendingFiles()
+        val c = Conversation("h", "a", "home.a")
+        val token = state.selection(c.host, c.id)
+        val renamed = c.copy()
+        assertEquals(token, state.selection(renamed.host, renamed.id))
+        val sibling = state.selection("h", "sibling")
+        state.forget("sibling")
+        assertTrue(state.owns(c.id, token))
+        assertFalse(state.owns("sibling", sibling))
+        state.forgetHost("h") // works even when AppModel's conversation inventory is empty
+        assertFalse(state.owns(c.id, token))
+        val replacement = state.selection("h", c.id)
+        assertNotEquals(token, replacement)
+        assertFalse("old picker/preparation/camera completion", state.owns(c.id, token))
+        state.forget(c.id)
+        assertFalse("discarded navigation", state.owns(c.id, replacement))
+    }
+
     @Test fun discard_invalidates_inflight_preparation_and_errors() {
         val state = SendingFiles()
         val token = Any()
@@ -16,12 +35,12 @@ class SendingFilesTest {
         state.preparing["other"] = unrelated
         state.preparing["c"] = token
         state.errors["c"] = "Could not read file."
-        val generation = state.generation
+        val generation = state.selection("h", "c")
         state.forget("c")
         assertNull(state.preparing["c"])
         assertSame(unrelated, state.preparing["other"])
         assertNull(state.errors["c"])
-        assertTrue(state.generation > generation)
+        assertTrue(!state.owns("c", generation))
         state.preparing["other"] = Any()
         state.errors["other"] = "Camera unavailable."
         state.clear()
@@ -68,10 +87,10 @@ class SendingFilesTest {
         out.shown("c", "hi") // text alone is not a receipt for this upload
         assertTrue(out.waiting("c"))
         out.ended("host", "lost")
-        assertEquals("hi", out.unsent["c"])
-        assertEquals(listOf(file), out.files.drafts["c"])
-        assertEquals(id, out.files.id("c", "hi"))
-        out.send("c", "host", "hi") { id }
+        assertNull(out.unsent["c"])
+        assertArrayEquals(file.bytes, out.files.retries["c"]!!.files.single().bytes)
+        assertEquals(id, out.files.retries["c"]?.id)
+        out.send("c", "host", "hi", withFiles = true, preserveDraft = true) { id }
         out.acknowledged("other", id)
         assertTrue(out.waiting("c"))
         out.acknowledged("host", id)
@@ -85,22 +104,20 @@ class SendingFilesTest {
         assertTrue(out.files.drafts.isEmpty())
     }
 
-    @Test fun stored_identity_and_timeout_preserve_explicit_retry() {
+    @Test fun ack_only_confirmation_and_timeout_preserve_explicit_retry() {
         val out = Outgoing()
         val f = SendFile("x.txt", "text/plain", byteArrayOf(1))
         out.files.drafts["c"] = listOf(f)
         val id = out.files.id("c", "same")
         out.send("c", "h", "same") { id }
-        out.stored("h", "c", "another")
-        out.stored("other", "c", id)
         assertTrue(out.waitingHost("h"))
         assertFalse(out.waitingHost("unrelated"))
         out.timedOut("c", id)
         assertFalse(out.waiting("c"))
-        assertEquals("same", out.unsent["c"])
-        assertEquals(listOf(f), out.files.drafts["c"])
-        assertEquals(id, out.files.id("c", "same"))
-        out.stored("h", "c", id)
+        assertNull(out.unsent["c"])
+        assertArrayEquals(f.bytes, out.files.retries["c"]!!.files.single().bytes)
+        assertEquals(id, out.files.retries["c"]?.id)
+        out.acknowledged("h", id)
         assertNull(out.files.drafts["c"])
         assertNull(out.unsent["c"])
     }
@@ -112,14 +129,14 @@ class SendingFilesTest {
         val id = out.files.id("c", "")
         out.send("c", "h", "") { id }
         assertEquals("c", out.refused(id, "plugin failed"))
-        assertEquals(listOf(f), out.files.drafts["c"])
-        assertEquals(id, out.files.id("c", ""))
-        val generation = out.files.generation
+        assertArrayEquals(f.bytes, out.files.retries["c"]!!.files.single().bytes)
+        assertEquals(id, out.files.retries["c"]?.id)
+        val generation = out.files.selection("h", "c")
         val camera = java.io.File.createTempFile("camera", ".jpg")
         out.files.cameras["c"] = camera
         out.forget(listOf("c"))
         assertFalse(camera.exists())
-        assertTrue(out.files.generation > generation)
+        assertTrue(!out.files.owns("c", generation))
         assertFalse(out.pending("c", id))
     }
 

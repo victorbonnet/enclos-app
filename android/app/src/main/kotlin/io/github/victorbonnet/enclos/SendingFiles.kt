@@ -28,8 +28,16 @@ internal data class SendFile(val name: String, val mime: String, val bytes: Byte
 
 /** Memory belongs only to a draft or an explicitly retryable send; no persistent hidden copies. */
 internal class SendingFiles {
-    var generation: Long = 0
-        private set
+    private val owners = mutableStateMapOf<String, String>()
+    private val ownerHosts = mutableMapOf<String, String>()
+    fun selection(host: String, c: String): String {
+        ownerHosts[c] = host
+        return owners.getOrPut(c) { UUID.randomUUID().toString() }
+    }
+    fun owns(c: String, token: String?) = token != null && owners[c] == token
+    fun forgetHost(host: String) {
+        ownerHosts.filterValues { it == host }.keys.toList().forEach(::forget)
+    }
     val active = java.util.concurrent.ConcurrentHashMap<String, Any>()
     val cameras = mutableMapOf<String, java.io.File>()
     val preparing = mutableStateMapOf<String, Any>()
@@ -37,7 +45,18 @@ internal class SendingFiles {
     val drafts = mutableStateMapOf<String, List<SendFile>>()
     val progress = mutableStateMapOf<String, Int>()
     private val ids = java.util.concurrent.ConcurrentHashMap<String, String>()
-    fun current(c: String, id: String) = ids[c] == id
+    data class Retry(val id: String, val text: String, val files: List<SendFile>)
+    val retries = mutableStateMapOf<String, Retry>()
+    fun retain(c: String, id: String, text: String) {
+        if (c !in retries) {
+            retries[c] = Retry(id, text, drafts[c].orEmpty().map { it.copy(bytes = it.bytes.copyOf()) })
+            drafts.remove(c)
+            payloads.remove(c)
+            texts.remove(c)
+        }
+    }
+    fun discardRetry(c: String) { retries.remove(c); ids.remove(c); texts.remove(c); payloads.remove(c) }
+    fun current(c: String, id: String) = retries[c]?.id == id || ids[c] == id
     private val payloads = mutableMapOf<String, List<SendFile>>()
     private val texts = mutableMapOf<String, String>()
     fun id(c: String, text: String): String {
@@ -51,8 +70,8 @@ internal class SendingFiles {
         ids.remove(c)
         payloads.remove(c)
     }
-    fun forget(c: String) { preparing.remove(c); errors.remove(c); cameras.remove(c)?.delete(); generation++; active.remove(c); drafts.remove(c); progress.remove(c); ids.remove(c); texts.remove(c); payloads.remove(c) }
-    fun clear() { preparing.clear(); errors.clear(); cameras.values.forEach { it.delete() }; cameras.clear(); generation++; active.clear(); drafts.clear(); progress.clear(); ids.clear(); texts.clear(); payloads.clear() }
+    fun forget(c: String) { retries.remove(c); preparing.remove(c); errors.remove(c); cameras.remove(c)?.delete(); owners.remove(c); ownerHosts.remove(c); active.remove(c); drafts.remove(c); progress.remove(c); ids.remove(c); texts.remove(c); payloads.remove(c) }
+    fun clear() { retries.clear(); preparing.clear(); errors.clear(); cameras.values.forEach { it.delete() }; cameras.clear(); owners.clear(); ownerHosts.clear(); active.clear(); drafts.clear(); progress.clear(); ids.clear(); texts.clear(); payloads.clear() }
 }
 
 /** Lazy ordered frames, bounded to one decoded chunk at a time; retries start from zero. */

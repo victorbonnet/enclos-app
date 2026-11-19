@@ -11,6 +11,8 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
  * bridge shows it back as stored (its `message`, from the person). Until
  * then it is kept here; should the connection end, or the bridge refuse
  * it, first, the text goes back into the field with why it was not sent.
+ * File sends instead keep an immutable original separately until an ACK; canonical
+ * history has no origin ID. Failure means unknown delivery, never a merged draft.
  * Nothing is queued to go later: the person sends it again.
  */
 class Outgoing {
@@ -22,23 +24,25 @@ class Outgoing {
     val notSent: SnapshotStateMap<String, String> = mutableStateMapOf()
 
     /** A message handed to the connection: [id] is its frame's, [back] whether its text was put back in the field since. */
-    private data class Sent(val host: String, val id: String, val text: String, val back: Boolean = false, val withFiles: Boolean = false)
+    private data class Sent(val host: String, val id: String, val text: String, val back: Boolean = false, val withFiles: Boolean = false, val literal: Boolean = false)
 
     /** By conversation: what was sent and the bridge has not shown back yet, oldest first. */
     private val sent = mutableStateMapOf<String, List<Sent>>()
 
     fun waiting(conversation: String): Boolean = sent[conversation].orEmpty().any { !it.back }
 
+    internal fun waitingFiles(conversation: String): Boolean = sent[conversation].orEmpty().any { it.withFiles && !it.back }
+
     /** Literal reply path, rechecked at tap time; preserve drafts on both success and failure. */
     fun sendSuggested(conversation: String, line: Line, reply: String, history: List<Line>, send: (String) -> String?): String? {
         if (waiting(conversation) || reply !in offeredReplies(line, history)) return "This reply is no longer available."
         val draft = unsent[conversation]
+        val previousError = notSent[conversation]
+        val before = sent[conversation].orEmpty().map { it.id }.toSet()
         val error = send(reply)
-        if (error == null) {
-            if (draft != null) write(conversation, draft)
-        } else if (unsent[conversation] != reply) {
-            restore(conversation, listOf(reply), error)
-        } else notSent[conversation] = error
+        put(conversation, sent[conversation].orEmpty().map { if (it.id !in before) it.copy(literal = true) else it })
+        if (draft == null) unsent.remove(conversation) else unsent[conversation] = draft
+        if (previousError == null) notSent.remove(conversation) else notSent[conversation] = previousError
         return error
     }
 
@@ -53,11 +57,12 @@ class Outgoing {
      * it could not (not connected, the frame refused). The text leaves the
      * field only once handed over; returns whether it was.
      */
-    fun send(conversation: String, host: String, text: String, transmit: () -> String?): Boolean {
+    fun send(conversation: String, host: String, text: String, withFiles: Boolean = files.drafts[conversation].orEmpty().isNotEmpty(), preserveDraft: Boolean = false, transmit: () -> String?): Boolean {
         val id = transmit() ?: return false
         notSent.remove(conversation)
-        unsent.remove(conversation)
-        sent[conversation] = sent[conversation].orEmpty().filterNot { it.id == id } + Sent(host, id, text, withFiles = files.drafts[conversation].orEmpty().isNotEmpty())
+        if (!preserveDraft) unsent.remove(conversation)
+        if (withFiles) files.retain(conversation, id, text)
+        sent[conversation] = sent[conversation].orEmpty().filterNot { it.id == id } + Sent(host, id, text, withFiles = withFiles)
         return true
     }
 
@@ -79,23 +84,28 @@ class Outgoing {
         put(conversation, now.filterIndexed { i, _ -> i != at })
     }
 
+    internal fun discardRetry(c: String) {
+        val retry = files.retries[c] ?: return
+        if (waitingFiles(c)) return
+        files.discardRetry(c)
+        put(c, sent[c].orEmpty().filterNot { it.id == retry.id })
+        notSent.remove(c)
+    }
     internal fun waitingHost(host: String) = sent.values.flatten().any { it.host == host && it.withFiles && !it.back }
     internal fun pending(c: String, id: String) = sent[c].orEmpty().any { it.id == id && !it.back }
     internal fun timedOut(c: String, id: String) {
         val one = sent[c].orEmpty().firstOrNull { it.id == id && !it.back } ?: return
         ended(one.host, "Receipt timed out; check history and retry explicitly.")
     }
-    internal fun stored(host: String, conversation: String, id: String) {
-        if (sent[conversation].orEmpty().any { it.host == host && it.id == id && it.withFiles })
-            acknowledged(host, id)
-    }
-
     internal fun acknowledged(host: String, id: String) {
         for ((c, now) in sent.toList()) {
             val one = now.firstOrNull { it.host == host && it.id == id && it.withFiles } ?: continue
-            if (one.back && unsent[c] == one.text) unsent.remove(c)
-            notSent.remove(c)
-            files.forget(c)
+            if (files.current(c, one.id)) {
+                files.discardRetry(c)
+                files.active.remove(c)
+                files.progress.remove(c)
+                notSent.remove(c)
+            }
             put(c, now - one)
         }
     }
@@ -107,7 +117,9 @@ class Outgoing {
             if (lost.isEmpty()) continue
             files.active.remove(conversation)
             files.progress.remove(conversation)
-            restore(conversation, lost.map { it.text }, why)
+            val textOnly = lost.filterNot { it.withFiles || it.literal }
+            if (textOnly.isNotEmpty()) restore(conversation, textOnly.map { it.text }, why)
+            if (lost.any { it.withFiles }) notSent[conversation] = "Delivery unknown. Check history before retrying the original message."
             put(conversation, now.map { if (it in lost) it.copy(back = true) else it })
         }
     }
@@ -116,9 +128,18 @@ class Outgoing {
     fun refused(of: String, why: String): String? {
         for ((conversation, now) in sent.toList()) {
             val one = now.firstOrNull { it.id == of } ?: continue
-            files.active.remove(conversation)
-            files.progress.remove(conversation)
-            if (!one.back) restore(conversation, listOf(one.text), why) else notSent[conversation] = why
+            if (one.withFiles) {
+                if (!files.current(conversation, one.id)) {
+                    put(conversation, now - one)
+                    return conversation
+                }
+                files.active.remove(conversation)
+                files.progress.remove(conversation)
+                notSent[conversation] = "Delivery unknown. Check history before retrying the original message."
+                put(conversation, now.map { if (it.id == of) it.copy(back = true) else it })
+                return conversation
+            }
+            if (!one.back && !one.literal) restore(conversation, listOf(one.text), why) else if (conversation !in notSent) notSent[conversation] = why
             // Refused, it will not be shown back.
             put(conversation, now - one)
             return conversation
