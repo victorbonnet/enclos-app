@@ -109,7 +109,12 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
                         Text("Usage", style = Type.name, color = p.text)
                         if (usageAvailable && usage.request == null) AuditAction("Refresh") { model.loadUsage(name, usage.window) }
                     }
-                    Text("Tokens each agent used in your conversations, as its runtime counted them.", style = Type.small, color = p.textMuted)
+                    Text(
+                        if (model.canReadCost(name)) "Tokens each agent used in your conversations, as its runtime counted them, and what the host estimates they cost from its price list: a guide, not a bill."
+                        else "Tokens each agent used in your conversations, as its runtime counted them.",
+                        style = Type.small,
+                        color = p.textMuted,
+                    )
                     UsageWindowTabs(usage.selected, enabled = usageAvailable && usage.request == null) { model.loadUsage(name, it) }
                     when {
                         !live -> Text(if (usage.loaded) "Saved in memory. Reconnect to refresh." else "Connect to this host to see its usage.", style = Type.small, color = p.textMuted)
@@ -145,7 +150,16 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
                     }
                 }
             }
-            items(if (usage.rowsShown) usage.agents else emptyList(), key = { "usage:${it.agent}" }) { row -> AgentUsageRow(model.agentLabel("$name/${row.agent}"), row.agent, row.total, colors[row.agent], appOnly = usage.outside && !row.outside) }
+            // Each sandbox's total and cost, from a host that estimates cost; each opens its page,
+            // which charts its cost by day.
+            if (usage.rowsShown && usage.sandboxes.isNotEmpty()) {
+                item { UsageHeading("By sandbox") }
+                items(usage.sandboxes, key = { "usage-sandbox:${it.sandbox}" }) { row ->
+                    SandboxUsageRow(row) { openSandbox("$name/${row.sandbox}") }
+                }
+                item { UsageHeading("By agent") }
+            }
+            items(if (usage.rowsShown) usage.agents else emptyList(), key = { "usage:${it.agent}" }) { row -> AgentUsageRow(model.agentLabel("$name/${row.agent}"), row.agent, row.total, row.cost, colors[row.agent], appOnly = usage.outside && !row.outside) }
             item {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -179,9 +193,35 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
     }
 }
 
-/** One agent's usage over the window: its name, its tokens, and how they split. */
 @Composable
-private fun AgentUsageRow(label: String, address: String, total: UsageTotal, color: Color?, appOnly: Boolean) {
+private fun UsageHeading(text: String) {
+    Text(text, style = Type.label, color = palette.textMuted, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp))
+}
+
+/** One sandbox's usage over the window: its name, its tokens and its estimated cost; it opens the sandbox's page. */
+@Composable
+private fun SandboxUsageRow(row: SandboxUsage, open: () -> Unit) {
+    val p = palette
+    Row(
+        Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Open the sandbox", onClick = open).padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.size(10.dp))
+        Text(row.sandbox, style = Type.name, color = p.text, modifier = Modifier.weight(1f))
+        Text(usageAmount(row.total, row.cost), style = Type.label, color = p.text)
+    }
+}
+
+/** A total at a glance: its tokens, or its calls when the runtime counts no token, and its estimated cost when there is one. */
+private fun usageAmount(total: UsageTotal, cost: UsageCost?): String {
+    val used = if (total.tokens.counted) "${tokensText(total.tokens.total)} tokens" else if (total.calls == 1L) "1 call" else "${total.calls} calls"
+    return shownCost(total, cost)?.let { "$used · ${costText(it)}" } ?: used
+}
+
+/** One agent's usage over the window: its name, its tokens and cost, and how they split. */
+@Composable
+private fun AgentUsageRow(label: String, address: String, total: UsageTotal, cost: UsageCost?, color: Color?, appOnly: Boolean) {
     val p = palette
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -193,11 +233,7 @@ private fun AgentUsageRow(label: String, address: String, total: UsageTotal, col
                 // Two sandboxes may have agents of one name.
                 Text(address, style = Type.code, color = p.textFaint)
             }
-            Text(
-                if (total.tokens.counted) "${tokensText(total.tokens.total)} tokens" else if (total.calls == 1L) "1 call" else "${total.calls} calls",
-                style = Type.label,
-                color = p.text,
-            )
+            Text(usageAmount(total, cost), style = Type.label, color = p.text)
         }
         Text(usageLine(total), style = Type.small, color = p.textMuted)
         // Its plugin does not report its routines and other chats: the app's alone.

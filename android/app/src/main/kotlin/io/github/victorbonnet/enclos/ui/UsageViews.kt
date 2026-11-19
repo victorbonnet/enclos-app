@@ -84,6 +84,30 @@ fun UsageWindowTabs(selected: UsageWindow, enabled: Boolean, onSelect: (UsageWin
     }
 }
 
+/** Whether a sandbox's or an agent's chart shows its estimated cost or its tokens, one selected. */
+@Composable
+fun UsageMeasureTabs(cost: Boolean, enabled: Boolean, onSelect: (Boolean) -> Unit) {
+    val p = palette
+    Row(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(true to "Cost", false to "Tokens").forEach { (measure, label) ->
+            val on = measure == cost
+            val shape = RoundedCornerShape(50)
+            Text(
+                label,
+                style = Type.label,
+                color = if (on) p.bg else p.textMuted,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .selectable(selected = on, enabled = enabled, role = Role.Tab) { if (!on) onSelect(measure) }
+                    .background(if (on) p.accent else p.bg, shape)
+                    .border(1.dp, if (on) p.accent else p.textFaint, shape)
+                    .defaultMinSize(minHeight = 32.dp)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
 /**
  * The categorical colors of the chart's agents, in their fixed slot order: the reference
  * palette of the dataviz method, its light steps validated against the light background
@@ -111,7 +135,8 @@ fun SeriesDot(color: Color, modifier: Modifier = Modifier) {
  * (heaviest at the base), each part in its agent's color with a 2 dp gap of the background
  * between parts and a rounded top. The scale's top and the first and last buckets are named
  * faintly; tapping a bar reads it out above the chart, in text colors; tapping it again
- * clears it. The rows under the chart give every value as text.
+ * clears it. The rows under the chart give every value as text. A bar's values are tokens,
+ * or, for a cost chart, millionths of a dollar: [amount] writes one, [unit] follows a total.
  */
 @Composable
 fun UsageChart(
@@ -121,6 +146,12 @@ fun UsageChart(
     bucketLabel: (Long) -> String,
     summary: String,
     modifier: Modifier = Modifier,
+    amount: (Long) -> String = ::tokensText,
+    unit: String = " tokens",
+    /** Whether a bar read out names each of its parts: not for a chart of one sandbox or agent. */
+    split: Boolean = true,
+    /** What a bar read out says of its whole, by its start, when its value alone does not say it all (a cost some of whose tokens had no price). */
+    barText: ((Long) -> String?)? = null,
 ) {
     val p = palette
     var picked by remember(bars) { mutableStateOf<Int?>(null) }
@@ -129,13 +160,13 @@ fun UsageChart(
         val shown = picked?.let { bars.getOrNull(it) }
         Text(
             if (shown == null) "Tap a bar to read it." else buildString {
-                append(bucketLabel(shown.at)).append(" · ").append(tokensText(shown.tokens)).append(" tokens")
-                if (shown.parts.isNotEmpty()) append(": ").append(shown.parts.joinToString(" · ") { (a, t) -> "${label(a)} ${tokensText(t)}" })
+                append(bucketLabel(shown.at)).append(" · ").append(barText?.invoke(shown.at) ?: (amount(shown.tokens) + unit))
+                if (split && shown.parts.isNotEmpty()) append(": ").append(shown.parts.joinToString(" · ") { (a, t) -> "${label(a)} ${amount(t)}" })
             },
             style = Type.small,
             color = if (shown == null) p.textFaint else p.text,
         )
-        Text(tokensText(top), style = Type.code, color = p.textFaint)
+        Text(amount(top), style = Type.code, color = p.textFaint)
         Canvas(
             Modifier
                 .fillMaxWidth()
