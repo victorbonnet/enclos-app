@@ -97,6 +97,31 @@ class StoreUpgradeTest {
         }
     }
 
+    @Test
+    fun a_task_line_is_kept_with_its_task_and_one_unreadable_reads_as_its_text() {
+        old(11, tablesAt(11))
+        val event = TaskEvent("t_a09759c7", "S2a", "lab/reviewer", TaskEventKind.Triage, TaskState.Queued)
+        Store(context).use { store ->
+            store.message("mac", "c1", Line(8, "agent", "🛑 Kanban t_a09759c7 routed to TRIAGE", "task_event", 1_700_000_001, taskEvent = event))
+            store.message("mac", "c1", Line(9, "agent", "plain", "notify", 1_700_000_002))
+            store.writableDatabase.execSQL(
+                "INSERT INTO messages (host, seq, conversation, sender, text, kind, time, task_event) VALUES " +
+                    "('mac', 10, 'c1', 'agent', 'pinged', 'task_event', 1700000003, '{\"task\":\"\",\"title\":\"x\",\"event\":\"done\"}')",
+            )
+        }
+        for (lines in Store(context).use { listOf(it.recent().lines.getValue("c1"), it.lines().getValue("c1")) }) {
+            val (first, task, plain, unreadable) = lines
+            assertEquals("hello", first.text)
+            assertNull(first.taskEvent)
+            assertEquals("task_event", task.kind)
+            assertEquals(event, task.taskEvent)
+            assertEquals("🛑 Kanban t_a09759c7 routed to TRIAGE", task.text)
+            assertNull(plain.taskEvent)
+            assertEquals("notify" to null, unreadable.kind to unreadable.taskEvent)
+            assertEquals("pinged", unreadable.text)
+        }
+    }
+
     /** The tables at [version]: as recorded, else version 1 with the steps up to it. */
     private fun tablesAt(version: Int): List<String> = when (version) {
         1 -> V1

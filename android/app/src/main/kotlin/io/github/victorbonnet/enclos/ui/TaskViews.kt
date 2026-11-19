@@ -28,6 +28,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.AgentTask
@@ -82,6 +83,33 @@ fun TaskCard(task: AgentTask, assignee: String, now: Long, open: () -> Unit) {
                 )
             }
         }
+    }
+}
+
+/**
+ * A task line: a runtime's task event (enclos ADR 0071), the runtime about
+ * one of its tasks, not the agent talking. A quiet centred line, small and
+ * faint, with its time, as a status line is, never a bubble: the task's id
+ * and title ([idAndTitle], which gives way first when the line is too long)
+ * then its assignee and what happened ([what]) and its [time], which keep
+ * their room and are cut short only when they alone do not fit the width, as
+ * a long shown name on a narrow phone can. Every word comes from
+ * the sandbox, drawn as plain text. With [open], the host's person's phone
+ * keeps the task, and **Open task** under the line opens its sheet; there is
+ * no other action on it.
+ */
+@Composable
+fun TaskEventLine(idAndTitle: String, what: String, time: String, open: (() -> Unit)?) {
+    val p = palette
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Row(Modifier.semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically) {
+            Text(idAndTitle, style = Type.meta, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(" · $what · $time", style = Type.meta, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (open != null) TextLink("Open task", open)
     }
 }
 
