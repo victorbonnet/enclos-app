@@ -1,8 +1,43 @@
 package io.github.victorbonnet.enclos
 
 /** A sandbox listed by its host, including one that has no runtime or agent yet. */
-data class Sandbox(val host: String, val name: String, val runtime: String?, val state: String? = null) {
+data class Sandbox(
+    val host: String,
+    val name: String,
+    val runtime: String?,
+    val state: String? = null,
+    /** Its runtime's version installed, when the host knows it (enclos ADR 0074). */
+    val runtimeVersion: String? = null,
+    /** Its runtime's latest release, when the host looked it up. */
+    val release: RuntimeRelease? = null,
+) {
     val address: String get() = "$host/$name"
+
+    /** Its runtime and the version installed, `Hermes 0.23.1`; the runtime alone when the host does not know it. */
+    val runtimeShown: String? get() = runtime?.let { listOfNotNull(runtimeName(it), runtimeVersion).joinToString(" ") }
+
+    /** Its runtime's latest release, when it is newer than the version installed. */
+    val update: RuntimeRelease? get() = release?.takeIf { it.newer == true }
+}
+
+/** A runtime's latest release, the one its installer installs by default, as the host found it. */
+data class RuntimeRelease(
+    val version: String,
+    /** Whether the host's enclos was checked with it. */
+    val checked: Boolean,
+    /** Whether it is newer than the version installed: null when the host cannot tell. */
+    val newer: Boolean?,
+) {
+    /** `0.23.2 available · checked with this host's enclos`. */
+    val shown: String
+        get() = "$version available · " + if (checked) "checked with this host's enclos" else "not checked with this host's enclos yet"
+}
+
+/** A runtime's name as people write it. */
+fun runtimeName(runtime: String): String = when (runtime) {
+    "hermes" -> "Hermes"
+    "openclaw" -> "OpenClaw"
+    else -> runtime.replaceFirstChar { it.uppercase() }
 }
 
 /** A runtime the host offers for installation, in the host's order. */

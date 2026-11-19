@@ -1200,7 +1200,9 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
                 val agents = its.filter { it.sandbox == sandbox.name }
                 item(key = "sandbox-${sandbox.address}") {
                     Arriving {
-                        val runtime = sandbox.runtime?.replaceFirstChar { it.uppercase() } ?: "No runtime installed"
+                        val runtime = sandbox.runtimeShown
+                            ?.let { if (sandbox.update != null) "$it · update available" else it }
+                            ?: "No runtime installed"
                         ListHeading(sandbox.name, runtime, open = { openSandbox(sandbox.address) }, top = 12.dp) { SandboxMark(live, side = 16.dp) }
                     }
                 }

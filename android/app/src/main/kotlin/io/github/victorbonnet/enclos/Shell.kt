@@ -643,6 +643,8 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
         }
         val live = model.connected(host)
         val runtime = (listed?.runtime ?: agents.firstOrNull()?.runtime)?.replaceFirstChar { it.uppercase() }
+        // With the version installed when the host lists it (enclos ADR 0074).
+        val runtimeShown = listed?.runtimeShown ?: runtime
         val groups = model.conversations
             .filter { it.group && !it.archived && it.host == host && it.members.first().substringBefore('/') == sandbox }
             .sortedByDescending { model.lines[it.id]?.lastOrNull()?.time ?: 0L }
@@ -651,7 +653,7 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                 SandboxMark(live, side = 56.dp)
                 Gap(14.dp)
                 Text(sandbox, style = Type.heading, color = p.text)
-                Text("${runtime ?: "No runtime installed"} · $host", style = Type.code, color = p.textFaint)
+                Text("${runtimeShown ?: "No runtime installed"} · $host", style = Type.code, color = p.textFaint)
             }
             if (runtime == null) {
                 Gap(24.dp)
@@ -693,7 +695,16 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                 SandboxPolicySummary(model, address, openPolicy)
             }
             ListHeading("Runs on")
-            Info("Runtime", runtime ?: "Not installed")
+            Info("Runtime", runtimeShown ?: "Not installed")
+            listed?.update?.let { release ->
+                Info("Latest", release.shown)
+                Text(
+                    "Updating the runtime from the app comes later.",
+                    style = Type.small,
+                    color = p.textMuted,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
             Info("Host", "$host · ${if (live) "connected" else model.links[host].shown()}")
             listed?.state?.let { Info("State", it) }
             Text(

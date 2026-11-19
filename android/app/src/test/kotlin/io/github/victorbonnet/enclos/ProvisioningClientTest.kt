@@ -118,4 +118,42 @@ class ProvisioningClientTest {
         assertFalse(f.client.received("mac", result(failed)))
     }
 
+    @Test fun a_sandbox_list_carries_each_runtimes_version_and_newer_release() {
+        val f = Fixture(); f.ready()
+        f.client.received("mac", JSONObject("""{"type":"sandboxes.list","sandboxes":[
+            {"sandbox":"home","runtime":"hermes","state":"running","runtime_version":"0.23.1",
+             "runtime_release":{"version":"0.23.2","checked":true,"newer":true}},
+            {"sandbox":"claw","runtime":"openclaw","state":"running",
+             "runtime_release":{"version":"2026.11.6","checked":false}},
+            {"sandbox":"lab","runtime":"hermes","state":"stopped","runtime_version":"0.23.2",
+             "runtime_release":{"version":"0.23.2","checked":true,"newer":false}},
+            {"sandbox":"empty","runtime":null,"state":"created"}
+        ]}"""))
+        val listed = f.client.sandboxesOf("mac").associateBy { it.name }
+
+        val home = listed.getValue("home")
+        assertEquals("Hermes 0.23.1", home.runtimeShown)
+        assertEquals(RuntimeRelease("0.23.2", checked = true, newer = true), home.update)
+        assertEquals("0.23.2 available · checked with this host's enclos", home.update?.shown)
+
+        // The version installed unknown: no update offered, whatever the release.
+        val claw = listed.getValue("claw")
+        assertEquals("OpenClaw", claw.runtimeShown)
+        assertEquals(RuntimeRelease("2026.11.6", checked = false, newer = null), claw.release)
+        assertNull(claw.update)
+        assertEquals("2026.11.6 available · not checked with this host's enclos yet", claw.release?.shown)
+
+        assertNull(listed.getValue("lab").update)
+        assertEquals("Hermes 0.23.2", listed.getValue("lab").runtimeShown)
+        assertNull(listed.getValue("empty").runtimeShown)
+    }
+
+    @Test fun an_older_bridges_sandbox_list_reads_as_before() {
+        val f = Fixture(); f.ready()
+        val home = f.client.sandboxesOf("mac").single()
+        assertNull(home.runtimeVersion)
+        assertNull(home.release)
+        assertNull(runtimeRelease(JSONObject("""{"checked":true,"newer":true}""")))
+    }
+
 }
