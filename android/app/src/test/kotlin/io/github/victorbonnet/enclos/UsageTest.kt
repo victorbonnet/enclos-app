@@ -43,8 +43,9 @@ class UsageTest {
         // Rounding up to the next unit takes that unit.
         assertEquals("999.9k", tokensText(999_949))
         assertEquals("1.0M", tokensText(999_950))
-        assertEquals("1.0G", tokensText(999_950_000))
-        assertEquals("9223.4P", tokensText(Long.MAX_VALUE))
+        assertEquals("1.0B", tokensText(999_950_000))
+        assertEquals("4.3B", tokensText(4_321_000_000))
+        assertEquals("9223.4Q", tokensText(Long.MAX_VALUE))
         val details = usageDetails(UsageTotal(1, Tokens(input = 1_000)))
         assertEquals("1,000", details.first { it.first == "Input" }.second)
         assertEquals("not counted", details.first { it.first == "Reasoning" }.second)
