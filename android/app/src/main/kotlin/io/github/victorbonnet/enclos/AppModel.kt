@@ -370,7 +370,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         save { openItems(host, items, coverage) }
     }
     val attentionItems: List<OpenItem> by derivedStateOf {
-        attentionItems(needsYou.items.values, approvals.values, needsYou.indexedHosts.keys, needsYou.staleHosts.keys, needsYou.coveredPolicies)
+        // A held task whose card is answered leaves at once, before the host's next index (enclos ADR 0073).
+        withoutAnswered(
+            attentionItems(needsYou.items.values, approvals.values, needsYou.indexedHosts.keys, needsYou.staleHosts.keys, needsYou.coveredPolicies),
+            heldTasks.cards,
+        )
     }
     private val attentionByAgent: Map<String, Int> by derivedStateOf { attentionCounts(attentionItems) }
     fun attentionCount(agent: String): Int = attentionByAgent[agent] ?: 0
@@ -403,6 +407,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         later = { wait, action -> main.postDelayed({ action() }, wait) },
         resync = { host -> connections[host]?.send(message("sync", "since" to since(host), "open_items" to true)) == true },
         dropped = { why -> android.util.Log.d("enclos", "held task not shown: $why") },
+        answerSupported = { host -> hostSupports(host, HELD_TASK_ANSWER) },
     )
     internal val taskBoard = TaskBoardClient(
         send = { host, command -> connections[host]?.send(command) == true },

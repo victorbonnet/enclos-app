@@ -1,5 +1,6 @@
 package io.github.victorbonnet.enclos
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 /*
@@ -7,7 +8,8 @@ import org.json.JSONObject
  * background work an agent's runtime started that has stopped and waits for a person
  * before it runs again. The runtime keeps the task; the bridge keeps a card for it in the
  * Home of the agent that started it and sends it to the host's person alone. The app
- * shows the card and offers Resume when the runtime permits it.
+ * shows the card and offers Resume when the runtime permits it and, where the bridge
+ * takes one (`held_task.answer`, enclos ADR 0073), the person's answer to the agent.
  */
 
 /** enclos-protocol's `held_task` bounds, in characters, as the bridge cuts a card. */
@@ -18,6 +20,17 @@ internal const val MAX_HELD_RESUME_CHARS = 200
 internal const val MAX_HELD_ASSIGNEE_CHARS = 64
 private const val MAX_HELD_AGENT_BYTES = 512
 
+/** enclos-protocol's bounds of an agent's ask and of the person's answer (enclos ADR 0073). */
+internal const val MAX_HELD_DECISION_CHARS = 120
+internal const val MAX_HELD_BLOCKED_CHARS = 400
+internal const val MAX_HELD_CHOICES = 4
+internal const val MAX_HELD_CHOICE_CHARS = 80
+internal const val MAX_HELD_ANSWER_CHARS = 200
+internal const val MAX_HELD_ANSWER_TEXT_CHARS = 2_000
+
+/** The bridge's capability for a person's answer to a held card (enclos ADR 0073). */
+internal const val HELD_TASK_ANSWER = "held_task.answer"
+
 /** What a card says when the runtime gave no reason (enclos-protocol's `NO_REASON`). */
 internal const val HELD_NO_REASON = "Waiting for a person."
 
@@ -27,13 +40,117 @@ internal const val HELD_NO_REASON = "Waiting for a person."
  */
 data class HeldTaskKey(val host: String, val agent: String, val task: String)
 
-/** Where a card is. `held` is the only state with a Resume; one this app does not know has none. */
+/**
+ * Where a card is. `held` is the only state with a Resume or an answer, and the only one under
+ * Needs you. `answered` is still held by the runtime, but waits on the agent, not the person.
+ * A state this app does not know has no action.
+ */
 enum class HeldTaskState(val wire: String) {
-    Held("held"), Resumed("resumed"), Released("released"), Expired("expired"), Unknown("");
+    Held("held"), Answered("answered"), Resumed("resumed"), Released("released"), Expired("expired"), Unknown("");
 
     companion object {
         fun of(wire: String): HeldTaskState = entries.firstOrNull { it != Unknown && it.wire == wire } ?: Unknown
     }
+}
+
+/**
+ * What the agent that started a task wrote for the person when it handed the hold to them
+ * (enclos ADR 0073): [decision], one question; [blocked], what is stopped and why; [choices],
+ * up to four answers, each saying what happens, or none for a free answer; [recommended], the
+ * index of the choice the agent recommends. A choice is answered by its index, the bridge's,
+ * so the app never drops or reorders one: it only changes the order they are shown in.
+ */
+data class HeldTaskAsk(
+    val decision: String,
+    val blocked: String,
+    val choices: List<String> = emptyList(),
+    val recommended: Int? = null,
+) {
+    /** The ask as the bridge writes it, for the cache. */
+    fun json(): JSONObject = JSONObject().put("decision", decision).put("blocked", blocked)
+        .apply { if (choices.isNotEmpty()) put("choices", JSONArray(choices)) }
+        .apply { recommended?.let { put("recommended", it) } }
+
+    /** The choices in the order the card shows them, each with its index: the recommended one first. */
+    fun shown(): List<Pair<Int, String>> {
+        val all = choices.mapIndexed { i, label -> i to label }
+        return all.filter { it.first == recommended } + all.filter { it.first != recommended }
+    }
+
+    companion object {
+        /**
+         * Reads an `ask` object, cut again here as the bridge cuts it: a field of the wrong type
+         * refuses the card (IllegalArgumentException). An ask the bridge would not have sent (a
+         * blank decision, more than four choices, a blank choice) reads as none, so the card is
+         * one no agent wrote, rather than offering a choice whose index the bridge reads
+         * otherwise. A `recommended` that names no choice is dropped.
+         */
+        internal fun from(json: JSONObject): HeldTaskAsk? {
+            val decision = (json.opt("decision") as? String) ?: throw IllegalArgumentException("Invalid ask decision")
+            val blocked = if (!json.has("blocked") || json.isNull("blocked")) "" else
+                (json.get("blocked") as? String) ?: throw IllegalArgumentException("Invalid ask blocked")
+            val choices = if (!json.has("choices") || json.isNull("choices")) emptyList() else {
+                val array = json.get("choices") as? JSONArray ?: throw IllegalArgumentException("Invalid ask choices")
+                (0 until array.length()).map { (array.get(it) as? String) ?: throw IllegalArgumentException("Invalid ask choice") }
+            }
+            val recommended = if (!json.has("recommended") || json.isNull("recommended")) null else
+                when (val v = json.get("recommended")) {
+                    is Int -> v
+                    // Beyond any choice's index: dropped below.
+                    is Long -> -1
+                    else -> throw IllegalArgumentException("Invalid ask recommended")
+                }
+            val shownDecision = heldCut(heldOneLine(decision), MAX_HELD_DECISION_CHARS)
+            val shownChoices = choices.map { heldCut(heldOneLine(it), MAX_HELD_CHOICE_CHARS) }
+            if (shownDecision.isEmpty() || shownChoices.size > MAX_HELD_CHOICES || shownChoices.any { it.isEmpty() }) return null
+            return HeldTaskAsk(
+                decision = shownDecision,
+                blocked = heldCut(Visible.stripped(blocked, lines = true), MAX_HELD_BLOCKED_CHARS),
+                choices = shownChoices,
+                recommended = recommended?.takeIf { it in shownChoices.indices },
+            )
+        }
+    }
+}
+
+/** A person's answer to a held card: `held_task.answer`'s `answer` (enclos ADR 0073). */
+sealed interface HeldTaskAnswer {
+    /** One of the card's ask choices, by its zero-based index. */
+    data class Choice(val index: Int) : HeldTaskAnswer
+
+    /** A typed answer, as [heldAnswerText] reads it. */
+    data class Text(val text: String) : HeldTaskAnswer
+
+    /** Ask the agent to look into the task and say what it needs. */
+    data object Agent : HeldTaskAnswer
+
+    fun json(): JSONObject = when (this) {
+        is Choice -> JSONObject().put("kind", "choice").put("index", index)
+        is Text -> JSONObject().put("kind", "text").put("text", text)
+        Agent -> JSONObject().put("kind", "agent")
+    }
+}
+
+/**
+ * [typed] as a typed answer the bridge takes (enclos `held_task.answer`): trimmed, nonblank, at
+ * most 2,000 characters, with no hidden character other than a newline; null otherwise.
+ */
+internal fun heldAnswerText(typed: String): String? {
+    val text = typed.trim()
+    if (text.isEmpty() || text.codePointCount(0, text.length) > MAX_HELD_ANSWER_TEXT_CHARS) return null
+    return text.takeUnless { Visible.hasHidden(it, lines = true) }
+}
+
+/** [text] on one line, as enclos-protocol's `one_line`: each run of white space one space, hidden characters dropped. */
+private fun heldOneLine(text: String): String =
+    Visible.stripped(text.split(Regex("(?U)\\s+")).filter { it.isNotEmpty() }.joinToString(" "))
+
+/** [text] trimmed and cut to [max] characters (code points), as `held_task::cut` does. */
+private fun heldCut(text: String, max: Int): String {
+    val trimmed = text.trim()
+    val points = trimmed.codePointCount(0, trimmed.length)
+    if (points <= max) return trimmed
+    return trimmed.substring(0, trimmed.offsetByCodePoints(0, max)).trimEnd()
 }
 
 /** A held task's card as the bridge sent it (`held_task`), on [host]. */
@@ -60,6 +177,10 @@ data class HeldTask(
     val revision: Long,
     /** Whether the runtime permits Resume from the app; legacy cards default to true. */
     val resumable: Boolean = true,
+    /** What the agent wrote for the person (enclos ADR 0073); null on a card no agent wrote. */
+    val ask: HeldTaskAsk? = null,
+    /** On an `answered` card, what the person answered, on one line. */
+    val answer: String? = null,
 ) {
     val key: HeldTaskKey get() = HeldTaskKey(host, agent, task)
     val state: HeldTaskState get() = HeldTaskState.of(stateWire)
@@ -75,6 +196,8 @@ data class HeldTask(
         .put("reason", reason)
         .apply { lastError?.let { put("last_error", it) } }
         .put("resumable", resumable).put("since", since).put("resume", resume).put("state", stateWire).put("revision", revision)
+        .apply { ask?.let { put("ask", it.json()) } }
+        .apply { answer?.let { put("answer", it) } }
 
     companion object {
         /**
@@ -103,32 +226,27 @@ data class HeldTask(
             require(heldIdValid(state)) { "Invalid state" }
             val revision = integer("revision")
             require(revision >= 0) { "Invalid revision" }
-            val title = cut(Visible.stripped(string("title")), MAX_HELD_TITLE_CHARS)
-            val reason = cut(Visible.stripped(string("reason"), lines = true), MAX_HELD_REASON_CHARS)
+            val title = heldCut(Visible.stripped(string("title")), MAX_HELD_TITLE_CHARS)
+            val reason = heldCut(Visible.stripped(string("reason"), lines = true), MAX_HELD_REASON_CHARS)
             return HeldTask(
                 host = host,
                 agent = agent,
                 conversation = conversation,
                 task = task,
                 title = title.ifEmpty { task },
-                assignee = optional("assignee")?.let { cut(Visible.stripped(it), MAX_HELD_ASSIGNEE_CHARS) }?.ifEmpty { null },
+                assignee = optional("assignee")?.let { heldCut(Visible.stripped(it), MAX_HELD_ASSIGNEE_CHARS) }?.ifEmpty { null },
                 reason = reason.ifEmpty { HELD_NO_REASON },
-                lastError = optional("last_error")?.let { cut(Visible.stripped(it, lines = true), MAX_HELD_ERROR_CHARS) }?.ifEmpty { null },
+                lastError = optional("last_error")?.let { heldCut(Visible.stripped(it, lines = true), MAX_HELD_ERROR_CHARS) }?.ifEmpty { null },
                 since = integer("since"),
-                resume = cut(Visible.stripped(string("resume")), MAX_HELD_RESUME_CHARS),
+                resume = heldCut(Visible.stripped(string("resume")), MAX_HELD_RESUME_CHARS),
                 stateWire = state,
                 revision = revision,
                 resumable = if (!json.has("resumable")) true else
                     (json.opt("resumable") as? Boolean) ?: throw IllegalArgumentException("Invalid resumable"),
+                ask = if (!json.has("ask") || json.isNull("ask")) null else
+                    HeldTaskAsk.from(json.get("ask") as? JSONObject ?: throw IllegalArgumentException("Invalid ask")),
+                answer = optional("answer")?.let { heldCut(heldOneLine(it), MAX_HELD_ANSWER_CHARS) }?.ifEmpty { null },
             )
-        }
-
-        /** [text] trimmed and cut to [max] characters (code points), as `held_task::cut` does. */
-        private fun cut(text: String, max: Int): String {
-            val trimmed = text.trim()
-            val points = trimmed.codePointCount(0, trimmed.length)
-            if (points <= max) return trimmed
-            return trimmed.substring(0, trimmed.offsetByCodePoints(0, max)).trimEnd()
         }
 
         /** `ids::check`: nonempty, at most 128 bytes, no control character, no lone surrogate. */
@@ -196,14 +314,30 @@ internal fun heldTaskStatus(card: HeldTask, here: Boolean = false, gone: Boolean
 
 private fun heldStateLine(card: HeldTask, here: Boolean): String = when (card.state) {
     HeldTaskState.Held -> "Held · waiting for you"
+    HeldTaskState.Answered -> answeredLine(card)
     HeldTaskState.Resumed -> if (here) "Resumed from this phone" else "Resumed from the app"
     HeldTaskState.Released -> "No longer held · it runs again, finished or went away"
     HeldTaskState.Expired -> "No longer tracked · the agent's channel stopped reporting held tasks"
     HeldTaskState.Unknown -> "A state this app does not know (${Visible.stripped(card.stateWire)}) · update the app to act on it"
 }
 
+/** What an `answered` card says: the person's answer, as the bridge kept it. */
+internal fun answeredLine(card: HeldTask): String = card.answer?.let { "Answered: $it" } ?: "Answered · waiting on the agent"
+
 /** A last error longer than this many characters, or lines, is folded until the person opens it. */
 internal const val FOLDED_ERROR_CHARS = 280
 internal const val FOLDED_ERROR_LINES = 4
 
 internal fun foldsError(text: String): Boolean = text.length > FOLDED_ERROR_CHARS || text.lines().size > FOLDED_ERROR_LINES
+
+/**
+ * [items] without the rows of held tasks this phone knows are answered at the row's revision or
+ * a newer one: an answered card waits on the agent, never under Needs you, even before the host
+ * sends its next index.
+ */
+fun withoutAnswered(items: List<OpenItem>, cards: Map<HeldTaskKey, HeldTask>): List<OpenItem> = items.filterNot { item ->
+    if (item.kind != "held_task" || item.agent == null) return@filterNot false
+    val card = cards[HeldTaskKey(item.host, item.agent, item.id)] ?: return@filterNot false
+    val indexed = item.version.removePrefix("held:").toLongOrNull() ?: return@filterNot false
+    card.state == HeldTaskState.Answered && card.revision >= indexed
+}
