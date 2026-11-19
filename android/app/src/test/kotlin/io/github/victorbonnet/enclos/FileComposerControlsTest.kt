@@ -89,7 +89,10 @@ class FileComposerControlsTest {
         show(large = true)
         compose.onNodeWithContentDescription("Attach files").performClick()
         for (label in listOf("Camera", "Photos", "Files", "$name · Remove")) {
-            val node = compose.onNodeWithText(label).performScrollTo().assertIsDisplayed()
+            val button = compose.onNodeWithText(label).performScrollTo().assertIsDisplayed()
+                .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+            val node = compose.onNodeWithText(label, useUnmergedTree = true)
+                .performScrollTo().assertIsDisplayed()
             val layouts = mutableListOf<TextLayoutResult>()
             node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
             assertEquals("label=$label: expected one text layout", 1, layouts.size)
@@ -108,7 +111,10 @@ class FileComposerControlsTest {
                 appendLine("paragraphWidth=${layout.multiParagraph.width} " +
                     "paragraphHeight=${layout.multiParagraph.height} " +
                     "didExceedMaxLines=${layout.multiParagraph.didExceedMaxLines}")
-                appendLine("nodeBoundsInRoot=${semantics.boundsInRoot} " +
+                val buttonSemantics = button.fetchSemanticsNode()
+                appendLine("buttonBoundsInRoot=${buttonSemantics.boundsInRoot} " +
+                    "buttonSize=${buttonSemantics.size}")
+                appendLine("textBoundsInRoot=${semantics.boundsInRoot} " +
                     "nodeBoundsInWindow=${semantics.boundsInWindow} nodeSize=${semantics.size}")
                 for (line in 0 until layout.lineCount) {
                     appendLine("line=$line start=${layout.getLineStart(line)} " +
@@ -118,14 +124,36 @@ class FileComposerControlsTest {
                         "ellipsis=${layout.isLineEllipsized(line)}")
                 }
             }
-            assertFalse(diagnostic, layout.hasVisualOverflow)
+            // Hosted Camera: result 95x32, paragraph 268x32, complete line 0..6 within
+            // [0, 94.47266] x [0, 32]. didOverflowWidth compares paragraph width to result
+            // width, so that flag alone rejects fitting text. Check actual lines instead.
+            assertEquals("$diagnostic: layout must contain the complete label", label, input.text.text)
+            assertTrue("$diagnostic: label must have lines", layout.lineCount > 0)
+            assertFalse("$diagnostic: maxLines must not truncate content", layout.multiParagraph.didExceedMaxLines)
+            assertEquals("$diagnostic: label must start at zero", 0, layout.getLineStart(0))
+            assertEquals("$diagnostic: full label must be laid out", label.length,
+                layout.getLineEnd(layout.lineCount - 1))
+            assertEquals("$diagnostic: final content must be visible", label.length,
+                layout.getLineEnd(layout.lineCount - 1, visibleEnd = true))
+            for (line in 0 until layout.lineCount) {
+                assertFalse("$diagnostic: line $line must not be ellipsized", layout.isLineEllipsized(line))
+                assertTrue("$diagnostic: line $line must fit horizontally",
+                    layout.getLineLeft(line) >= 0f && layout.getLineRight(line) <= layout.size.width)
+                assertTrue("$diagnostic: line $line must fit vertically",
+                    layout.getLineTop(line) >= 0f && layout.getLineBottom(line) <= layout.size.height)
+                if (line > 0) {
+                    assertEquals("$diagnostic: lines must cover consecutive content",
+                        layout.getLineEnd(line - 1), layout.getLineStart(line))
+                }
+            }
+            assertEquals("$diagnostic: text node must have the layout width", layout.size.width, semantics.size.width)
+            assertEquals("$diagnostic: text node must have the layout height", layout.size.height, semantics.size.height)
+            assertTrue("$diagnostic: text must not be clipped by its ancestors horizontally",
+                semantics.boundsInRoot.width >= layout.size.width)
+            assertTrue("$diagnostic: text must not be clipped by its ancestors vertically",
+                semantics.boundsInRoot.height >= layout.size.height)
             if (label.contains(name)) {
                 assertTrue("$diagnostic: full filename must wrap", layout.lineCount > 1)
-                assertEquals("$diagnostic: full label must be laid out", label.length,
-                    layout.getLineEnd(layout.lineCount - 1))
-                for (line in 0 until layout.lineCount) {
-                    assertFalse("$diagnostic: line $line must not be ellipsized", layout.isLineEllipsized(line))
-                }
             }
         }
     }
