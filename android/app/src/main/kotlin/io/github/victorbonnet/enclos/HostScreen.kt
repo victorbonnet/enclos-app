@@ -19,6 +19,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.victorbonnet.enclos.ui.AppBar
@@ -208,16 +209,22 @@ private fun SandboxUsageRow(row: SandboxUsage, open: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(Modifier.size(10.dp))
-        Text(row.sandbox, style = Type.name, color = p.text, modifier = Modifier.weight(1f))
-        Text(usageAmount(row.total, row.cost), style = Type.label, color = p.text)
+        Column(Modifier.weight(1f)) {
+            // On one line, whatever the width: the amounts never squeeze the name.
+            Text(row.sandbox, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            usageCostLine(row.total, row.cost)?.let { Text(it, style = Type.small, color = p.textMuted) }
+        }
+        Text(usageUsed(row.total), style = Type.label, color = p.text, maxLines = 1, softWrap = false)
     }
 }
 
-/** A total at a glance: its tokens, or its calls when the runtime counts no token, and its estimated cost when there is one. */
-private fun usageAmount(total: UsageTotal, cost: UsageCost?): String {
-    val used = if (total.tokens.counted) "${tokensText(total.tokens.total)} tokens" else if (total.calls == 1L) "1 call" else "${total.calls} calls"
-    return shownCost(total, cost)?.let { "$used · ${costText(it)}" } ?: used
-}
+/** A total's tokens, or its calls when the runtime counts no token: short, beside a name. */
+private fun usageUsed(total: UsageTotal): String =
+    if (total.tokens.counted) "${tokensText(total.tokens.total)} tokens" else if (total.calls == 1L) "1 call" else "${total.calls} calls"
+
+/** A total's estimated cost, on a line of its own under its name; none when there is none to show. */
+private fun usageCostLine(total: UsageTotal, cost: UsageCost?): String? =
+    shownCost(total, cost)?.let { "Est. cost ${costText(it)}" }
 
 /** One agent's usage over the window: its name, its tokens and cost, and how they split. */
 @Composable
@@ -229,15 +236,20 @@ private fun AgentUsageRow(label: String, address: String, total: UsageTotal, cos
             // for a row without, so the names line up.
             if (color != null) SeriesDot(color) else Spacer(Modifier.size(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(label, style = Type.name, color = p.text)
+                // Each on one line, whatever the width: the amount beside them is short.
+                Text(label, style = Type.name, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 // Two sandboxes may have agents of one name.
-                Text(address, style = Type.code, color = p.textFaint)
+                Text(address, style = Type.code, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text(usageAmount(total, cost), style = Type.label, color = p.text)
+            Text(usageUsed(total), style = Type.label, color = p.text, maxLines = 1, softWrap = false)
         }
-        Text(usageLine(total), style = Type.small, color = p.textMuted)
-        // Its plugin does not report its routines and other chats: the app's alone.
-        if (appOnly) Text("In the app only: its calls outside the app are not reported.", style = Type.small, color = p.textFaint)
+        // Under the name, where it has the row's width.
+        Column(Modifier.padding(start = 18.dp)) {
+            usageCostLine(total, cost)?.let { Text(it, style = Type.label, color = p.text) }
+            Text(usageLine(total), style = Type.small, color = p.textMuted)
+            // Its plugin does not report its routines and other chats: the app's alone.
+            if (appOnly) Text("In the app only: its calls outside the app are not reported.", style = Type.small, color = p.textFaint)
+        }
     }
 }
 
