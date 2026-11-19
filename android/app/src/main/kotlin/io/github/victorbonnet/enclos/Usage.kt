@@ -486,11 +486,14 @@ fun addedToLastAnswer(lines: List<Line>, call: UsageTotal): List<Line>? {
     return lines.toMutableList().also { it[last] = it[last].copy(usage = (it[last].usage ?: UsageTotal()) + call) }
 }
 
-/** Counts read at a glance: 950, 83.1k, 1.2M; the unit chosen after rounding, so 999,950 reads 1.0M. */
+/**
+ * Counts read at a glance: 950, 83.1k, 1.2M, 4.3B (billions, as tokens are counted, not giga),
+ * then trillions and quadrillions; the unit chosen after rounding, so 999,950 reads 1.0M.
+ */
 fun tokensText(n: Long): String {
     if (n < 1_000) return n.toString()
     var value = n.toDouble()
-    val units = listOf("k", "M", "G", "T", "P")
+    val units = listOf("k", "M", "B", "T", "Q")
     for (unit in units) {
         value /= 1e3
         if (Math.round(value * 10) < 10_000 || unit == units.last()) return String.format(Locale.ROOT, "%.1f%s", value, unit)
