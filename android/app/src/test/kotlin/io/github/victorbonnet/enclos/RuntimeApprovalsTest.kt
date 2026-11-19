@@ -179,7 +179,7 @@ class RuntimeApprovalsTest {
         val fields = authFields("device-1", "c2ln").toMap()
         assertEquals("device-1", fields["device"])
         assertEquals("c2ln", fields["sig"])
-        assertEquals(listOf("runtime_approval_scopes"), fields["capabilities"])
+        assertEquals(listOf("runtime_approval_scopes", "task_events"), fields["capabilities"])
     }
 
     @Test fun a_native_scope_description_is_shown_with_its_hidden_characters_written_out() {
