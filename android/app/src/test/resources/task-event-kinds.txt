@@ -1,5 +1,5 @@
 # enclos-protocol's TaskEventKind (crates/enclos-protocol/src/task_event.rs)
-# at a6b69a02 (enclos#357, task events, ADR 0071), the commit core-ffi pins,
+# at 24ffd73d (enclos main, task events, ADR 0071), the commit core-ffi pins,
 # by wire name, in the crate's order. The app's TaskEventKind must name
 # exactly these, in this order (TaskEventsTest), and they must be the pinned
 # crate's kinds, all of them, in its order (core-ffi's tests). Update it from

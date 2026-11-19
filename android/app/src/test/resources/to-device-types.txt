@@ -1,5 +1,5 @@
 # enclos-protocol's TO_DEVICE_TYPES (crates/enclos-protocol/src/device.rs) at
-# a6b69a02 (enclos#357, task events, ADR 0071), the commit core-ffi pins: every
+# 24ffd73d (enclos main, task events, ADR 0071), the commit core-ffi pins: every
 # type a bridge sends a device. The app's BRIDGE_TYPES must equal it
 # (ProtocolErrorsTest), and it must hold every type of the crate core-ffi pins
 # (core-ffi's tests). Update it from enclos when the pin moves.
