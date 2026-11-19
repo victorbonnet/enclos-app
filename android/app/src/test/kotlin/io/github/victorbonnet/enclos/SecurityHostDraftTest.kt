@@ -16,15 +16,19 @@ import java.util.concurrent.TimeUnit
 @Config(application = Application::class)
 class SecurityHostDraftTest {
     @Suppress("UNCHECKED_CAST") private fun <T> field(model: AppModel, name: String): T = AppModel::class.java.getDeclaredField(name).apply { isAccessible = true }.get(model) as T
-    @Test fun leaving_failed_first_send_must_drop_orphaned_file_draft() {
+    @Test fun leaving_failed_first_send_must_drop_orphaned_file_draft() = abandonedDraft(true)
+    @Test fun leaving_never_sent_first_draft_must_drop_orphaned_file_draft() = abandonedDraft(false)
+    private fun abandonedDraft(failedText: Boolean) {
         val model = AppModel(ApplicationProvider.getApplicationContext<Application>())
         try {
             field<ExecutorService>(model, "saving").submit {}.get(5, TimeUnit.SECONDS)
             shadowOf(Looper.getMainLooper()).idle()
             val agent = Agent("fixture-host", "box/agent", "hermes", listOf("incoming_files"))
             val id = model.newConversation(agent)
-            model.outgoing.send(id, agent.host, "first text") { "owned-first-send" }
-            model.outgoing.ended(agent.host, "synthetic disconnect before echo")
+            if (failedText) {
+                model.outgoing.send(id, agent.host, "first text") { "owned-first-send" }
+                model.outgoing.ended(agent.host, "synthetic disconnect before echo")
+            }
             model.outgoing.files.drafts[id] = listOf(SendFile("orphan.txt", "text/plain", byteArrayOf(7)))
             model.left(id)
             assertFalse("left really discarded the conversation", model.conversations.any { it.id == id })

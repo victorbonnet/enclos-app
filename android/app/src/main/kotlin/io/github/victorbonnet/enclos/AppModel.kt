@@ -1630,6 +1630,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** The screen of [conversation] was left: a draft with nothing sent goes, as if never started. */
     fun left(conversation: String) {
         if (conversation !in drafts || !lines[conversation].isNullOrEmpty()) return
+        // An initiated file send owns this conversation even before its first echo,
+        // including an unknown outcome awaiting an explicit retry or discard.
+        if (conversation in outgoing.files.retries) return
         outgoing.forget(setOf(conversation))
         drafts -= conversation
         conversations.removeAll { it.id == conversation }

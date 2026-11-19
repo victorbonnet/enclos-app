@@ -119,6 +119,7 @@ class Outgoing {
             files.progress.remove(conversation)
             val textOnly = lost.filterNot { it.withFiles || it.literal }
             if (textOnly.isNotEmpty()) restore(conversation, textOnly.map { it.text }, why)
+            if (lost.any { it.literal }) notSent[conversation] = "Reply unconfirmed. Check history before sending it again."
             if (lost.any { it.withFiles }) notSent[conversation] = "Delivery unknown. Check history before retrying the original message."
             put(conversation, now.map { if (it in lost) it.copy(back = true) else it })
         }
