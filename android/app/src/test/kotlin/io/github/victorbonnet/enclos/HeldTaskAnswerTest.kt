@@ -27,11 +27,11 @@ class HeldTaskAnswerTest {
         val client = HeldTaskClient(
             send = { sent += it; sending }, connected = { connected }, accepts = { it.belongsTo(home) },
             changed = {}, later = { wait, callback -> timers += wait to callback },
-            resync = { resyncs += it; true }, answerSupported = { supported },
+            resync = { resyncs += it; true },
         )
 
         fun ready(card: HeldTask) {
-            client.authenticated(card.host)
+            client.authenticated(card.host, answers = supported)
             client.merge(card)
             client.synced(card.host)
         }
@@ -211,10 +211,61 @@ class HeldTaskAnswerTest {
         assertEquals(listOf("mac"), f.resyncs)
         assertEquals("Checking with mac…", f.client.answerUnavailable(card))
         assertNull(f.client.answer(card, HeldTaskAnswer.Choice(1)))
+        // The sync sends every card held or answered: one still held waits for the person.
         f.client.synced("mac")
-        assertTrue(f.client.notes[card.key]!!.contains("look there before answering again"))
+        assertEquals("Checked: mac still lists it as waiting for you.", f.client.notes[card.key])
         assertTrue(f.client.canAnswer(card))
         assertEquals(1, f.sent.size)
+    }
+
+    @Test fun a_doubted_answer_the_sync_shows_taken_reads_answered() {
+        val f = Fixture(home)
+        val card = heldFromFixture()
+        f.ready(card)
+        val id = f.client.answer(card, HeldTaskAnswer.Choice(0))!!
+        f.connected = false
+        f.client.ended("mac")
+        assertTrue(f.client.keepsSheet(card.key))
+        f.connected = true
+        f.client.authenticated("mac", answers = true)
+        // The bridge syncs answered cards too (enclos#334).
+        f.client.received("mac", fixture("to_device_held_task_answered").put("type", "held_task").put("of", id))
+        f.client.synced("mac")
+        val synced = f.client.cards[card.key]!!
+        assertEquals("Answered: Allow one 60-min fix, then review and CI", f.client.status(synced))
+        assertNull(f.client.notes[card.key])
+        assertTrue("the sheet stays to say so", f.client.keepsSheet(card.key))
+        assertEquals(1, f.sent.size)
+    }
+
+    @Test fun the_sheet_stays_while_this_phones_answer_waits_even_when_the_row_goes_first() {
+        val f = Fixture(home)
+        val card = heldFromFixture()
+        f.ready(card)
+        assertFalse(f.client.keepsSheet(card.key))
+        val id = f.client.answer(card, HeldTaskAnswer.Choice(0))!!
+        assertTrue(f.client.keepsSheet(card.key))
+        // The bridge sends the answered card (and an index without its row) before `held_task.result`.
+        val answered = fixture("to_device_held_task_answered").getJSONObject("held_task")
+        f.client.received("mac", JSONObject().put("v", 1).put("id", "b-1").put("type", "held_task").put("held_task", answered))
+        val row = OpenItem("mac", card.task, "held_task", card.agent, card.conversation, "Allow?", 1, false, version = "held:1")
+        assertTrue(withoutAnswered(listOf(row), f.client.cards).isEmpty())
+        assertTrue(f.client.keepsSheet(card.key))
+        f.client.received("mac", fixture("to_device_held_task_answered").put("of", id))
+        assertTrue(f.client.keepsSheet(card.key))
+        // A resume, or a card answered elsewhere, does not keep it.
+        val g = Fixture(home); g.ready(card.copy(resumable = true))
+        g.client.resume(card.copy(resumable = true))
+        assertFalse(g.client.keepsSheet(card.key))
+        g.client.merge(HeldTask.from("mac", answered))
+        assertFalse(g.client.keepsSheet(card.key))
+    }
+
+    @Test fun the_bridges_own_answers_read_as_whole_lines() {
+        val card = heldFromFixture().copy(stateWire = "answered", revision = 2)
+        assertEquals("Answered in the conversation.", heldTaskStatus(card.copy(answer = "Answered in the conversation.")))
+        assertEquals("Asked the agent to look into it.", heldTaskStatus(card.copy(answer = "Asked the agent to look into it.")))
+        assertEquals("Answered: Keep #346 paused", heldTaskStatus(card.copy(answer = "Keep #346 paused")))
     }
 
     @Test fun certain_refusals_say_so_and_others_doubt_the_outcome() {
@@ -265,7 +316,7 @@ class HeldTaskAnswerTest {
             assertEquals("The connection ended before mac confirmed. Your answer may have reached the agent; reconnect to check.", f.client.notes[card.key])
             assertEquals("Reconnect to mac to check whether your answer arrived.", f.client.answerUnavailable(card))
             f.connected = true
-            f.client.authenticated("mac"); f.client.synced("mac")
+            f.client.authenticated("mac", answers = true); f.client.synced("mac")
             assertTrue(f.client.canAnswer(card))
             assertEquals(1, f.sent.size)
         }
@@ -281,13 +332,27 @@ class HeldTaskAnswerTest {
     @Test fun the_answer_waits_for_the_connection_and_its_sync() {
         val f = Fixture(home); val card = heldFromFixture()
         f.client.merge(card)
-        f.connected = false
-        assertEquals("Connect to mac to answer.", f.client.answerUnavailable(card))
-        f.connected = true
-        f.client.authenticated("mac")
+        // No connection has said yet whether its bridge takes answers.
+        assertFalse(f.client.answersOn("mac"))
+        f.client.authenticated("mac", answers = true)
         assertEquals("Waiting for the host to sync…", f.client.answerUnavailable(card))
         f.client.synced("mac")
         assertNull(f.client.answerUnavailable(card))
+        // A connection that ends keeps the answer layout, its controls disabled and saying why.
+        f.connected = false
+        f.client.ended("mac")
+        assertTrue(f.client.answersOn("mac"))
+        assertTrue(f.client.offersAnswer(card))
+        assertEquals("Connect to mac to answer.", f.client.answerUnavailable(card))
+        assertNull(f.client.answer(card, HeldTaskAnswer.Choice(0)))
+        // The next connection decides again; forgetting the host forgets it.
+        f.connected = true
+        f.client.authenticated("mac", answers = false)
+        assertFalse(f.client.offersAnswer(card))
+        f.client.authenticated("mac", answers = true)
+        f.client.forget("mac")
+        assertFalse(f.client.answersOn("mac"))
+        assertTrue(f.sent.isEmpty())
     }
 
     @Test fun a_row_is_kept_unless_its_card_is_known_answered_at_its_revision() {

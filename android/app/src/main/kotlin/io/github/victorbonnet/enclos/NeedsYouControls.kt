@@ -48,8 +48,9 @@ fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (St
     val opening = model.focusedRequest ?: return
     val item = model.attentionItems().firstOrNull { it.key == opening.key }
     val heldKey = opening.agent?.takeIf { opening.kind == "held_task" }?.let { HeldTaskKey(opening.host, it, opening.id) }
-    // A held task this phone just answered left Needs you; its sheet stays to say what was answered.
-    val answeredHere = heldKey != null && heldKey in model.heldTasks.answered
+    // A held task this phone answered (or whose answer waits or is in doubt) left Needs you; its
+    // sheet stays to say what was answered, even when the row goes before `held_task.result`.
+    val answeredHere = heldKey != null && model.heldTasks.keepsSheet(heldKey)
     if (item == null && model.needsYou.freshHosts[opening.host] == true && !answeredHere) {
         LaunchedEffect(opening.key) { model.focusedRequest = null }
         return

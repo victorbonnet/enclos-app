@@ -321,8 +321,18 @@ private fun heldStateLine(card: HeldTask, here: Boolean): String = when (card.st
     HeldTaskState.Unknown -> "A state this app does not know (${Visible.stripped(card.stateWire)}) · update the app to act on it"
 }
 
+/**
+ * The bridge's own `answer` texts (enclos-protocol's `ANSWERED_IN_CONVERSATION`, for an ask the
+ * agent settled, and `ASKED_THE_AGENT`, for an `agent` answer): each reads as a whole line.
+ */
+internal val HELD_ANSWER_SENTENCES = setOf("Answered in the conversation.", "Asked the agent to look into it.")
+
 /** What an `answered` card says: the person's answer, as the bridge kept it. */
-internal fun answeredLine(card: HeldTask): String = card.answer?.let { "Answered: $it" } ?: "Answered · waiting on the agent"
+internal fun answeredLine(card: HeldTask): String = when (val answer = card.answer) {
+    null -> "Answered · waiting on the agent"
+    in HELD_ANSWER_SENTENCES -> answer
+    else -> "Answered: $answer"
+}
 
 /** A last error longer than this many characters, or lines, is folded until the person opens it. */
 internal const val FOLDED_ERROR_CHARS = 280

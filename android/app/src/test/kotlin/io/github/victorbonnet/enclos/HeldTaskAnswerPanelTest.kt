@@ -3,6 +3,7 @@ package io.github.victorbonnet.enclos
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -43,24 +44,57 @@ class HeldTaskAnswerPanelTest {
 
     private val sent = mutableListOf<HeldTaskRequest>()
 
+    private var online = true
+
     private fun client(card: HeldTask): HeldTaskClient {
         val client = HeldTaskClient(
-            send = { sent += it; true }, connected = { true }, accepts = { it.belongsTo(home) },
-            changed = {}, later = { _, _ -> }, answerSupported = { true },
+            send = { sent += it; true }, connected = { online }, accepts = { it.belongsTo(home) },
+            changed = {}, later = { _, _ -> },
         )
-        client.authenticated("mac"); client.merge(card); client.synced("mac")
+        client.authenticated("mac", answers = true); client.merge(card); client.synced("mac")
         return client
     }
 
     private fun show(client: HeldTaskClient, card: HeldTask) {
         compose.setContent {
-            // The card as the client holds it now: a result redraws the panel.
+            // The card as the client holds it now: a result redraws the panel. The layout is
+            // chosen as the Needs you sheet chooses it.
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                HeldTaskAnswerPanel(client, client.cards[card.key] ?: card) {
-                    RequestSecondaryButton("View task") {}
+                if (client.answersOn(card.host)) {
+                    HeldTaskAnswerPanel(client, client.cards[card.key] ?: card) {
+                        RequestSecondaryButton("View task") {}
+                    }
+                } else {
+                    Text("The layout before answers")
                 }
             }
         }
+    }
+
+    @Test
+    fun a_connection_that_ends_mid_draft_keeps_the_panel_its_draft_and_says_why() {
+        val client = client(written)
+        show(client, written)
+        compose.onNodeWithText("Details").performScrollTo().performClick()
+        compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("Wait for Monday")
+        compose.runOnIdle {
+            online = false
+            client.ended("mac")
+        }
+        compose.onNodeWithText("The layout before answers").assertDoesNotExist()
+        compose.onNodeWithText("Wait for Monday").assertExists()
+        compose.onNodeWithText("Task t_f9f3").assertExists()
+        compose.onNodeWithText("Connect to mac to answer.").assertExists()
+        compose.onNodeWithText("Send").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText("Keep #346 paused").performScrollTo().assertIsNotEnabled()
+        // Back online, after the sync, the same draft goes.
+        compose.runOnIdle {
+            online = true
+            client.authenticated("mac", answers = true)
+            client.synced("mac")
+        }
+        compose.onNodeWithText("Send").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(HeldTaskAnswer.Text("Wait for Monday"), sent.single().answer)
     }
 
     private fun top(text: String) = compose.onNodeWithText(text).fetchSemanticsNode().positionInRoot.y

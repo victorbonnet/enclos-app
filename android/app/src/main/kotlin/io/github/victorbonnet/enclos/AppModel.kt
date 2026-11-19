@@ -406,9 +406,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         changed = { card -> save { heldTask(card) } },
         later = { wait, action -> main.postDelayed({ action() }, wait) },
         resync = { host -> connections[host]?.send(message("sync", "since" to since(host), "open_items" to true)) == true },
-        dropped = { why -> android.util.Log.d("enclos", "held task not shown: $why") },
-        answerSupported = { host -> hostSupports(host, HELD_TASK_ANSWER) },
-    )
+        dropped = { why -> android.util.Log.d("enclos", "held task not shown: $why") },    )
     internal val taskBoard = TaskBoardClient(
         send = { host, command -> connections[host]?.send(command) == true },
         current = ::currentTaskBoard,
@@ -1291,7 +1289,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "authenticated" -> {
                 questions.authenticated(host.name)
-                heldTasks.authenticated(host.name)
+                // The client keeps this past the connection's end: the answer layout outlives a drop.
+                heldTasks.authenticated(host.name, answers = HELD_TASK_ANSWER in hostCapabilitiesIn(m))
                 approvalsFresh[host.name] = false
                 // A connection that replaced another without ending it: what the old one said is not fresh.
                 policyConnectionEnded(host.name)

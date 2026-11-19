@@ -44,9 +44,13 @@ class HeldTaskClient(
     private val resync: (String) -> Boolean = { false },
     /** Why a card was not shown (never its text), for the log. */
     private val dropped: (String) -> Unit = {},
-    /** Whether the host's bridge takes a person's answer (`held_task.answer` in `authenticated`). */
-    private val answerSupported: (String) -> Boolean = { false },
 ) {
+    /**
+     * By host: whether its last `authenticated` listed `held_task.answer`. Kept when the
+     * connection ends, so the answer layout stays (its controls disabled, saying why) until the
+     * next connection says otherwise; forgotten with the host.
+     */
+    private val answerHosts = mutableStateMapOf<String, Boolean>()
     val cards = mutableStateMapOf<HeldTaskKey, HeldTask>()
     /** The request this phone sent for a card, until its answer or its doubt. */
     val pending = mutableStateMapOf<HeldTaskKey, HeldTaskRequest>()
@@ -100,8 +104,16 @@ class HeldTaskClient(
     fun offersAnswer(card: HeldTask): Boolean =
         card.state == HeldTaskState.Held && card.key !in gone && answersOn(card.host)
 
-    /** Whether [host]'s bridge takes a person's answer to a held card. */
-    fun answersOn(host: String): Boolean = answerSupported(host)
+    /** Whether [host]'s bridge, as its last connection said, takes a person's answer to a held card. */
+    fun answersOn(host: String): Boolean = answerHosts[host] == true
+
+    /**
+     * Whether a Needs you sheet of [key] stays open once its row left the list: this phone's
+     * answer is waiting, in doubt, or taken (the bridge sends the answered card and its index
+     * before `held_task.result`), so the sheet can say what was answered.
+     */
+    fun keepsSheet(key: HeldTaskKey): Boolean =
+        key in answered || (lastAnswer[key] == true && (key in pending || key in uncertain || cards[key]?.state == HeldTaskState.Answered))
 
     /** What the card says of its state. */
     fun status(card: HeldTask): String = heldTaskStatus(card, here = card.key in receipts, gone = card.key in gone)
@@ -317,14 +329,20 @@ class HeldTaskClient(
             .onFailure { dropped("${message.optString("type")} from $host could not be read: ${it.javaClass.simpleName}") }
             .getOrNull()
 
-    /** A connection to [host] authenticated: its cards are not fresh until its sync ends. */
-    fun authenticated(host: String) { fresh[host] = false }
+    /**
+     * A connection to [host] authenticated: its cards are not fresh until its sync ends. [answers]
+     * when its `authenticated` lists `held_task.answer`.
+     */
+    fun authenticated(host: String, answers: Boolean = false) {
+        fresh[host] = false
+        answerHosts[host] = answers
+    }
 
     /**
      * [host]'s sync ended: each card it sent is current, and the doubt of every card of the host
-     * is settled by it. A sync sends only the cards still held, so a card answered while its
-     * answer was in doubt can stay held here: the card then says where to look, not that the
-     * answer was lost.
+     * is settled by it. A sync sends every card still held or answered, so one this phone's
+     * answer was in doubt for is `answered` here if the answer was taken, and still `held`, waiting
+     * for the person, if it was not.
      */
     fun synced(host: String) {
         fresh[host] = true
@@ -338,7 +356,7 @@ class HeldTaskClient(
             val note = when {
                 // A card that left `held` says so in its state line.
                 card.state != HeldTaskState.Held || key in gone -> null
-                lastAnswer[key] == true -> "Checked with $host. If your answer arrived, it is in the conversation: look there before answering again."
+                lastAnswer[key] == true -> "Checked: $host still lists it as waiting for you."
                 offersResume(card) -> "Checked: $host still lists it as held."
                 else -> null
             }
@@ -370,6 +388,7 @@ class HeldTaskClient(
         requests.values.filter { it.card.host == host }.toList().forEach(::finish)
         cards.keys.filter { it.host == host }.forEach(::forgetCard)
         fresh.remove(host)
+        answerHosts.remove(host)
     }
 
     private fun forgetCard(key: HeldTaskKey) {
