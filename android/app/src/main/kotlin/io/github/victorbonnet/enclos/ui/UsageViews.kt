@@ -150,6 +150,8 @@ fun UsageChart(
     unit: String = " tokens",
     /** Whether a bar read out names each of its parts: not for a chart of one sandbox or agent. */
     split: Boolean = true,
+    /** What a bar read out says of its whole, by its start, when its value alone does not say it all (a cost some of whose tokens had no price). */
+    barText: ((Long) -> String?)? = null,
 ) {
     val p = palette
     var picked by remember(bars) { mutableStateOf<Int?>(null) }
@@ -158,7 +160,7 @@ fun UsageChart(
         val shown = picked?.let { bars.getOrNull(it) }
         Text(
             if (shown == null) "Tap a bar to read it." else buildString {
-                append(bucketLabel(shown.at)).append(" · ").append(amount(shown.tokens)).append(unit)
+                append(bucketLabel(shown.at)).append(" · ").append(barText?.invoke(shown.at) ?: (amount(shown.tokens) + unit))
                 if (split && shown.parts.isNotEmpty()) append(": ").append(shown.parts.joinToString(" · ") { (a, t) -> "${label(a)} ${amount(t)}" })
             },
             style = Type.small,

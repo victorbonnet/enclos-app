@@ -688,6 +688,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             request.put("offset", java.util.TimeZone.getDefault().getOffset(now) / 1000)
             // The same offset is kept with the report, for its chart.
         }
+        // Each agent's and sandbox's cost, from a host that estimates it.
+        if (hostSupports(host, "usage.cost")) request.put("cost", true)
         val id = request.getString("id")
         val offset = java.util.TimeZone.getDefault().getOffset(now) / 1000L
         hostUsage[host] = (hostUsage[host] ?: HostUsage()).loading(id, window, now / 1000, offset)
@@ -717,6 +719,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         request.put("offset", offset)
         request.put("sandbox", sandbox)
         agent?.let { request.put("agent", it) }
+        request.put("cost", true)
         val id = request.getString("id")
         scopedUsage[key] = (scopedUsage[key] ?: HostUsage()).loading(id, window, now / 1000, offset)
         if (connections[host]?.send(request) != true) {
@@ -742,6 +745,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val current = recentUsage[host] ?: RecentUsage()
         if (!current.due(now)) return
         val request = message("usage.get", "since" to (now - UsageWindow.Day.seconds).coerceAtLeast(0))
+        if (hostSupports(host, "usage.cost")) request.put("cost", true)
         val id = request.getString("id")
         recentUsage[host] = current.loading(id, now)
         if (connections[host]?.send(request) != true) {

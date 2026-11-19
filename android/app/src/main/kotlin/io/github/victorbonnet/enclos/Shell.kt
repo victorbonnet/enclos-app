@@ -437,7 +437,7 @@ private fun AgentUsageSection(model: AppModel, agent: Agent) {
                         style = Type.name, color = p.text,
                     )
                     if (total.calls > 0) Text(usageLine(total), style = Type.small, color = p.textMuted)
-                    row.cost?.let { Text("Estimated cost: ${costText(it)}", style = Type.small, color = p.textMuted) }
+                    shownCost(total, row.cost)?.let { Text("Estimated cost: ${costText(it)}", style = Type.small, color = p.textMuted) }
                     Text(
                         when {
                             !recent.outside -> "In your conversations in the app."
@@ -449,7 +449,7 @@ private fun AgentUsageSection(model: AppModel, agent: Agent) {
                 }
                 !model.connected(agent.host) -> Text("Connect to this agent's host to see its usage.", style = Type.small, color = p.textMuted)
                 !model.canReadUsage(agent.host) -> Text("Usage is unavailable. Update the host's enclos.", style = Type.small, color = p.textMuted)
-                recent?.at != null && recent.cut -> Text("Not in the host's report, which lists $MAX_REPORT_AGENTS agents at most. See Host details.", style = Type.small, color = p.textMuted)
+                recent?.at != null && recent.cut -> Text("Not in the host's report, which lists the agents that used the most. See Host details.", style = Type.small, color = p.textMuted)
                 recent?.error != null -> Text(recent.error, style = Type.small, color = p.textMuted)
                 else -> Text("Loading usage…", style = Type.small, color = p.textMuted)
             }
@@ -472,6 +472,15 @@ private fun ScopedUsageSection(model: AppModel, host: String, sandbox: String, a
     LaunchedEffect(key, available) { if (available) model.loadScopedUsage(host, sandbox, agent, usage.window) }
     Section("Cost and tokens") {
         SettingRow {
+            // As on the host page: the window shown, asked again.
+            if (available && usage.request == null) {
+                Text(
+                    "Refresh",
+                    style = Type.label,
+                    color = p.accent,
+                    modifier = Modifier.clickable(role = Role.Button) { model.loadScopedUsage(host, sandbox, agent, usage.selected) }.padding(vertical = 4.dp),
+                )
+            }
             when {
                 !model.connected(host) -> Text(if (usage.loaded) "Saved in memory. Reconnect to refresh." else "Connect to this host to see its cost over time.", style = Type.small, color = p.textMuted)
                 !available -> Text("Cost over time is unavailable. Update the host's enclos.", style = Type.small, color = p.textMuted)
@@ -490,8 +499,9 @@ private fun ScopedUsageSection(model: AppModel, host: String, sandbox: String, a
             }
             if (usage.rowsShown) {
                 // The scope's own total: its agent's row, or its sandbox's.
-                val total = if (agent != null) usage.agents.firstOrNull { it.agent == "$sandbox/$agent" }?.let { it.total to it.cost }
-                    else usage.sandboxes.firstOrNull { it.sandbox == sandbox }?.let { it.total to it.cost }
+                val row = agent?.let { a -> usage.agents.firstOrNull { it.agent == "$sandbox/$a" } }
+                val total = if (agent != null) row?.let { it.total to shownCost(it.total, it.cost) }
+                    else usage.sandboxes.firstOrNull { it.sandbox == sandbox }?.let { it.total to shownCost(it.total, it.cost) }
                 if (total == null || (total.first.calls == 0L && !total.first.tokens.counted)) {
                     Text("No usage in the last ${usage.window.label}.", style = Type.small, color = p.textMuted)
                 } else {
@@ -509,15 +519,18 @@ private fun ScopedUsageSection(model: AppModel, host: String, sandbox: String, a
                     val bars = remember(usage, cost) { sumBars(usage.sum, key, cost, usage.window, usage.at, usage.offset) }
                     if (bars.any { it.tokens > 0 }) {
                         val bucketLabel = { at: Long -> usageBucketLabel(at, usage.window, usage.offset) }
+                        // A bucket's cost as the rows write it: at least, included, unknown.
+                        val costAt = { at: Long -> usage.sum.firstOrNull { it.at == at }?.cost }
                         UsageChart(
                             bars,
                             mapOf(key to seriesColor(0)),
                             label = { label },
                             bucketLabel = bucketLabel,
-                            summary = sumSummary(bars, usage.window, cost, bucketLabel),
+                            summary = sumSummary(bars, usage.window, cost, bucketLabel, costAt),
                             amount = if (cost) ::dollarsText else ::tokensText,
                             unit = if (cost) "" else " tokens",
                             split = false,
+                            barText = { at: Long -> if (cost) costAt(at)?.let(::costText) else null },
                         )
                     } else if (cost) {
                         Text("Nothing priced in dollars in this window.", style = Type.small, color = p.textMuted)
@@ -526,8 +539,10 @@ private fun ScopedUsageSection(model: AppModel, host: String, sandbox: String, a
                         if (c.unpriced > 0) Text("Some tokens are of a model the host has no price for: the cost is at least this.", style = Type.small, color = p.textFaint)
                         if (c.included > 0) Text("Tokens on a subscription count against its limits, not in dollars.", style = Type.small, color = p.textFaint)
                     }
+                    // An agent's own: whether its plugin reports its calls outside the app.
+                    val outside = usage.outside && (row?.outside ?: true)
                     Text(
-                        (if (usage.outside) "All its calls the host counts" else "Your conversations in the app") +
+                        (if (outside) "All its calls the host counts" else if (usage.outside) "In the app only: its calls outside the app are not reported" else "Your conversations in the app") +
                             ". Cost is the host's estimate from its price list: a guide, not a bill.",
                         style = Type.small,
                         color = p.textFaint,

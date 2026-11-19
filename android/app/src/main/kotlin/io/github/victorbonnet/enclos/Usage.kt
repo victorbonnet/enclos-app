@@ -96,6 +96,12 @@ fun costText(c: UsageCost): String {
     return (if (c.unpriced > 0) "≥" else "") + "~" + dollarsText(c.usdMicros)
 }
 
+/**
+ * The cost to show beside [total]: none when the runtime counted no token, whose cost no price
+ * list can tell, rather than a cost of nothing.
+ */
+fun shownCost(total: UsageTotal, cost: UsageCost?): UsageCost? = cost?.takeIf { total.tokens.counted }
+
 /** Millionths of a dollar as dollars and cents: `$1.24`, `<$0.01` for less than half a cent but more than none. */
 fun dollarsText(micros: Long): String {
     if (micros in 1 until 5_000) return "<$0.01"
@@ -204,9 +210,11 @@ data class AgentUsage(val agent: String, val total: UsageTotal, val outside: Boo
 /** What one sandbox's agents used over a window, all of them summed, with its cost. */
 data class SandboxUsage(val sandbox: String, val total: UsageTotal, val cost: UsageCost)
 
-/** A report's agent row; null when it is not one. */
+/** A report's agent row; null when it is not one, as when its `cost` is there and not one. */
 private fun agentOf(a: JSONObject?): AgentUsage? = a?.optString("agent")?.ifBlank { null }?.let {
-    AgentUsage(it, UsageTotal.of(a.optJSONObject("total")), a.optBoolean("outside"), UsageCost.of(a.optJSONObject("cost")))
+    val cost = UsageCost.of(a.optJSONObject("cost"))
+    if (a.has("cost") && cost == null) return@let null
+    AgentUsage(it, UsageTotal.of(a.optJSONObject("total")), a.optBoolean("outside"), cost)
 }
 
 /**
@@ -416,19 +424,21 @@ private fun sandboxesOf(report: JSONObject): Pair<List<SandboxUsage>, Int> {
 fun sumBars(sum: List<UsagePoint>, scope: String, cost: Boolean, window: UsageWindow, now: Long, offset: Long): List<UsageBar> =
     usageBars(listOf(UsageSeries(scope, sum.map { UsagePoint(it.at, it.calls, if (cost) it.cost?.usdMicros else it.tokens) })), window, now, offset)
 
-/** The cost of a [sum], every bucket added; null when no bucket has one. */
-fun sumCost(sum: List<UsagePoint>): UsageCost? =
-    sum.mapNotNull { it.cost }.takeIf { it.isNotEmpty() }?.reduce(UsageCost::plus)
-
 /**
  * What a screen reader says of a sandbox's or an agent's chart: its window, what it measures and
  * the bucket of the most. The total beside the chart gives the whole.
  */
-fun sumSummary(bars: List<UsageBar>, window: UsageWindow, cost: Boolean, bucketLabel: (Long) -> String): String {
+fun sumSummary(
+    bars: List<UsageBar>,
+    window: UsageWindow,
+    cost: Boolean,
+    bucketLabel: (Long) -> String,
+    costAt: (Long) -> UsageCost? = { null },
+): String {
     val what = if (cost) "Estimated cost" else "Tokens"
     val peak = bars.maxByOrNull { it.tokens }?.takeIf { it.tokens > 0 }
         ?: return "$what over the last ${window.label}: none."
-    val amount = if (cost) dollarsText(peak.tokens) else "${tokensText(peak.tokens)} tokens"
+    val amount = if (cost) costAt(peak.at)?.let(::costText) ?: dollarsText(peak.tokens) else "${tokensText(peak.tokens)} tokens"
     return "$what over the last ${window.label}, a bar per ${if (window.bucket < 86_400) "hour" else "day"}. The most: ${bucketLabel(peak.at)}, $amount."
 }
 

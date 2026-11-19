@@ -54,13 +54,12 @@ class UsageCostTest {
         assertEquals(listOf("lab"), usage.sandboxes.map { it.sandbox })
         assertEquals(UsageCost(1_250_000, unpriced = 9), usage.sandboxes[0].cost)
         assertEquals(listOf(86_400L, 172_800L), usage.sum.map { it.at })
-        assertEquals(UsageCost(1_250_000, unpriced = 9), sumCost(usage.sum))
+        assertEquals(UsageCost(750_000, unpriced = 9), usage.sum[0].cost)
         // Two sandbox rows and one point it could not read are said, not dropped silently.
         assertTrue(usage.error!!, usage.error!!.contains("2 sandbox rows") && usage.error!!.contains("1 chart entries"))
         // An older bridge: none of them.
         val old = HostUsage().loading("u2", UsageWindow.Week).received("u2", JSONObject("""{"of":"u2","since":0,"agents":[]}"""))
         assertTrue(old.sandboxes.isEmpty() && old.sum.isEmpty())
-        assertNull(sumCost(old.sum))
     }
 
     @Test fun a_scopes_bars_are_its_tokens_or_its_dollars_a_bucket() {
@@ -77,9 +76,30 @@ class UsageCostTest {
         val tokens = sumBars(sum, "h/lab", cost = false, UsageWindow.Week, now, 0)
         assertEquals(listOf(60L, 40L), tokens.takeLast(2).map { it.tokens })
         assertEquals(listOf("h/lab"), tokens.last().parts.map { it.first })
-        val summary = sumSummary(dollars, UsageWindow.Week, cost = true) { "day $it" }
+        val summary = sumSummary(dollars, UsageWindow.Week, cost = true, bucketLabel = { "day $it" })
         assertTrue(summary, summary.startsWith("Estimated cost over the last 7 days, a bar per day. The most: day ${today - day}, $0.75."))
-        assertEquals("Tokens over the last 7 days: none.", sumSummary(emptyList(), UsageWindow.Week, cost = false) { "" })
+        assertEquals("Tokens over the last 7 days: none.", sumSummary(emptyList(), UsageWindow.Week, cost = false, bucketLabel = { "" }))
+        // Read with each bucket's cost, it says what the dollars leave out.
+        val said = sumSummary(dollars, UsageWindow.Week, cost = true, bucketLabel = { "day $it" }) { at -> sum.firstOrNull { it.at == at }?.cost }
+        assertTrue(said, said.endsWith("≥~$0.75."))
+    }
+
+    @Test fun usage_without_tokens_shows_no_cost_rather_than_nothing() {
+        val calls = UsageTotal(calls = 3)
+        assertNull(shownCost(calls, UsageCost()))
+        val tokens = UsageTotal(1, Tokens(input = 10))
+        assertEquals(UsageCost(5), shownCost(tokens, UsageCost(5)))
+        assertNull(shownCost(tokens, null))
+    }
+
+    @Test fun an_agent_row_whose_cost_does_not_read_is_said_not_shown_without_it() {
+        val report = JSONObject(
+            """{"of":"u1","since":0,"agents":[{"agent":"lab/main","total":{"calls":1},"cost":{"usd_micros":-1}},
+               {"agent":"lab/scout","total":{"calls":1},"cost":{"included":2}}]}""",
+        )
+        val usage = HostUsage().loading("u1", UsageWindow.Week).received("u1", report)
+        assertEquals(listOf("lab/scout"), usage.agents.map { it.agent })
+        assertTrue(usage.error!!, usage.error!!.contains("1 rows"))
     }
 
     @Test fun the_last_day_of_an_agent_carries_its_cost() {

@@ -216,7 +216,7 @@ private fun SandboxUsageRow(row: SandboxUsage, open: () -> Unit) {
 /** A total at a glance: its tokens, or its calls when the runtime counts no token, and its estimated cost when there is one. */
 private fun usageAmount(total: UsageTotal, cost: UsageCost?): String {
     val used = if (total.tokens.counted) "${tokensText(total.tokens.total)} tokens" else if (total.calls == 1L) "1 call" else "${total.calls} calls"
-    return cost?.let { "$used · ${costText(it)}" } ?: used
+    return shownCost(total, cost)?.let { "$used · ${costText(it)}" } ?: used
 }
 
 /** One agent's usage over the window: its name, its tokens and cost, and how they split. */
