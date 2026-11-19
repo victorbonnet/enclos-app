@@ -247,6 +247,46 @@ mod tests {
         );
     }
 
+    /// The app reads a task event's `event` by the names in this copy, which
+    /// a JVM test checks against Kotlin's `TaskEventKind`: each must read in
+    /// the pinned crate as its kind, every kind once, in the crate's order.
+    /// A name the crate does not know reads as `changed` there, so it lands
+    /// out of place; a kind the crate adds fails to build here until listed.
+    #[test]
+    fn the_apps_task_event_kinds_are_the_pinned_crates() {
+        use enclos_protocol::device::{ToDevice, decode_to_device};
+        use enclos_protocol::task_event::TaskEventKind as K;
+        let fixture = include_str!(
+            "../../android/app/src/test/resources/protocol/to_device_message_task_event.json"
+        )
+        .trim();
+        let read = |name: &str| {
+            let m = fixture.replace(r#""event":"triage""#, &format!(r#""event":"{name}""#));
+            let ToDevice::Message(line) = decode_to_device(m.as_bytes()).unwrap().body else {
+                panic!("the fixture is a message");
+            };
+            line.task_event.expect("a task event").event
+        };
+        let place = |kind: K| match kind {
+            K::Blocked => 0,
+            K::GaveUp => 1,
+            K::Crashed => 2,
+            K::TimedOut => 3,
+            K::Done => 4,
+            K::Review => 5,
+            K::ChangesRequested => 6,
+            K::Triage => 7,
+            K::Changed => 8,
+        };
+        let copy: Vec<usize> =
+            include_str!("../../android/app/src/test/resources/task-event-kinds.txt")
+                .lines()
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(|name| place(read(name)))
+                .collect();
+        assert_eq!(copy, (0..9).collect::<Vec<_>>());
+    }
+
     #[test]
     fn reports_the_crate_version() {
         assert_eq!(core_version(), env!("CARGO_PKG_VERSION"));

@@ -92,7 +92,9 @@ val Line.taskLine: Boolean get() = taskEvent != null
 
 /**
  * The runtime speaking, not the agent: a status line or a task line. Quiet:
- * never unread, and the inbox previews the last other message when there is one.
+ * never unread, the inbox previews the last other message when there is one
+ * ([previewOf]), and the agent's last active time leaves it out
+ * ([lastSpoke], [AppModel.lastActive]).
  */
 val Line.quiet: Boolean get() = status || taskLine
 
@@ -100,26 +102,45 @@ val Line.quiet: Boolean get() = status || taskLine
  * A task line's words, without its time: the task's id and title, its
  * assignee as the app names it ([assignee]; none when the event names none),
  * what happened, and where the task is now when that says more
- * (`t_a09759c7 S2a · Reviewer · sent to triage → queued`).
+ * (`t_a09759c7 S2a · Reviewer · sent to triage`, `… · Engineer · changed → running`).
  */
 fun taskEventText(event: TaskEvent, assignee: String?): String = "${taskEventSubject(event)} · ${taskEventWhat(event, assignee)}"
 
 /** The task a task line is about: its id and title (`t_a09759c7 S2a`). */
 fun taskEventSubject(event: TaskEvent): String = "${event.task} ${event.title}"
 
-/** What a task line says happened: its assignee when it has one, the event, and the state when that says more (`Reviewer · sent to triage → queued`). */
+/**
+ * What a task line says happened: its assignee when it has one, the event,
+ * and `→` the state when the event does not already say it
+ * (`Reviewer · sent to triage`, `Engineer · changed → running`).
+ */
 fun taskEventWhat(event: TaskEvent, assignee: String?): String = buildString {
     assignee?.let { append(it).append(" · ") }
     append(event.event.label)
-    event.state?.takeUnless { it.wire == event.event.wire }?.let { append(" → ").append(it.wire) }
+    event.state?.takeUnless { says(event.event, it) }?.let { append(" → ").append(it.wire) }
+}
+
+/**
+ * Whether [kind] already says the task is in [state]: the same word (`done`,
+ * `blocked`), a review whatever its state (a runtime's review status reads as
+ * `blocked`, Hermes's does), or triage while `queued` (Hermes's triage status).
+ */
+private fun says(kind: TaskEventKind, state: TaskState): Boolean = when (kind) {
+    TaskEventKind.Review -> true
+    TaskEventKind.Triage -> state == TaskState.Queued
+    else -> state.wire == kind.wire
 }
 
 /**
  * The task a task line of [host] opens: the one this phone keeps from the
  * bridge's `tasks` ([kept]) under the event's assignee and id. None without an
- * assignee, or when the phone does not keep that task (the bridge would answer
- * `task.get` with `not_found`): tasks reach the host's person only, so only
- * they are offered Open task.
+ * assignee, or when the phone does not keep that task. The bridge sends tasks
+ * to the host's person only, and answers `task.get` from anyone else
+ * `not_allowed` and for a task it does not keep `not_found`, so a phone that
+ * keeps the task is the host's person's and the bridge likely keeps it too.
+ * A phone that does not keep it (another person's, or the host's person's
+ * before a sync brings the task) is offered no Open task, even when the
+ * bridge does keep it.
  */
 fun taskOpenedBy(host: String, event: TaskEvent, kept: (TaskKey) -> AgentTask?): TaskKey? {
     val assignee = event.assignee ?: return null

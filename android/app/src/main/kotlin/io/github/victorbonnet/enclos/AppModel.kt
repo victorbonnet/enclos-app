@@ -246,6 +246,12 @@ val Line.status: Boolean get() = kind == "status"
 /** The agent's messages among [lines] after [read]; a status line or a task line never counts. */
 internal fun unreadAmong(lines: List<Line>, read: Long): Int = lines.count { it.from == "agent" && !it.quiet && it.seq > read }
 
+/** The message the inbox previews among [lines]: the last one that is not [quiet], else the last one. */
+internal fun previewOf(lines: List<Line>): Line? = lines.lastOrNull { !it.quiet } ?: lines.lastOrNull()
+
+/** When the agent last spoke among [lines], in seconds since the Unix epoch: its last message that is not [quiet], if it has a time. */
+internal fun lastSpoke(lines: List<Line>): Long? = lines.lastOrNull { it.from == "agent" && !it.quiet }?.time?.takeIf { it > 0 }
+
 /** Missing channels keep their history visible; only a host-confirmed removal can hide it. */
 internal fun listedWith(conversation: Conversation, lines: List<Line>, agents: List<Agent>, confirmedRemoved: Boolean = false): Boolean {
     if (conversation.group) return true
@@ -899,7 +905,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * its first one this phone knows of.
      */
     fun lastActive(agent: Agent): Long? = conversationsOf(agent)
-        .mapNotNull { c -> lines[c.id]?.lastOrNull { it.from == "agent" && !it.quiet }?.time?.takeIf { it > 0 } }
+        .mapNotNull { c -> lines[c.id]?.let(::lastSpoke) }
         .maxOrNull()
 
     /** The agent's messages in [conversation] not read on this device yet. */
@@ -1432,6 +1438,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 // changes, as a message the app cannot read is skipped
                 // ([readOrSkip]) and must leave nothing half done.
                 var line = lineOf(host.name, m, group = conversations.firstOrNull { it.id == id }?.group == true)
+                // Its words come from the sandbox: logged without them.
+                if (m.optString("kind") == TASK_EVENT && line.taskEvent == null) android.util.Log.d("enclos", "a task event the app cannot read is shown as its text")
                 // The bridge sends a conversation before its messages, at a
                 // sync and when one starts, so this is for an older bridge:
                 // the conversation is then taken as one with a single agent,

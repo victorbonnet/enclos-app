@@ -90,8 +90,10 @@ fun TaskCard(task: AgentTask, assignee: String, now: Long, open: () -> Unit) {
  * A task line: a runtime's task event (enclos ADR 0071), the runtime about
  * one of its tasks, not the agent talking. A quiet centred line, small and
  * faint, with its time, as a status line is, never a bubble: the task's id
- * and title ([idAndTitle], which gives way when the line is too long) then
- * its assignee and what happened ([what], kept whole). Every word comes from
+ * and title ([idAndTitle], which gives way first when the line is too long)
+ * then its assignee and what happened ([what]) and its [time], which keep
+ * their room and are cut short only when they alone do not fit the width, as
+ * a long shown name on a narrow phone can. Every word comes from
  * the sandbox, drawn as plain text. With [open], the host's person's phone
  * keeps the task, and **Open task** under the line opens its sheet; there is
  * no other action on it.

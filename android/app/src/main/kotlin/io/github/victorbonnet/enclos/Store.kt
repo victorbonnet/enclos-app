@@ -131,7 +131,9 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
     /** A message, from a row of [LINE]'s columns. */
     private fun line(c: android.database.Cursor): Line {
         // A task line whose kept details cannot be read is its text, as a `notify`.
-        val (kind, taskEvent) = taskEventOf(c.getString(4), c.getStringOrNull(12)?.let { runCatching { JSONObject(it) }.getOrNull() })
+        val kept = c.getString(4)
+        val (kind, taskEvent) = taskEventOf(kept, c.getStringOrNull(12)?.let { runCatching { JSONObject(it) }.getOrNull() })
+        if (kept == TASK_EVENT && taskEvent == null) android.util.Log.d("enclos", "a task line kept on the phone could not be read: shown as its text")
         return Line(
             seq = c.getLong(1),
             from = c.getString(2),

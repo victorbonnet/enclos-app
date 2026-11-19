@@ -484,7 +484,7 @@ private fun GroupRow(model: AppModel, c: Conversation, match: Line?, query: Stri
     val p = palette
     val handles = c.members.map { it.substringAfterLast('/') }
     val all = model.lines[c.id].orEmpty()
-    val last = match ?: (all.lastOrNull { !it.quiet } ?: all.lastOrNull())
+    val last = match ?: previewOf(all)
     val unread = model.unread(c.id)
     val working = model.groups[c.id]?.state == "working"
     ConversationActions(model, c, onClick) { action ->
@@ -556,7 +556,7 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
     val busy = working.isNotEmpty() || activity != null
     val home = entry.home
     val homeLines = home?.let { model.lines[it.id] }.orEmpty()
-    val last = homeLines.lastOrNull { !it.quiet } ?: homeLines.lastOrNull()
+    val last = previewOf(homeLines)
     val unread = home?.let { model.unread(it.id) } ?: 0
     val newest = model.lastAt(entry.address, archived)
     val line = p.lineStrong
@@ -951,7 +951,7 @@ private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, quer
     val p = palette
     // The last message, not a status line (gateway online) or a task line when there is anything else.
     val all = model.lines[c.id].orEmpty()
-    val last = all.lastOrNull { !it.quiet } ?: all.lastOrNull()
+    val last = previewOf(all)
     val unread = model.unread(c.id)
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(Modifier.fillMaxWidth().padding(start = 74.dp, end = 16.dp, top = 12.dp, bottom = 12.dp)) {
@@ -1037,7 +1037,7 @@ private fun AgentRow(model: AppModel, entry: AgentEntry, query: String, onOpen: 
     val name = model.agentLabel(entry.address)
     val home = entry.home
     val all = home?.let { model.lines[it.id] }.orEmpty()
-    val last = all.lastOrNull { !it.quiet } ?: all.lastOrNull()
+    val last = previewOf(all)
     val unread = home?.let { model.unread(it.id) } ?: 0
     val working = model.workingOn(entry.address)
     val newest = model.lastAt(entry.address)
@@ -1425,6 +1425,50 @@ fun SettingsScreen(model: AppModel, pair: () -> Unit, ask: Ask, openHost: (Strin
 
 // ---------- Conversation ----------
 
+/** How a conversation draws a line of its history. */
+internal enum class Drawn { Status, TaskLine, Bubble }
+
+/**
+ * How [line] is drawn in its conversation: the runtime about itself as a
+ * status line (one with files as a message, so they show); the runtime about
+ * one of its tasks as a task line (enclos ADR 0071), never a bubble; anything
+ * else as a bubble, a `task_event` the app could not read, kept as a
+ * `notify`, included.
+ */
+internal fun drawnAs(line: Line): Drawn = when {
+    line.status && line.attachments.isEmpty() -> Drawn.Status
+    line.taskEvent != null -> Drawn.TaskLine
+    else -> Drawn.Bubble
+}
+
+/**
+ * A task line of [host]'s conversation: [event]'s words, its assignee by the
+ * name [label] gives its `host/sandbox/agent`, at [line]'s time, with Open
+ * task ([open]) when the phone keeps the task ([kept], see [taskOpenedBy]);
+ * then [files] when [line] carries any.
+ */
+@Composable
+internal fun TaskLineItem(
+    host: String,
+    line: Line,
+    event: TaskEvent,
+    label: (String) -> String,
+    kept: (TaskKey) -> AgentTask?,
+    open: (TaskKey) -> Unit,
+    files: @Composable () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val opens = taskOpenedBy(host, event, kept)
+        TaskEventLine(
+            taskEventSubject(event),
+            taskEventWhat(event, event.assignee?.let { label("$host/$it") }),
+            Times.clock(line.time),
+            opens?.let { key -> { open(key) } },
+        )
+        if (line.attachments.isNotEmpty()) files()
+    }
+}
+
 /** One conversation with one agent: messages both ways, and what the agent sent on its own. */
 @Composable
 fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
@@ -1605,7 +1649,8 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 item(key = line.seq) {
                     // The runtime about itself: a quiet line, not a bubble.
                     // One with files is drawn as a message, so they show.
-                    if (line.status && line.attachments.isEmpty()) {
+                    val drawn = drawnAs(line)
+                    if (drawn == Drawn.Status) {
                         val group = notices[line.seq]
                         if (group != null) Arriving {
                             Column {
@@ -1617,17 +1662,11 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                     }
                     // The runtime about one of its tasks: a task line, never a bubble (enclos ADR 0071),
                     // with Open task when this phone keeps the task. Its files, if any, still show.
-                    line.taskEvent?.let { event ->
+                    val event = line.taskEvent
+                    if (drawn == Drawn.TaskLine && event != null) {
                         Arriving {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                val opens = taskOpenedBy(conversation.host, event) { model.tasks[it] }
-                                TaskEventLine(
-                                    taskEventSubject(event),
-                                    taskEventWhat(event, event.assignee?.let { model.agentLabel("${conversation.host}/$it") }),
-                                    Times.clock(line.time),
-                                    opens?.let { key -> { model.taskDetails.show(key) } },
-                                )
-                                if (line.attachments.isNotEmpty()) Files(line.attachments, model.files) { model.fetch(conversation.host, it) }
+                            TaskLineItem(conversation.host, line, event, { model.agentLabel(it) }, { model.tasks[it] }, { model.taskDetails.show(it) }) {
+                                Files(line.attachments, model.files) { model.fetch(conversation.host, it) }
                             }
                         }
                         return@item
