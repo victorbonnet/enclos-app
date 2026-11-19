@@ -210,6 +210,43 @@ mod tests {
         }
     }
 
+    /// The app reads messages in Kotlin, against its copies of enclos's
+    /// fixtures: the copy of the task event fixture must still read in the
+    /// pinned crate as a task line (ADR 0071), so the two cannot drift.
+    #[test]
+    fn the_apps_task_event_fixture_reads_in_the_pinned_crate() {
+        use enclos_protocol::device::{ToDevice, decode_to_device};
+        let copy = include_str!(
+            "../../android/app/src/test/resources/protocol/to_device_message_task_event.json"
+        );
+        let ToDevice::Message(line) = decode_to_device(copy.trim().as_bytes()).unwrap().body else {
+            panic!("the fixture is a message");
+        };
+        assert_eq!(line.kind, "task_event");
+        let event = line.task_event.expect("a task event");
+        assert_eq!(
+            (event.task.as_str(), event.assignee.as_deref()),
+            ("t_a09759c7", Some("lab/reviewer"))
+        );
+    }
+
+    /// Every capability the app names in its `auth` (Kotlin's
+    /// `DEVICE_CAPABILITIES`) is one the pinned crate knows: a name it does
+    /// not know would be ignored by the bridge, and the feature left off.
+    #[test]
+    fn the_capabilities_the_app_announces_are_known_to_the_pinned_crate() {
+        use enclos_protocol::device::{FromDevice, decode_from_device};
+        use enclos_protocol::plugin::Capability;
+        let auth = br#"{"v":1,"id":"a-1","type":"auth","device":"d-1","sig":"c2ln","capabilities":["runtime_approval_scopes","task_events"]}"#;
+        let FromDevice::Auth { capabilities, .. } = decode_from_device(auth).unwrap().body else {
+            panic!("an auth");
+        };
+        assert_eq!(
+            capabilities,
+            [Capability::RuntimeApprovalScopes, Capability::TaskEvents]
+        );
+    }
+
     #[test]
     fn reports_the_crate_version() {
         assert_eq!(core_version(), env!("CARGO_PKG_VERSION"));

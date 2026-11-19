@@ -132,6 +132,7 @@ import io.github.victorbonnet.enclos.ui.UnreadBadge
 import io.github.victorbonnet.enclos.ui.UsageNote
 import io.github.victorbonnet.enclos.ui.Files
 import io.github.victorbonnet.enclos.ui.TaskCard
+import io.github.victorbonnet.enclos.ui.TaskEventLine
 import io.github.victorbonnet.enclos.ui.ToolSteps
 import io.github.victorbonnet.enclos.ui.WorkingBubble
 import io.github.victorbonnet.enclos.ui.WorkingWave
@@ -483,7 +484,7 @@ private fun GroupRow(model: AppModel, c: Conversation, match: Line?, query: Stri
     val p = palette
     val handles = c.members.map { it.substringAfterLast('/') }
     val all = model.lines[c.id].orEmpty()
-    val last = match ?: (all.lastOrNull { !it.status } ?: all.lastOrNull())
+    val last = match ?: (all.lastOrNull { !it.quiet } ?: all.lastOrNull())
     val unread = model.unread(c.id)
     val working = model.groups[c.id]?.state == "working"
     ConversationActions(model, c, onClick) { action ->
@@ -555,7 +556,7 @@ private fun AgentHead(model: AppModel, entry: AgentEntry, query: String, now: Lo
     val busy = working.isNotEmpty() || activity != null
     val home = entry.home
     val homeLines = home?.let { model.lines[it.id] }.orEmpty()
-    val last = homeLines.lastOrNull { !it.status } ?: homeLines.lastOrNull()
+    val last = homeLines.lastOrNull { !it.quiet } ?: homeLines.lastOrNull()
     val unread = home?.let { model.unread(it.id) } ?: 0
     val newest = model.lastAt(entry.address, archived)
     val line = p.lineStrong
@@ -948,9 +949,9 @@ internal fun highlighted(text: String, query: String, accent: Color): AnnotatedS
 @Composable
 private fun ConversationRow(model: AppModel, c: Conversation, match: Line?, query: String, onClick: () -> Unit) {
     val p = palette
-    // The last message, not a status line (gateway online) when there is anything else.
+    // The last message, not a status line (gateway online) or a task line when there is anything else.
     val all = model.lines[c.id].orEmpty()
-    val last = all.lastOrNull { !it.status } ?: all.lastOrNull()
+    val last = all.lastOrNull { !it.quiet } ?: all.lastOrNull()
     val unread = model.unread(c.id)
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(Modifier.fillMaxWidth().padding(start = 74.dp, end = 16.dp, top = 12.dp, bottom = 12.dp)) {
@@ -1036,7 +1037,7 @@ private fun AgentRow(model: AppModel, entry: AgentEntry, query: String, onOpen: 
     val name = model.agentLabel(entry.address)
     val home = entry.home
     val all = home?.let { model.lines[it.id] }.orEmpty()
-    val last = all.lastOrNull { !it.status } ?: all.lastOrNull()
+    val last = all.lastOrNull { !it.quiet } ?: all.lastOrNull()
     val unread = home?.let { model.unread(it.id) } ?: 0
     val working = model.workingOn(entry.address)
     val newest = model.lastAt(entry.address)
@@ -1610,6 +1611,23 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                             Column {
                                 if (group.size > 1) TextLink("${group.size} runtime updates") { statusExpanded[line.seq] = statusExpanded[line.seq] != true }
                                 (if (statusExpanded[line.seq] == true) group else listOf(line)).forEach { notice -> StatusLine(runtime, notice.text, Times.clock(notice.time)) }
+                            }
+                        }
+                        return@item
+                    }
+                    // The runtime about one of its tasks: a task line, never a bubble (enclos ADR 0071),
+                    // with Open task when this phone keeps the task. Its files, if any, still show.
+                    line.taskEvent?.let { event ->
+                        Arriving {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                val opens = taskOpenedBy(conversation.host, event) { model.tasks[it] }
+                                TaskEventLine(
+                                    taskEventSubject(event),
+                                    taskEventWhat(event, event.assignee?.let { model.agentLabel("${conversation.host}/$it") }),
+                                    Times.clock(line.time),
+                                    opens?.let { key -> { model.taskDetails.show(key) } },
+                                )
+                                if (line.attachments.isNotEmpty()) Files(line.attachments, model.files) { model.fetch(conversation.host, it) }
                             }
                         }
                         return@item
