@@ -1,5 +1,7 @@
 package io.github.victorbonnet.enclos
 
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -26,7 +28,7 @@ class ModelScreenTest {
     private val address = "mac/lab/main"
 
     /** A host: what the page sent, and the answers it gets once [answer] is called. */
-    private inner class Host(val applies: String = "live", val current: JSONObject? = JSONObject().put("provider", "provider-a").put("model", "model-1"), val failModels: Boolean = false) {
+    private inner class Host(val applies: String = "live", val current: JSONObject? = JSONObject().put("provider", "provider-a").put("model", "model-1"), val failModels: Boolean = false, val extraModels: Int = 0) {
         val sent = mutableListOf<JSONObject>()
         private val queued = mutableListOf<JSONObject>()
         val client = ModelClient(send = { _, m -> sent += m; queued += reply(m); true }, connected = { it == "mac" }, supported = { it == address },
@@ -44,7 +46,8 @@ class ModelScreenTest {
                         .put(JSONObject().put("id", "provider-b").put("label", "Provider B").put("usable", false).put("setup", "Log in on the host.")))
                 "models" -> if (failModels) JSONObject().put("type", "error").put("of", m.getString("id")).put("code", "agent_unavailable").put("message", "Hermes could not read its model inventory.")
                 else base.put("result", "models").put("provider", m.getString("provider"))
-                    .put("models", JSONArray().put(JSONObject().put("id", "model-1").put("label", "Model One")).put(JSONObject().put("id", "model-2").put("label", "Model Two")))
+                    .put("models", JSONArray().put(JSONObject().put("id", "model-1").put("label", "Model One")).put(JSONObject().put("id", "model-2").put("label", "Model Two"))
+                        .apply { (3 until 3 + extraModels).forEach { n -> put(JSONObject().put("id", "model-$n").put("label", "Model $n")) } })
                 else -> base.put("result", "set").put("current", JSONObject().put("provider", m.getString("provider")).put("model", m.getString("model")))
                     .put("revision", "r2").put("applies", applies)
             }
@@ -72,14 +75,14 @@ class ModelScreenTest {
         val host = Host(applies = "restart")
         show(host)
         compose.onNodeWithText("Model Two").performScrollTo().performClick()
-        compose.onNodeWithText("Save").performScrollTo().performClick()
+        compose.onNodeWithText("Save").performClick()
         compose.onNodeWithText("Restart the sandbox's agents?").assertExists()
         assertTrue("nothing sent before confirming", host.actions("set").isEmpty())
         compose.onNodeWithText("Cancel").performClick()
         compose.waitForIdle()
         assertTrue("dismissed, nothing sent", host.actions("set").isEmpty())
 
-        compose.onNodeWithText("Save").performScrollTo().performClick()
+        compose.onNodeWithText("Save").performClick()
         compose.onNodeWithText("Save and restart").performClick()
         compose.waitForIdle()
         val set = host.actions("set").single()
@@ -87,11 +90,29 @@ class ModelScreenTest {
     }
 
     @Test
+    fun save_stays_in_reach_and_an_unsaved_choice_is_named() {
+        val host = Host(extraModels = 40)
+        show(host)
+        compose.onNodeWithText("Model 42").performScrollTo().performClick()
+        // Picked at the end of a long list: Save is still on screen, and the
+        // page says the pick is not saved yet.
+        compose.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithText("Not saved: model-42 (provider-a). Tap Save to change the model.").assertExists()
+        assertTrue("picking sends nothing", host.actions("set").isEmpty())
+
+        compose.onNodeWithText("Save").performClick()
+        host.answer()
+        compose.onNodeWithText("Now: model-42 (provider-a)").assertExists()
+        compose.onNodeWithText("Not saved: model-42 (provider-a). Tap Save to change the model.").assertDoesNotExist()
+        compose.onNodeWithText("Save").assertIsNotEnabled()
+    }
+
+    @Test
     fun a_runtime_that_applies_live_saves_at_once() {
         val host = Host()
         show(host)
         compose.onNodeWithText("Model Two").performScrollTo().performClick()
-        compose.onNodeWithText("Save").performScrollTo().performClick()
+        compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Restart the sandbox's agents?").assertDoesNotExist()
         assertEquals(1, host.actions("set").size)

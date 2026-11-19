@@ -18,7 +18,9 @@ import io.github.victorbonnet.enclos.ui.*
 /**
  * An agent's model (enclos `docs/protocol.md`, An agent's model): its
  * runtime's model providers, those it cannot use yet disabled with what to
- * do on the host, then the picked model provider's models, and Save.
+ * do on the host, then the picked model provider's models. Save sits in
+ * the top bar, and a choice not saved yet is named at the top, so that
+ * picking a model is never taken for saving it.
  * [hostConnected] tells an unreachable host from a runtime not offering
  * its model now.
  */
@@ -73,12 +75,15 @@ fun ModelScreen(client: ModelClient, address: String, hostConnected: Boolean, ba
             IconButton(Glyphs.back, "Back", back)
             Text("Model", style = Type.name, color = p.text, modifier = Modifier.weight(1f))
             ActionButton("Refresh", enabled = live && !busy, onClick = { client.refresh(address) })
+            ActionButton("Save", enabled = canSave, onClick = { if (options?.restarts == true) confirming = true else save() })
         }
         Hairline()
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
             Text(address, style = Type.code, color = p.textFaint, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
             Text("The model this agent uses for all its conversations, as its runtime on the host keeps it.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp))
             options?.current?.let { Text("Now: ${it.label}", style = Type.label, color = p.text, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
+            if (canSave && target != null) Text("Not saved: ${ModelSelection(provider, target).label}. Tap Save to change the model.", style = Type.small, color = p.accent, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            if (options?.restarts == true) Text("Saving restarts this sandbox's runtime, and every agent it serves with it.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             if (!hostConnected) Text("Connect to this agent's host to read or change its model.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
             else if (!live) Text("This agent's runtime does not offer its model right now. Its channel may be reconnecting.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
             else if (options != null && !options.fresh && !busy) Text("This is out of date. Refresh before changing the model.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
@@ -144,10 +149,6 @@ fun ModelScreen(client: ModelClient, address: String, hostConnected: Boolean, ba
                         }
                     }
                 }
-                if (options.restarts) Text("Saving restarts this sandbox's runtime, and every agent it serves with it.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
-                ActionButton("Save", enabled = canSave, modifier = Modifier.padding(start = 8.dp), onClick = {
-                    if (options.restarts) confirming = true else save()
-                })
             }
         }
     }
