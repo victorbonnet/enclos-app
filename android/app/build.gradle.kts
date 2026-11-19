@@ -76,7 +76,7 @@ android {
         unitTests {
             isIncludeAndroidResources = true
             // Robolectric's Android 17 sets a file descriptor's number
-            // through the JDK's jdk.internal.access, which Java 21 keeps
+            // through the JDK's jdk.internal.access, which the JDK keeps
             // to itself unless exported.
             all { it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED") }
         }

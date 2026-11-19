@@ -8,8 +8,9 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
  * menu of [screens] is there to see or reach, by touch, keyboard or
  * accessibility services (a dialog is a window of its own, which covering
  * the screens would leave above the lock), and none marks a message read.
- * Unlocked, [screens] come back where they were: their saved state (the
- * route, the tab, scroll positions) is kept meanwhile.
+ * Unlocked, [screens] come back where they were: their saveable state (the
+ * route, the tab, scroll positions, what `rememberSaveable` holds) is kept
+ * meanwhile; what `remember` holds is not, and their effects start again.
  */
 @Composable
 fun LockGate(locked: Boolean, lockScreen: @Composable () -> Unit, screens: @Composable () -> Unit) {

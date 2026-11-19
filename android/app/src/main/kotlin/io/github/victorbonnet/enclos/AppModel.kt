@@ -31,6 +31,8 @@ import java.util.concurrent.Executors
 data class Agent(val host: String, val name: String, val runtime: String, val capabilities: List<String>, val avatarRevision: Long = 0, val avatarVersion: String? = null, val canEditAvatar: Boolean = false, val supportsAvatars: Boolean = false, val canManageRoutines: Boolean = false, val displayName: String? = null, val nameRevision: Long = 0, val canEditName: Boolean = false, val supportsNames: Boolean = false, val canManageModel: Boolean = false) {
     /** Routines are offered when the runtime has them and the host lets this person manage them: its own person only. */
     val offersRoutines: Boolean get() = canManageRoutines && "routines" in capabilities
+    /** Its model can be chosen when the runtime offers it and the host lets this person: its own person only. */
+    val offersModel: Boolean get() = canManageModel && "model" in capabilities
     val sandbox: String get() = name.substringBefore('/')
     val agent: String get() = name.substringAfter('/')
     /** The shared human name; canonical identifiers never change when it does. */
@@ -347,7 +349,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     val models = ModelClient(
         send = { host, command -> connections[host]?.send(command) == true },
         connected = ::connected,
-        supported = { address -> agents.any { it.address == address && "model" in it.capabilities && it.canManageModel } },
+        supported = { address -> agents.any { it.address == address && it.offersModel } },
         later = { wait, action -> main.postDelayed({ action() }, wait) },
     )
     val agentImages = AgentImages(application,

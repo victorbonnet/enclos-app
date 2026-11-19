@@ -55,13 +55,13 @@ firebase-messaging = { module = "com.google.firebase:firebase-messaging", versio
 androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "androidx-fragment" }
 # Unit tests on the JVM, for what needs no phone
 junit = { module = "junit:junit", version.ref = "junit" }
-# org.json for those tests: android.jar's copy is a stub off the phone
+# org.json for those tests: android.jar's copy is a stub off the phone (Robolectric tests use Android's own)
 json = { module = "org.json:json", version.ref = "json" }
-# Instrumented tests, on a phone or an emulator, for what needs Android itself (SQLite)
+# Instrumented tests, on a phone or an emulator, for what needs a real device
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidx-test-runner" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidx-test-ext-junit" }
 # Android's own classes on the JVM, for the tests that need them: the
-# store's SQLite, Compose
+# store's SQLite, Compose, Android's own org.json
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
 # Compose tests wait for idle through Espresso. The Espresso ui-test-junit4

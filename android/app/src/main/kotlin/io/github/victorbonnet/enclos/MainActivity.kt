@@ -42,7 +42,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -249,9 +248,6 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(hosts, locked) { if (!locked) askNotificationsOnce() }
             EnclosTheme(dark) {
                 CompositionLocalProvider(LocalAgentPictures provides model.agentImages.pictures) {
-                    // Locked, the lock screen is all that is composed: no screen, dialog, sheet or menu
-                    // of the app is there to see or reach, by touch, keyboard or accessibility services,
-                    // and none marks a message read. Unlocked, the screens come back where they were.
                     LockGate(
                         model.lock.locked.value,
                         lockScreen = { LockScreen(model.lock, unlock = ::unlock, leave = { moveTaskToBack(true) }) },
@@ -376,7 +372,7 @@ private fun Screens(model: AppModel, ask: Ask) {
                     is Route.AgentPage -> AgentScreen(model, route.address, back = { go(route.up) }, openChat = { go(Route.Chat(it)) }, start = start, openRoutines = { go(Route.RoutinesPage(route.address, fromAgent = true, inSandbox = route.inSandbox)) }, openModel = { go(Route.ModelPage(route.address, inSandbox = route.inSandbox)) })
                     is Route.RoutinesPage -> RoutinesScreen(model, route.address, back = { go(route.up) })
                     is Route.HostPage -> HostScreen(model, route.name, back = { go(route.up) }, openSandbox = { go(Route.SandboxPage(it)) })
-                    is Route.ModelPage -> ModelScreen(model, route.address, back = { go(route.up) })
+                    is Route.ModelPage -> ModelScreen(model.models, route.address, model.connected(route.address.substringBefore('/')), back = { go(route.up) })
                     is Route.PolicyPage -> SandboxPolicyScreen(model, route.address, back = { go(route.up) })
                     is Route.SandboxPage -> SandboxScreen(
                         model,

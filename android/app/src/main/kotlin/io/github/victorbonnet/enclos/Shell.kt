@@ -254,7 +254,7 @@ private fun can(capability: String): String? = when (capability) {
  * controls.
  */
 @Composable
-fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (String) -> Unit, start: (Agent) -> Unit, openRoutines: () -> Unit, openModel: () -> Unit = {}) {
+fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (String) -> Unit, start: (Agent) -> Unit, openRoutines: () -> Unit, openModel: () -> Unit) {
     val p = palette
     val agent = model.agents.firstOrNull { it.address == address }
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
@@ -359,7 +359,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                     }
                 }
             }
-            if ("model" in agent.capabilities && agent.canManageModel) {
+            if (agent.offersModel) {
                 Section("Model") {
                     SettingRow(Modifier.clickable(onClickLabel = "Choose its model", onClick = openModel)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -377,7 +377,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 Info("Sandbox", agent.sandbox)
                 Info("Host", "${agent.host} · ${if (model.connected(agent.host)) "connected" else model.links[agent.host].shown()}")
                 // Choosing the model is the host's person's alone.
-                val does = agent.capabilities.filter { it != "model" || agent.canManageModel }.mapNotNull(::can)
+                val does = agent.capabilities.filter { it != "model" || agent.offersModel }.mapNotNull(::can)
                 Info("Can", if (does.isEmpty()) "known once its host reaches it" else does.joinToString(", "))
             }
             if (commands.isNotEmpty()) {

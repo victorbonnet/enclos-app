@@ -13,9 +13,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 
 /**
- * The phone's database, upgraded from the versions earlier releases
- * created, on Robolectric's SQLite: what was kept stays, and the tables
- * end as a new phone's.
+ * The phone's database, upgraded from every earlier version on
+ * Robolectric's SQLite: what was kept stays, and the tables end as a new
+ * phone's. Versions 1 and 5 are the tables those releases created; the
+ * others are version 1 with the upgrade steps up to them.
  */
 @RunWith(RobolectricTestRunner::class)
 class StoreUpgradeTest {
@@ -73,12 +74,34 @@ class StoreUpgradeTest {
     fun every_old_version_upgrades_to_the_tables_a_new_phone_gets() {
         val fresh = Store(context).use { schema(it.readableDatabase) }
         context.deleteDatabase(NAME)
-        for ((version, tables) in listOf(1 to V1, 5 to V5)) {
-            old(version, tables)
+        for (version in 1 until STORE_VERSION) {
+            old(version, tablesAt(version))
             val upgraded = Store(context).use { schema(it.readableDatabase) }
             assertEquals("from version $version", fresh, upgraded)
+            assertEquals("from version $version", "hello", Store(context).use { it.recent() }.lines.getValue("c1").single().text)
             context.deleteDatabase(NAME)
         }
+    }
+
+    @Test
+    fun a_version_9_database_lists_the_hosts_its_open_items_came_from() {
+        old(9, tablesAt(9))
+        SQLiteDatabase.openDatabase(context.getDatabasePath(NAME).path, null, SQLiteDatabase.OPEN_READWRITE).use {
+            it.execSQL("INSERT INTO open_items (host, item_key, conversation, info) VALUES ('mac', 'q1', 'c1', '{}')")
+            it.execSQL("INSERT INTO conversation_deletions (host, id) VALUES ('mac', 'gone')")
+        }
+        Store(context).use { store ->
+            val db = store.readableDatabase
+            assertEquals(listOf("mac"), db.rawQuery("SELECT host FROM open_item_hosts", null).use { c -> generateSequence { if (c.moveToNext()) c.getString(0) else null }.toList() })
+            assertEquals(1, db.rawQuery("SELECT COUNT(*) FROM conversation_deletions", null).use { c -> c.moveToFirst(); c.getInt(0) })
+        }
+    }
+
+    /** The tables at [version]: as recorded, else version 1 with the steps up to it. */
+    private fun tablesAt(version: Int): List<String> = when (version) {
+        1 -> V1
+        5 -> V5
+        else -> V1 + upgrades(1).dropLast(upgrades(version).size)
     }
 
     /** A database as a release at [version] created it, holding one host's agent, conversation and message. */
