@@ -47,11 +47,18 @@ fun NeedsYouRow(item: OpenItem, label: String, online: Boolean, photo: PhotoKey?
 fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (String) -> Unit) {
     val opening = model.focusedRequest ?: return
     val item = model.attentionItems().firstOrNull { it.key == opening.key }
-    if (item == null && model.needsYou.freshHosts[opening.host] == true) {
+    val heldKey = opening.agent?.takeIf { opening.kind == "held_task" }?.let { HeldTaskKey(opening.host, it, opening.id) }
+    // A held task this phone answered (or whose answer waits or is in doubt) left Needs you; its
+    // sheet stays to say what was answered, even when the row goes before `held_task.result`.
+    val answeredHere = heldKey != null && model.heldTasks.keepsSheet(heldKey)
+    if (item == null && model.needsYou.freshHosts[opening.host] == true && !answeredHere) {
         LaunchedEffect(opening.key) { model.focusedRequest = null }
         return
     }
     val current = item ?: opening
+    val heldCard = heldKey?.let { model.heldTasks.cards[it] }
+    // A bridge that takes answers gets the answer layout (enclos ADR 0073); an older one the layout before it.
+    val answerLayout = heldCard != null && model.heldTasks.answersOn(heldCard.host)
     val sheet = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = { model.focusedRequest = null }, sheetState = sheet,
@@ -59,12 +66,23 @@ fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (St
     ) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Needs you", style = Type.label, color = palette.accent)
-            Text(current.agent?.let { model.agentLabel("${current.host}/$it") } ?: "Policy request", style = Type.name, color = palette.text)
+            val label = current.agent?.let { model.agentLabel("${current.host}/$it") } ?: "Policy request"
+            Text(if (answerLayout && heldCard != null) heldTaskHeader(label, heldCard) else label, style = Type.name, color = palette.text)
             when (current.kind) {
                 "held_task" -> {
-                    val card = model.heldTasks.cards.values.firstOrNull { it.host == current.host && it.agent == current.agent && it.task == current.id }
-                    if (card == null) Text(current.summary, style = Type.small, color = palette.text)
-                    else {
+                    val card = heldCard
+                    if (card == null) {
+                        Text(current.summary, style = Type.small, color = palette.text)
+                    } else if (answerLayout) {
+                        HeldTaskAnswerPanel(model.heldTasks, card) {
+                            RequestSecondaryButton("View task") {
+                                model.focusedRequest = null
+                                model.taskDetails.showHeld(card)
+                            }
+                            if (card.state == HeldTaskState.Held && !card.resumable) TaskBoardAction(model, card)
+                            RequestFooter(model, current, openChat)
+                        }
+                    } else {
                         Text(card.title, style = Type.name, color = palette.text)
                         Text(card.reason, style = Type.small, color = palette.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
                         if (model.heldTasks.offersResume(card)) {
@@ -98,19 +116,26 @@ fun NeedsYouSheet(model: AppModel, openChat: (String) -> Unit, openApproval: (St
                     }
                 }
             }
-            val conversation = model.conversations.firstOrNull { it.host == current.host && it.id == current.conversation }
-            if (conversation != null) RequestSecondaryButton("View conversation") {
-                model.focusedRequest = null
-                openChat(conversation.id)
-            }
-            RequestSecondaryButton(if (current.key in model.reminderDismissals.pending) "Dismissing…" else "Dismiss reminder", enabled = model.reminderDismissals.unavailable(current) == null) {
-                model.reminderDismissals.dismiss(current)
-            }
-            Text("Dismiss hides this reminder. It leaves the request and work unchanged.", style = Type.small, color = palette.textMuted)
-            model.reminderDismissals.unavailable(current)?.let { Text(it, style = Type.small, color = palette.textMuted) }
-            model.reminderDismissals.errors[current.key]?.let { Text(it, style = Type.small, color = palette.textMuted) }
+            // The answer layout keeps these under its Details.
+            if (!(current.kind == "held_task" && answerLayout)) RequestFooter(model, current, openChat)
         }
     }
+}
+
+/** A request's View conversation (when its exact conversation is kept) and Dismiss reminder. */
+@Composable
+private fun RequestFooter(model: AppModel, current: OpenItem, openChat: (String) -> Unit) {
+    val conversation = model.conversations.firstOrNull { it.host == current.host && it.id == current.conversation }
+    if (conversation != null) RequestSecondaryButton("View conversation") {
+        model.focusedRequest = null
+        openChat(conversation.id)
+    }
+    RequestSecondaryButton(if (current.key in model.reminderDismissals.pending) "Dismissing…" else "Dismiss reminder", enabled = model.reminderDismissals.unavailable(current) == null) {
+        model.reminderDismissals.dismiss(current)
+    }
+    Text("Dismiss hides this reminder. It leaves the request and work unchanged.", style = Type.small, color = palette.textMuted)
+    model.reminderDismissals.unavailable(current)?.let { Text(it, style = Type.small, color = palette.textMuted) }
+    model.reminderDismissals.errors[current.key]?.let { Text(it, style = Type.small, color = palette.textMuted) }
 }
 
 @Composable
