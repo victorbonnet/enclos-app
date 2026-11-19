@@ -43,7 +43,6 @@ internal fun FileComposer(model: AppModel, c: Conversation, composer: @Composabl
         if (c.id in state.preparing || model.outgoing.waiting(c.id) || c.id in state.progress || uris.isEmpty()) { temporary?.delete(); return }
         val before = state.drafts[c.id].orEmpty()
         if (before.size + uris.size > 4) { state.errors[c.id] = "Choose at most four files."; temporary?.delete(); return }
-        val generation = state.generation
         val token = Any()
         state.preparing[c.id] = token
         state.errors.remove(c.id)
@@ -54,7 +53,7 @@ internal fun FileComposer(model: AppModel, c: Conversation, composer: @Composabl
                 if (state.preparing[c.id] !== token) return@post
                 state.preparing.remove(c.id)
                 // ViewModel ownership survives rotation; invalidation cannot resurrect discarded drafts.
-                if (generation == state.generation && model.conversations.any { it.id == c.id && it.host == c.host } && state.drafts[c.id].orEmpty() == before) {
+                if (model.conversations.any { it.id == c.id && it.host == c.host } && state.drafts[c.id].orEmpty() == before) {
                     result.onSuccess { state.drafts[c.id] = before + it }
                         .onFailure { state.errors[c.id] = it.message ?: "Could not read file." }
                 }

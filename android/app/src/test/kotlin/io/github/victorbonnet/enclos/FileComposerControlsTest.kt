@@ -17,8 +17,10 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class FileComposerControlsTest {
     @get:Rule val compose = createComposeRule()
     private var online by mutableStateOf(true)
@@ -90,9 +92,19 @@ class FileComposerControlsTest {
             val node = compose.onNodeWithText(label).performScrollTo().assertIsDisplayed()
             val layouts = mutableListOf<TextLayoutResult>()
             node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
-            assertTrue(layouts.isNotEmpty())
-            assertFalse(layouts.single().hasVisualOverflow)
-            if (label.contains(name)) assertTrue(layouts.single().lineCount > 1)
+            assertEquals("label=$label: expected one text layout", 1, layouts.size)
+            val layout = layouts.single()
+            val diagnostic = "label=$label size=${layout.size} lineCount=${layout.lineCount} " +
+                "didOverflowWidth=${layout.didOverflowWidth} didOverflowHeight=${layout.didOverflowHeight}"
+            assertFalse(diagnostic, layout.hasVisualOverflow)
+            if (label.contains(name)) {
+                assertTrue("$diagnostic: full filename must wrap", layout.lineCount > 1)
+                assertEquals("$diagnostic: full label must be laid out", label.length,
+                    layout.getLineEnd(layout.lineCount - 1))
+                for (line in 0 until layout.lineCount) {
+                    assertFalse("$diagnostic: line $line must not be ellipsized", layout.isLineEllipsized(line))
+                }
+            }
         }
     }
 }

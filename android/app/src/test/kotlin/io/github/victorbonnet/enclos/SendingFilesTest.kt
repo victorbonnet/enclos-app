@@ -4,6 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.GraphicsMode
 import java.util.Base64
 
 @RunWith(RobolectricTestRunner::class)
@@ -11,11 +12,14 @@ class SendingFilesTest {
     @Test fun discard_invalidates_inflight_preparation_and_errors() {
         val state = SendingFiles()
         val token = Any()
+        val unrelated = Any()
+        state.preparing["other"] = unrelated
         state.preparing["c"] = token
         state.errors["c"] = "Could not read file."
         val generation = state.generation
         state.forget("c")
         assertNull(state.preparing["c"])
+        assertSame(unrelated, state.preparing["other"])
         assertNull(state.errors["c"])
         assertTrue(state.generation > generation)
         state.preparing["other"] = Any()
@@ -119,6 +123,7 @@ class SendingFilesTest {
         assertFalse(out.pending("c", id))
     }
 
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
     @Test fun photo_is_reencoded_and_downsampled() {
         val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
         val file = java.io.File.createTempFile("source-photo", ".png", context.cacheDir)
@@ -133,8 +138,8 @@ class SendingFilesTest {
             assertFalse(prepared.bytes.toString(Charsets.ISO_8859_1).contains("Exif"))
             val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
             android.graphics.BitmapFactory.decodeByteArray(prepared.bytes, 0, prepared.bytes.size, bounds)
-            assertTrue(bounds.outWidth <= 2048)
-            assertTrue(bounds.outHeight <= 2048)
+            assertEquals("JPEG must decode at the target width", 2048, bounds.outWidth)
+            assertEquals("JPEG must preserve the scaled aspect ratio", 2, bounds.outHeight)
         } finally { file.delete() }
     }
 }
