@@ -129,19 +129,26 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
     }
 
     /** A message, from a row of [LINE]'s columns. */
-    private fun line(c: android.database.Cursor) = Line(
-        seq = c.getLong(1),
-        from = c.getString(2),
-        text = c.getString(3),
-        kind = c.getString(4),
-        time = c.getLong(5),
-        attachments = attachments(c.getStringOrNull(6)),
-        steps = steps(c.getStringOrNull(7)),
-        agent = c.getStringOrNull(8),
-        question = c.getStringOrNull(9),
-        heldTask = c.getStringOrNull(10),
-        suggestedReplies = c.getStringOrNull(11)?.let { runCatching { suggestedReplies(JSONArray(it)) }.getOrDefault(emptyList()) }.orEmpty(),
-    )
+    private fun line(c: android.database.Cursor): Line {
+        // A task line whose kept details cannot be read is its text, as a `notify`.
+        val kept = c.getString(4)
+        val (kind, taskEvent) = taskEventOf(kept, c.getStringOrNull(12)?.let { runCatching { JSONObject(it) }.getOrNull() })
+        if (kept == TASK_EVENT && taskEvent == null) android.util.Log.d("enclos", "a task line kept on the phone could not be read: shown as its text")
+        return Line(
+            seq = c.getLong(1),
+            from = c.getString(2),
+            text = c.getString(3),
+            kind = kind,
+            time = c.getLong(5),
+            attachments = attachments(c.getStringOrNull(6)),
+            steps = steps(c.getStringOrNull(7)),
+            agent = c.getStringOrNull(8),
+            question = c.getStringOrNull(9),
+            heldTask = c.getStringOrNull(10),
+            suggestedReplies = c.getStringOrNull(11)?.let { runCatching { suggestedReplies(JSONArray(it)) }.getOrDefault(emptyList()) }.orEmpty(),
+            taskEvent = taskEvent,
+        )
+    }
 
     // All reads and writes use AppModel's saving executor. Load once, and update
     // only after the matching SQLite transaction commits.
@@ -213,6 +220,7 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
             put("question", line.question)
             put("held_task", line.heldTask)
             put("suggested_replies", JSONArray(line.suggestedReplies).toString())
+            put("task_event", line.taskEvent?.json()?.toString())
         }
         writableDatabase.insertWithOnConflict("messages", null, values, SQLiteDatabase.CONFLICT_IGNORE)
     }
@@ -342,7 +350,7 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
 
     private companion object {
         /** A message's columns, its conversation first, as [line] reads them. */
-        const val LINE = "conversation, seq, sender, text, kind, time, attachments, steps, speaker, question, held_task, suggested_replies"
+        const val LINE = "conversation, seq, sender, text, kind, time, attachments, steps, speaker, question, held_task, suggested_replies, task_event"
     }
 
     private fun android.database.Cursor.getStringOrNull(i: Int) = if (isNull(i)) null else getString(i)
@@ -415,7 +423,7 @@ class Store(context: Context, name: String = "conversations.db") : SQLiteOpenHel
 }
 
 /** The database's version: [upgrades] brings an older one to it. */
-internal const val STORE_VERSION = 11
+internal const val STORE_VERSION = 12
 
 /** A new database, at [STORE_VERSION]. */
 internal val CREATE = listOf(
@@ -423,7 +431,7 @@ internal val CREATE = listOf(
         "home INTEGER NOT NULL DEFAULT 0, members TEXT, archived INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0)",
     // `seq` is the bridge's, increasing per host.
     "CREATE TABLE messages (host TEXT NOT NULL, seq INTEGER NOT NULL, conversation TEXT NOT NULL, sender TEXT NOT NULL, " +
-        "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, speaker TEXT, question TEXT, held_task TEXT, suggested_replies TEXT, " +
+        "text TEXT NOT NULL, kind TEXT NOT NULL, time INTEGER NOT NULL, attachments TEXT, steps TEXT, speaker TEXT, question TEXT, held_task TEXT, suggested_replies TEXT, task_event TEXT, " +
         "PRIMARY KEY (host, seq))",
     "CREATE INDEX messages_of ON messages (conversation, seq)",
     "CREATE TABLE agents (host TEXT NOT NULL, name TEXT NOT NULL, runtime TEXT NOT NULL, capabilities TEXT NOT NULL, " +
@@ -486,5 +494,7 @@ internal fun upgrades(old: Int): List<String> = buildList {
     if (old < 9) { add("ALTER TABLE messages ADD COLUMN suggested_replies TEXT"); add(OPEN_ITEMS) }
     if (old < 10) { add("CREATE TABLE open_item_hosts (host TEXT PRIMARY KEY)"); add("INSERT OR IGNORE INTO open_item_hosts(host) SELECT DISTINCT host FROM open_items") }
     if (old < 11) add("ALTER TABLE open_item_hosts ADD COLUMN policy_coverage TEXT")
+    // 12: a task line's task and what happened to it (enclos ADR 0071).
+    if (old < 12) add("ALTER TABLE messages ADD COLUMN task_event TEXT")
 
 }

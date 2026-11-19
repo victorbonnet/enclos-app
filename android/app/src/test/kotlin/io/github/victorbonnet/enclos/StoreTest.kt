@@ -53,6 +53,11 @@ class StoreTest {
     }
 
     @Test
+    fun version_11_gets_each_messages_task_event() {
+        assertEquals(listOf("ALTER TABLE messages ADD COLUMN task_event TEXT"), upgrades(11))
+    }
+
+    @Test
     fun version_1_goes_through_each_step_in_order() {
         assertEquals(listOf("ALTER TABLE conversations ADD COLUMN home INTEGER NOT NULL DEFAULT 0") + upgrades(2), upgrades(1))
         assertEquals(emptyList<String>(), upgrades(STORE_VERSION))

@@ -75,6 +75,8 @@ data class Line(
     /** The held task this message is about (a card of the same agent), whose card comes before it. */
     val heldTask: String? = null,
     val suggestedReplies: List<String> = emptyList(),
+    /** With `kind: task_event`, the task and what happened to it: drawn as a task line, never as a bubble. */
+    val taskEvent: TaskEvent? = null,
 )
 
 /** A file of a message, fetched from the bridge when it is shown. */
@@ -241,8 +243,14 @@ data class Replacing(val link: ReadLink, val old: Host)
 /** A message the runtime sends about itself (gateway online, shutting down): a quiet line, never unread. */
 val Line.status: Boolean get() = kind == "status"
 
-/** The agent's messages among [lines] after [read]; a status line never counts. */
-internal fun unreadAmong(lines: List<Line>, read: Long): Int = lines.count { it.from == "agent" && !it.status && it.seq > read }
+/** The agent's messages among [lines] after [read]; a status line or a task line never counts. */
+internal fun unreadAmong(lines: List<Line>, read: Long): Int = lines.count { it.from == "agent" && !it.quiet && it.seq > read }
+
+/** The message the inbox previews among [lines]: the last one that is not [quiet], else the last one. */
+internal fun previewOf(lines: List<Line>): Line? = lines.lastOrNull { !it.quiet } ?: lines.lastOrNull()
+
+/** When the agent last spoke among [lines], in seconds since the Unix epoch: its last message that is not [quiet], if it has a time. */
+internal fun lastSpoke(lines: List<Line>): Long? = lines.lastOrNull { it.from == "agent" && !it.quiet }?.time?.takeIf { it > 0 }
 
 /** Missing channels keep their history visible; only a host-confirmed removal can hide it. */
 internal fun listedWith(conversation: Conversation, lines: List<Line>, agents: List<Agent>, confirmedRemoved: Boolean = false): Boolean {
@@ -898,7 +906,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * its first one this phone knows of.
      */
     fun lastActive(agent: Agent): Long? = conversationsOf(agent)
-        .mapNotNull { c -> lines[c.id]?.lastOrNull { it.from == "agent" && !it.status }?.time?.takeIf { it > 0 } }
+        .mapNotNull { c -> lines[c.id]?.let(::lastSpoke) }
         .maxOrNull()
 
     /** The agent's messages in [conversation] not read on this device yet. */
@@ -1431,6 +1439,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 // changes, as a message the app cannot read is skipped
                 // ([readOrSkip]) and must leave nothing half done.
                 var line = lineOf(host.name, m, group = conversations.firstOrNull { it.id == id }?.group == true)
+                // Its words come from the sandbox: logged without them.
+                if (m.optString("kind") == TASK_EVENT && line.taskEvent == null) android.util.Log.d("enclos", "a task event the app cannot read is shown as its text")
                 // The bridge sends a conversation before its messages, at a
                 // sync and when one starts, so this is for an older bridge:
                 // the conversation is then taken as one with a single agent,
@@ -2406,13 +2416,17 @@ fun lineIn(m: JSONObject): Line {
         val name = Visible.stripped(a.optString("name")).trim().ifEmpty { "file" }
         Attachment(a.getString("id"), a.optString("mime"), name, a.optLong("size"))
     }.filter { Attachments.validId(it.id) }
+    // A task line with details the app can read; without them, its text as a `notify`.
+    val (kind, taskEvent) = taskEventOf(m.getString("kind"), m.opt("task_event"))
     return Line(
-        m.getLong("seq"), m.getString("from"), m.getString("text"), m.getString("kind"), m.optLong("time"), attached,
+        m.getLong("seq"), m.getString("from"), m.getString("text"), kind, m.optLong("time"), attached,
         // Typed native question metadata is delivered separately, before this message.
         question = (m.opt("question") as? String)?.takeIf { it.isNotBlank() },
         // A held task's id, without a hidden character, as the protocol carries one; anything else links no card.
         heldTask = protocolId(m.opt("held_task"))?.takeUnless { Visible.hasHidden(it) },
-        suggestedReplies = suggestedReplies(m.opt("suggested_replies")),
+        // A task line offers none: it is not the agent talking.
+        suggestedReplies = if (taskEvent != null) emptyList() else suggestedReplies(m.opt("suggested_replies")),
+        taskEvent = taskEvent,
     )
 }
 

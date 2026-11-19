@@ -210,6 +210,83 @@ mod tests {
         }
     }
 
+    /// The app reads messages in Kotlin, against its copies of enclos's
+    /// fixtures: the copy of the task event fixture must still read in the
+    /// pinned crate as a task line (ADR 0071), so the two cannot drift.
+    #[test]
+    fn the_apps_task_event_fixture_reads_in_the_pinned_crate() {
+        use enclos_protocol::device::{ToDevice, decode_to_device};
+        let copy = include_str!(
+            "../../android/app/src/test/resources/protocol/to_device_message_task_event.json"
+        );
+        let ToDevice::Message(line) = decode_to_device(copy.trim().as_bytes()).unwrap().body else {
+            panic!("the fixture is a message");
+        };
+        assert_eq!(line.kind, "task_event");
+        let event = line.task_event.expect("a task event");
+        assert_eq!(
+            (event.task.as_str(), event.assignee.as_deref()),
+            ("t_a09759c7", Some("lab/reviewer"))
+        );
+    }
+
+    /// Every capability the app names in its `auth` (Kotlin's
+    /// `DEVICE_CAPABILITIES`) is one the pinned crate knows: a name it does
+    /// not know would be ignored by the bridge, and the feature left off.
+    #[test]
+    fn the_capabilities_the_app_announces_are_known_to_the_pinned_crate() {
+        use enclos_protocol::device::{FromDevice, decode_from_device};
+        use enclos_protocol::plugin::Capability;
+        let auth = br#"{"v":1,"id":"a-1","type":"auth","device":"d-1","sig":"c2ln","capabilities":["runtime_approval_scopes","task_events"]}"#;
+        let FromDevice::Auth { capabilities, .. } = decode_from_device(auth).unwrap().body else {
+            panic!("an auth");
+        };
+        assert_eq!(
+            capabilities,
+            [Capability::RuntimeApprovalScopes, Capability::TaskEvents]
+        );
+    }
+
+    /// The app reads a task event's `event` by the names in this copy, which
+    /// a JVM test checks against Kotlin's `TaskEventKind`: each must read in
+    /// the pinned crate as its kind, every kind once, in the crate's order.
+    /// A name the crate does not know reads as `changed` there, so it lands
+    /// out of place; a kind the crate adds fails to build here until listed.
+    #[test]
+    fn the_apps_task_event_kinds_are_the_pinned_crates() {
+        use enclos_protocol::device::{ToDevice, decode_to_device};
+        use enclos_protocol::task_event::TaskEventKind as K;
+        let fixture = include_str!(
+            "../../android/app/src/test/resources/protocol/to_device_message_task_event.json"
+        )
+        .trim();
+        let read = |name: &str| {
+            let m = fixture.replace(r#""event":"triage""#, &format!(r#""event":"{name}""#));
+            let ToDevice::Message(line) = decode_to_device(m.as_bytes()).unwrap().body else {
+                panic!("the fixture is a message");
+            };
+            line.task_event.expect("a task event").event
+        };
+        let place = |kind: K| match kind {
+            K::Blocked => 0,
+            K::GaveUp => 1,
+            K::Crashed => 2,
+            K::TimedOut => 3,
+            K::Done => 4,
+            K::Review => 5,
+            K::ChangesRequested => 6,
+            K::Triage => 7,
+            K::Changed => 8,
+        };
+        let copy: Vec<usize> =
+            include_str!("../../android/app/src/test/resources/task-event-kinds.txt")
+                .lines()
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(|name| place(read(name)))
+                .collect();
+        assert_eq!(copy, (0..9).collect::<Vec<_>>());
+    }
+
     #[test]
     fn reports_the_crate_version() {
         assert_eq!(core_version(), env!("CARGO_PKG_VERSION"));

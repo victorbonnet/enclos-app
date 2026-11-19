@@ -128,8 +128,12 @@ fun byAgent(
     }
 }
 
-/** A message's words: the agent's without the marks of its markdown; a file alone, by what it is. */
+/**
+ * A message's words: the agent's without the marks of its markdown; a file
+ * alone, by what it is; a task line's as it reads, its assignee by its handle.
+ */
 fun words(line: Line): String {
+    line.taskEvent?.let { return taskEventText(it, it.assignee?.substringAfter('/')) }
     val text = if (line.from == "agent") Markdown.plain(line.text) else line.text
     if (text.isNotBlank() || line.attachments.isEmpty()) return text
     return line.attachments.joinToString(", ") { if (it.image) "Image" else it.shownName }
