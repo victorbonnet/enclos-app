@@ -122,38 +122,71 @@ class ProvisioningClientTest {
         val f = Fixture(); f.ready()
         f.client.received("mac", JSONObject("""{"type":"sandboxes.list","sandboxes":[
             {"sandbox":"home","runtime":"hermes","state":"running","runtime_version":"0.23.1",
-             "runtime_release":{"version":"0.23.2","checked":true,"newer":true}},
+             "runtime_release":{"version":"0.23.2","checked":true},"runtime_outdated":true},
             {"sandbox":"claw","runtime":"openclaw","state":"running",
              "runtime_release":{"version":"2026.11.6","checked":false}},
             {"sandbox":"lab","runtime":"hermes","state":"stopped","runtime_version":"0.23.2",
-             "runtime_release":{"version":"0.23.2","checked":true,"newer":false}},
+             "runtime_release":{"version":"0.23.2","checked":true},"runtime_outdated":false},
             {"sandbox":"empty","runtime":null,"state":"created"}
         ]}"""))
         val listed = f.client.sandboxesOf("mac").associateBy { it.name }
 
         val home = listed.getValue("home")
-        assertEquals("Hermes 0.23.1", home.runtimeShown)
-        assertEquals(RuntimeRelease("0.23.2", checked = true, newer = true), home.update)
-        assertEquals("0.23.2 available · checked with this host's enclos", home.update?.shown)
+        assertEquals("Hermes 0.23.1", runtimeLine(home))
+        assertEquals(RuntimeRelease("0.23.2", checked = true), home.update)
+        assertEquals("0.23.2 available · checked with this host's enclos", releaseLine(home))
 
-        // The version installed unknown: no update offered, whatever the release.
+        // The version installed unknown: the host cannot tell, so nothing is offered or said.
         val claw = listed.getValue("claw")
-        assertEquals("OpenClaw", claw.runtimeShown)
-        assertEquals(RuntimeRelease("2026.11.6", checked = false, newer = null), claw.release)
+        assertEquals("OpenClaw", runtimeLine(claw))
+        assertEquals(RuntimeRelease("2026.11.6", checked = false), claw.release)
+        assertNull(claw.outdated)
         assertNull(claw.update)
-        assertEquals("2026.11.6 available · not checked with this host's enclos yet", claw.release?.shown)
+        assertNull(releaseLine(claw))
 
-        assertNull(listed.getValue("lab").update)
-        assertEquals("Hermes 0.23.2", listed.getValue("lab").runtimeShown)
-        assertNull(listed.getValue("empty").runtimeShown)
+        // Not newer: said as such, no update.
+        val lab = listed.getValue("lab")
+        assertNull(lab.update)
+        assertEquals("Hermes 0.23.2", runtimeLine(lab))
+        assertEquals("0.23.2 · up to date", releaseLine(lab))
+        assertNull(runtimeLine(listed.getValue("empty")))
+
+        // A newer release this enclos was not checked with says so.
+        val unchecked = home.copy(release = RuntimeRelease("0.23.3", checked = false))
+        assertEquals("0.23.3 available · not checked with this host's enclos yet", releaseLine(unchecked))
+
+        // The fresh list the host sends once it has looked the releases up replaces the first.
+        f.client.received("mac", JSONObject("""{"type":"sandboxes.list","sandboxes":[
+            {"sandbox":"home","runtime":"hermes","state":"running","runtime_version":"0.23.1",
+             "runtime_release":{"version":"0.23.3","checked":false},"runtime_outdated":true}
+        ]}"""))
+        assertEquals("0.23.3", f.client.sandboxesOf("mac").single().update?.version)
     }
 
-    @Test fun an_older_bridges_sandbox_list_reads_as_before() {
+    @Test fun an_older_bridges_list_and_malformed_fields_offer_nothing() {
         val f = Fixture(); f.ready()
         val home = f.client.sandboxesOf("mac").single()
         assertNull(home.runtimeVersion)
         assertNull(home.release)
-        assertNull(runtimeRelease(JSONObject("""{"checked":true,"newer":true}""")))
+        assertNull(home.outdated)
+        assertNull(runtimeRelease(JSONObject("""{"checked":true}""")))
+        // Checked only when the host says so, in a boolean.
+        assertEquals(RuntimeRelease("1.0", checked = false), runtimeRelease(JSONObject("""{"version":"1.0","checked":"true"}""")))
+        // `runtime_outdated` that is not a boolean is "cannot tell", never "not newer".
+        f.client.received("mac", JSONObject("""{"type":"sandboxes.list","sandboxes":[
+            {"sandbox":"home","runtime":"hermes","state":"running","runtime_version":"0.23.1",
+             "runtime_release":"0.23.2","runtime_outdated":"yes"}
+        ]}"""))
+        val odd = f.client.sandboxesOf("mac").single()
+        assertNull(odd.release)
+        assertNull(odd.outdated)
+        assertNull(releaseLine(odd))
+    }
+
+    @Test fun runtimes_are_named_as_people_write_them() {
+        assertEquals("Hermes", runtimeName("hermes"))
+        assertEquals("OpenClaw", runtimeName("openclaw"))
+        assertEquals("Codex", runtimeName("codex"))
     }
 
 }

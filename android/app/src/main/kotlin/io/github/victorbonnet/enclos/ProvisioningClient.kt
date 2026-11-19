@@ -41,6 +41,8 @@ internal class ProvisioningClient(
                         s.optString("state").ifBlank { null },
                         runtimeVersion = s.optString("runtime_version").takeUnless { s.isNull("runtime_version") || it.isBlank() },
                         release = s.optJSONObject("runtime_release")?.let(::runtimeRelease),
+                        // Anything but a boolean is "cannot tell", never "not newer".
+                        outdated = s.opt("runtime_outdated") as? Boolean,
                     )
                 }
             }
@@ -184,12 +186,8 @@ internal class ProvisioningClient(
 
 }
 
-/** A sandbox runtime's latest release as the host sent it; none without a version. */
+/** A sandbox runtime's latest release as the host sent it; none without a version. Checked only when the host says so. */
 internal fun runtimeRelease(o: JSONObject): RuntimeRelease? {
     val version = o.optString("version").takeUnless { o.isNull("version") || it.isBlank() } ?: return null
-    return RuntimeRelease(
-        version = version,
-        checked = o.optBoolean("checked", false),
-        newer = if (o.has("newer") && !o.isNull("newer")) o.optBoolean("newer") else null,
-    )
+    return RuntimeRelease(version = version, checked = o.opt("checked") as? Boolean ?: false)
 }

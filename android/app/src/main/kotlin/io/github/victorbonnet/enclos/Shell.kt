@@ -378,7 +378,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 }
             }
             Section("Runs on") {
-                Info("Runtime", agent.runtime.replaceFirstChar { it.uppercase() })
+                Info("Runtime", runtimeName(agent.runtime))
                 Info("Sandbox", agent.sandbox)
                 Info("Host", "${agent.host} · ${if (model.connected(agent.host)) "connected" else model.links[agent.host].shown()}")
                 // Choosing the model is the host's person's alone.
@@ -642,9 +642,9 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
             return@Column
         }
         val live = model.connected(host)
-        val runtime = (listed?.runtime ?: agents.firstOrNull()?.runtime)?.replaceFirstChar { it.uppercase() }
+        val runtime = (listed?.runtime ?: agents.firstOrNull()?.runtime)?.let(::runtimeName)
         // With the version installed when the host lists it (enclos ADR 0074).
-        val runtimeShown = listed?.runtimeShown ?: runtime
+        val runtimeShown = listed?.let(::runtimeLine) ?: runtime
         val groups = model.conversations
             .filter { it.group && !it.archived && it.host == host && it.members.first().substringBefore('/') == sandbox }
             .sortedByDescending { model.lines[it.id]?.lastOrNull()?.time ?: 0L }
@@ -696,8 +696,8 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
             }
             ListHeading("Runs on")
             Info("Runtime", runtimeShown ?: "Not installed")
-            listed?.update?.let { release ->
-                Info("Latest", release.shown)
+            listed?.let(::releaseLine)?.let { Info("Latest", it) }
+            listed?.update?.let {
                 Text(
                     "Updating the runtime from the app comes later.",
                     style = Type.small,
@@ -919,7 +919,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                     Gap(14.dp)
                     Text(agent.label, style = Type.heading, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Gap(4.dp)
-                    Text("${agent.sandbox} · ${agent.runtime.replaceFirstChar { it.uppercase() }} · ${agent.host}", style = Type.small, color = p.textMuted)
+                    Text("${agent.sandbox} · ${runtimeName(agent.runtime)} · ${agent.host}", style = Type.small, color = p.textMuted)
                     val count = model.commands[agent.address]?.size ?: 0
                     if (count > 0) Text("$count commands: type / to see them", style = Type.small, color = p.textFaint)
                 }

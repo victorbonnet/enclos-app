@@ -8,16 +8,15 @@ data class Sandbox(
     val state: String? = null,
     /** Its runtime's version installed, when the host knows it (enclos ADR 0074). */
     val runtimeVersion: String? = null,
-    /** Its runtime's latest release, when the host looked it up. */
+    /** Its runtime's latest release, when the host has one kept, however old. */
     val release: RuntimeRelease? = null,
+    /** Whether [release] is newer than [runtimeVersion]: null when the host cannot tell. */
+    val outdated: Boolean? = null,
 ) {
     val address: String get() = "$host/$name"
 
-    /** Its runtime and the version installed, `Hermes 0.23.1`; the runtime alone when the host does not know it. */
-    val runtimeShown: String? get() = runtime?.let { listOfNotNull(runtimeName(it), runtimeVersion).joinToString(" ") }
-
-    /** Its runtime's latest release, when it is newer than the version installed. */
-    val update: RuntimeRelease? get() = release?.takeIf { it.newer == true }
+    /** Its runtime's latest release, when the host says it is newer than the version installed. */
+    val update: RuntimeRelease? get() = release?.takeIf { outdated == true }
 }
 
 /** A runtime's latest release, the one its installer installs by default, as the host found it. */
@@ -25,13 +24,7 @@ data class RuntimeRelease(
     val version: String,
     /** Whether the host's enclos was checked with it. */
     val checked: Boolean,
-    /** Whether it is newer than the version installed: null when the host cannot tell. */
-    val newer: Boolean?,
-) {
-    /** `0.23.2 available · checked with this host's enclos`. */
-    val shown: String
-        get() = "$version available · " + if (checked) "checked with this host's enclos" else "not checked with this host's enclos yet"
-}
+)
 
 /** A runtime's name as people write it. */
 fun runtimeName(runtime: String): String = when (runtime) {
