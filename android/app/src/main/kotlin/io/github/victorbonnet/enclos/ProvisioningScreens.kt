@@ -50,6 +50,24 @@ import io.github.victorbonnet.enclos.ui.Type
 import io.github.victorbonnet.enclos.ui.WorkingWave
 import io.github.victorbonnet.enclos.ui.palette
 
+/** A sandbox's runtime and the version installed, `Hermes 0.23.1`; the runtime alone when the host does not know it; null without a runtime. */
+internal fun runtimeLine(sandbox: Sandbox): String? =
+    sandbox.runtime?.let { listOfNotNull(runtimeName(it), sandbox.runtimeVersion).joinToString(" ") }
+
+/**
+ * What a sandbox's page says of its runtime's latest release (enclos ADR 0074): newer, with whether the host's
+ * enclos was checked with it; the version installed already; or nothing when the host cannot tell.
+ */
+internal fun releaseLine(sandbox: Sandbox): String? {
+    val release = sandbox.release ?: return null
+    return when (sandbox.outdated) {
+        true -> "${release.version} available · " +
+            if (release.checked) "checked with this host's enclos" else "not checked with this host's enclos yet"
+        false -> "${release.version} · up to date"
+        null -> null
+    }
+}
+
 /** Creation is scoped to one paired host; its bridge chooses the supported backend. */
 @Composable
 fun CreateSandboxScreen(model: AppModel, host: String, back: () -> Unit, created: (String) -> Unit) {
