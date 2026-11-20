@@ -12,80 +12,92 @@ import okhttp3.Request
 import okhttp3.WebSocket
 import okio.ByteString
 
-/** Synthetic protocol/error and concurrency probes on pinned production classes. */
+/** Receipts, refusals and history for a message with files; send pacing on a synthetic socket. */
 @RunWith(RobolectricTestRunner::class)
-class ReviewerSendPathTest {
+class FileSendPathTest {
+    private val key = FileKey("h", "c")
+
     @Test fun explicit_ack_settles_control() {
         val out = Outgoing()
-        out.files.drafts["c"] = listOf(SendFile("f.txt", "text/plain", byteArrayOf(1)))
-        out.send("c", "h", "hello") { "begin-id" }
-        out.acknowledged("h", "begin-id")
-        assertFalse(out.waiting("c"))
-        assertNull(out.files.drafts["c"])
+        out.files.drafted(key, SendFile("f.txt", "text/plain", byteArrayOf(1)))
+        val send = out.files.begin(key, "hello")!!
+        assertTrue(out.files.acknowledged("h", send.id))
+        assertFalse(out.files.busy("h"))
+        assertEquals(FilePhase.Draft, out.files.phase(key))
+        assertTrue(out.files.draft(key).isEmpty())
     }
 
     @Test fun canonical_history_without_origin_id_keeps_upload_unknown() {
         val out = Outgoing()
-        out.files.drafts["c"] = listOf(SendFile("f.txt", "text/plain", byteArrayOf(1)))
-        out.send("c", "h", "hello") { "begin-id" }
+        out.files.drafted(key, SendFile("f.txt", "text/plain", byteArrayOf(1)))
+        val send = out.files.begin(key, "hello")!!
+        out.files.transmitted(key, send.id)
         // DeviceWriter::send chooses a new envelope id; ConversationMessage has no origin id.
         out.shown("c", "hello")
-        assertTrue("canonical history has no safe correlation; continue awaiting ACK", out.waiting("c"))
+        out.shown("c", "hello", "h", hasAttachments = true)
+        assertTrue("canonical history has no safe correlation; continue awaiting ACK", out.files.phase(key) is FilePhase.AwaitingAck)
+        out.clear()
     }
 
     @Test fun canonical_history_then_refusal_retains_original_and_newer_text() {
         val out = Outgoing()
-        val file = SendFile("f.txt", "text/plain", byteArrayOf(1))
-        out.files.drafts["c"] = listOf(file)
-        val begin = out.files.id("c", "hello")
-        out.send("c", "h", "hello") { begin }
+        out.files.drafted(key, SendFile("f.txt", "text/plain", byteArrayOf(1)))
+        out.write("c", "hello")
+        val send = out.files.begin(key, "hello")!!
+        out.write("c", "")
         out.write("c", "next message")
         out.shown("c", "hello")
-        out.refused(begin, "the message is kept, and goes to the agent once it can be reached")
+        assertTrue(out.files.refused("h", send.id, "unconfirmed", "the message is kept, and goes to the agent once it can be reached"))
         assertEquals("Only newer composer text should remain after stored message", "next message", out.unsent["c"])
-        assertNotNull("original payload retained", out.files.retries["c"])
+        assertEquals("original payload retained", send.id, (out.files.phase(key) as FilePhase.Unknown).send.id)
+        out.clear()
     }
 
-    @Test fun unknown_retry_is_immutable_and_old_ack_preserves_newer_draft() {
+    @Test fun unknown_retry_is_the_same_original_and_old_ack_preserves_newer_draft() {
         val out = Outgoing()
-        val bytes = byteArrayOf(1)
-        out.files.drafts["c"] = listOf(SendFile("original.txt", "text/plain", bytes))
-        val id = out.files.id("c", "original")
-        out.send("c", "h", "original") { id }
-        bytes[0] = 9
+        val original = SendFile("original.txt", "text/plain", byteArrayOf(1))
+        out.files.drafted(key, original)
+        val send = out.files.begin(key, "original")!!
+        // The draft's bytes moved to the operation: nobody else holds them to change them.
+        assertSame(original, send.files.single())
+        assertTrue(out.files.draft(key).isEmpty())
         out.ended("h", "disconnected")
         out.write("c", "new text")
-        val newer = SendFile("new.txt", "text/plain", byteArrayOf(2))
-        out.files.drafts["c"] = listOf(newer)
-        val retry = out.files.retries.getValue("c")
-        assertEquals(id, retry.id)
+        val retry = out.files.retry(key)!!
+        assertSame(send, retry)
+        assertEquals(send.id, retry.id)
         assertEquals("original", retry.text)
-        assertArrayEquals(byteArrayOf(1), retry.files.single().bytes)
-        out.send("c", "h", retry.text, withFiles = true, preserveDraft = true) { retry.id }
-        out.refused(id, "post-storage refusal")
+        assertSame(original, retry.files.single())
+        assertTrue(out.files.refused("h", send.id, "internal", "post-storage refusal"))
         assertEquals("new text", out.unsent["c"])
-        out.acknowledged("h", id)
+        assertTrue(out.files.acknowledged("h", send.id))
         assertEquals("new text", out.unsent["c"])
-        assertEquals(listOf(newer), out.files.drafts["c"])
-        assertNull(out.files.retries["c"])
+        assertNull(out.files.phase(key).send())
+        val newer = SendFile("new.txt", "text/plain", byteArrayOf(2))
+        out.files.drafted(key, newer)
+        assertEquals(listOf(newer), out.files.draft(key))
+        out.clear()
     }
 
     @Test fun discarded_original_ack_cannot_clear_newer_retry_active_owner() {
         val out = Outgoing()
-        out.files.drafts["c"] = listOf(SendFile("old.txt", "text/plain", byteArrayOf(1)))
-        out.send("c", "h", "old") { "old-id" }
+        out.files.drafted(key, SendFile("old.txt", "text/plain", byteArrayOf(1)))
+        val old = out.files.begin(key, "old")!!
         out.ended("h", "disconnect")
-        out.discardRetry("c")
-        out.files.drafts["c"] = listOf(SendFile("new.txt", "text/plain", byteArrayOf(2)))
-        out.send("c", "h", "new") { "new-id" }
-        val active = Any()
-        out.files.active["c"] = active
+        out.files.dismiss(key)
+        out.files.drafted(key, SendFile("new.txt", "text/plain", byteArrayOf(2)))
+        val new = out.files.begin(key, "new")!!
+        val active = kotlinx.coroutines.Job()
+        out.files.started(key, new.id, active)
         out.write("c", "newer draft")
-        out.acknowledged("h", "old-id")
-        assertEquals("new-id", out.files.retries["c"]?.id)
-        assertSame(active, out.files.active["c"])
+        assertFalse(out.files.acknowledged("h", old.id))
+        val now = out.files.phase(key) as FilePhase.Sending
+        assertEquals(new.id, now.send.id)
+        assertSame(active, now.job)
+        assertFalse(active.isCancelled)
         assertEquals("newer draft", out.unsent["c"])
-        assertTrue(out.waiting("c"))
+        assertTrue(out.files.busy("h"))
+        out.clear()
     }
 
     private class QueuedSocket(val checked: CountDownLatch): WebSocket {

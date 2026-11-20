@@ -1739,7 +1739,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             },
             if (conversation.group) "Message the group, @ to address" else "Message $agent",
             canSend = live && filesReady,
-            hasFiles = model.outgoing.files.drafts[id].orEmpty().isNotEmpty(),
+            hasFiles = model.outgoing.files.draft(FileKey(conversation.host, id)).isNotEmpty(),
             attachment = attach,
             notice = listOfNotNull(unsent, notSent, model.outgoing.notes[id], away).joinToString(" ").ifEmpty { null },
         ) {

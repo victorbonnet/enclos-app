@@ -35,36 +35,40 @@ class PrefillNoticeOwnershipTest {
         }
     }
 
-    @Test fun file_notice_survives_prefill_and_leave_until_original_ack_or_discard() {
+    @Test fun file_outcome_survives_prefill_and_leave_until_original_ack_or_discard() {
         for (ack in listOf(false, true)) {
             val out = Outgoing()
-            out.files.drafts["c"] = listOf(SendFile("original.txt", "text/plain", byteArrayOf(1)))
-            out.send("c", "h", "original") { "original" }
+            val key = FileKey("h", "c")
+            out.files.drafted(key, SendFile("original.txt", "text/plain", byteArrayOf(1)))
+            val send = out.files.begin(key, "original")!!
             out.ended("h", "loss")
-            val notice = out.notSent["c"]
-            val original = out.files.retries["c"]
-            val newer = SendFile("newer.txt", "text/plain", byteArrayOf(2))
-            out.files.drafts["c"] = listOf(newer)
+            val original = out.files.phase(key)
+            assertTrue(original is FilePhase.Unknown)
             out.prefill("c", "Why?")
             out.leave("c")
-            assertEquals(notice, out.notSent["c"])
-            assertSame(original, out.files.retries["c"])
+            assertSame("a question put in the field does not settle the original", original, out.files.phase(key))
             out.prefill("c", "Why again?")
-            if (ack) out.acknowledged("h", "original") else out.discardRetry("c")
+            assertSame(original, out.files.phase(key))
+            if (ack) assertTrue(out.files.acknowledged("h", send.id)) else out.files.dismiss(key)
             assertNull(out.notSent["c"])
-            assertNull(out.files.retries["c"])
+            assertNull(out.files.phase(key).send())
             assertEquals("Why again?", out.unsent["c"])
-            assertEquals(listOf(newer), out.files.drafts["c"])
+            val newer = SendFile("newer.txt", "text/plain", byteArrayOf(2))
+            out.files.drafted(key, newer)
+            assertEquals(listOf(newer), out.files.draft(key))
+            assertEquals("Why again?", out.unsent["c"])
+            out.clear()
         }
     }
 
-    @Test fun ordinary_owned_warning_survives_empty_field_prefill_until_confirmation() {
+    @Test fun replacing_empty_composer_with_question_clears_ordinary_composer_warning() {
         val out = Outgoing()
-        out.send("c", "h", "ordinary", withFiles = false) { "ordinary" }
+        out.send("c", "h", "ordinary") { "ordinary" }
         out.ended("h", "loss")
         out.write("c", "")
         out.prefill("c", "Why?")
-        assertEquals("loss", out.notSent["c"])
+        // Ordinary composer warnings keep their pre-file-send semantics; no noticeOwner layer.
+        assertNull(out.notSent["c"])
         out.shown("c", "ordinary", "h")
         assertNull(out.notSent["c"])
         assertEquals("Why?", out.unsent["c"])
@@ -88,7 +92,7 @@ class PrefillNoticeOwnershipTest {
     private fun literalLoss(): Outgoing = Outgoing().apply {
         val line = Line(1, "agent", "Choose", "reply", 1, suggestedReplies = listOf("Yes"))
         assertNull(sendSuggested("c", line, "Yes", listOf(line)) { text ->
-            assertTrue(send("c", "h", text, withFiles = false) { "literal" })
+            assertTrue(send("c", "h", text) { "literal" })
             null
         })
         ended("h", "loss")

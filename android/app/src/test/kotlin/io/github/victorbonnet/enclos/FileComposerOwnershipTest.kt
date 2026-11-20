@@ -38,12 +38,14 @@ class FileComposerOwnershipTest {
         @Suppress("UNCHECKED_CAST")
         val caps = AppModel::class.java.getDeclaredField("hostCapabilities").apply { isAccessible = true }.get(model) as MutableMap<String, Set<String>>
         caps[c.host] = setOf("message.begin")
+        val key = FileKey(c.host, c.id)
         if (retry) {
-            model.outgoing.files.drafts[c.id] = listOf(SendFile("original.txt", "text/plain", byteArrayOf(1)))
-            model.outgoing.send(c.id, c.host, "original") { "original" }
+            model.outgoing.files.drafted(key, SendFile("original.txt", "text/plain", byteArrayOf(1)))
+            val original = model.outgoing.files.begin(key, "original")!!
+            model.outgoing.files.transmitted(key, original.id)
             if (!pendingFile) model.outgoing.ended(c.host, "lost")
         }
-        model.outgoing.send(c.id, c.host, "pending text", withFiles = false) { "text" }
+        model.outgoing.send(c.id, c.host, "pending text") { "text" }
         try {
             compose.setContent { EnclosTheme(dark = false) {
                 FileComposer(model, c) { attach, enabled ->
@@ -53,19 +55,21 @@ class FileComposerOwnershipTest {
             if (pendingFile) {
                 compose.onNodeWithText("Waiting for receipt…").assertExists()
                 compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
-                compose.onNodeWithText("Retry original message").assertIsNotEnabled()
-                compose.onNodeWithText("Discard original retry").assertIsNotEnabled()
+                // While the original is under way there is nothing to retry or discard.
+                compose.onNodeWithText("Retry original message").assertDoesNotExist()
+                compose.onNodeWithText("Discard").assertDoesNotExist()
                 return
             }
             compose.onNodeWithText("Waiting for receipt…").assertDoesNotExist()
             compose.onNodeWithContentDescription("Send").assertIsEnabled()
             if (retry) {
                 compose.onNodeWithText("Retry original message").assertIsEnabled()
-                compose.onNodeWithText("Discard original retry").assertIsEnabled().performScrollTo().performClick()
-                compose.onNodeWithText("Discard original retry").assertDoesNotExist()
+                compose.onNodeWithText("Discard").assertIsEnabled().performScrollTo().performClick()
+                compose.onNodeWithText("Discard").assertDoesNotExist()
+                compose.onNodeWithText("Retry original message").assertDoesNotExist()
             }
         } finally {
-            AppModel::class.java.getDeclaredMethod("onCleared").apply { isAccessible = true }.invoke(model)
+            model.endFixture()
         }
     }
 }

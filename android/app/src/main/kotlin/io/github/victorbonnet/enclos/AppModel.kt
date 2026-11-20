@@ -14,6 +14,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import io.github.victorbonnet.enclos.core.authSignatureMessage
 import io.github.victorbonnet.enclos.core.decodeBytes
 import io.github.victorbonnet.enclos.core.encodeBytes
@@ -274,7 +283,6 @@ data class Pairing(
 
 /** What the screens show, kept across the screens and updated on the main thread. */
 class AppModel(application: Application) : AndroidViewModel(application) {
-    init { java.io.File(application.cacheDir, "outgoing-camera").deleteRecursively() }
     private val hosts = Hosts(application)
     /** What the bridges sent, kept on the phone: shown at once when the app starts. */
     private val store = Store(application)
@@ -1530,7 +1538,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "ack" -> {
                 val request = m.optString("of")
-                outgoing.acknowledged(host.name, request)
+                outgoing.files.acknowledged(host.name, request)
                 val archive = archiveRequests[request]?.takeIf { it.host == host.name }
                 if (archive != null) {
                     // The bridge sends canonical metadata directly before this ack.
@@ -1568,6 +1576,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     return
                 }
                 if (agentImages.failure(m.optString("of"), m.optString("message"))) return
+                // A message with files, by its id, before or after its receipt: final for a
+                // refusal the bridge names, else of unknown delivery.
+                if (outgoing.files.refused(host.name, m.optString("of"), m.optString("code"), bridgeReason(m.optString("message")))) return
                 val policyAddress = policyRequests.remove(m.optString("of"))
                 if (policyAddress != null) {
                     policyBusy.remove(policyAddress)
@@ -1633,7 +1644,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (conversation !in drafts || !lines[conversation].isNullOrEmpty()) return
         // An initiated file send owns this conversation even before its first echo,
         // including an unknown outcome awaiting an explicit retry or discard.
-        if (conversation in outgoing.files.retries) return
+        if (outgoing.files.owns(conversation)) return
         outgoing.forget(setOf(conversation))
         drafts -= conversation
         conversations.removeAll { it.id == conversation }
@@ -1642,7 +1653,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Whether the inbox lists [conversation] with its host's current removal confirmation. */
     fun listed(conversation: Conversation) = listedWith(conversation, lines[conversation.id].orEmpty(), agents,
         forgetting.isRemoved(AgentKey(conversation.host, conversation.agent)),
-        conversation.id in outgoing.files.retries)
+        outgoing.files.owns(conversation.id))
 
     /** Who a status line of [conversation] is from: its agent's runtime, else the agent. */
     fun statusSource(conversation: Conversation): String =
@@ -1944,66 +1955,111 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     internal fun offersFiles(c: Conversation) = fileSendAvailable(c.group, hostSupports(c.host, "message.begin"),
         agents.any { it.host == c.host && it.name == c.agent && "incoming_files" in it.capabilities })
 
-    private val fileWorker = Executors.newSingleThreadExecutor()
-    private fun sendFiles(c: Conversation, text: String, retry: SendingFiles.Retry? = null): String? {
+    /** One upload at a time, off the main thread; each part is built just before it goes. */
+    private val fileUpload = Dispatchers.IO.limitedParallelism(1)
+
+    /** How long a message with files waits for its receipt before its delivery is unknown. */
+    internal var fileReceiptMs = 60_000L
+
+    /**
+     * Sends [c]'s draft files with [text] as one operation, or its unknown
+     * original again ([retry]), same id, from byte zero. Its job lives in
+     * the ViewModel's scope: leaving the screen or rotating keeps it.
+     */
+    private fun sendFiles(c: Conversation, text: String, retry: Boolean = false): String? {
         val state = outgoing.files
+        val key = FileKey(c.host, c.id)
         if (!offersFiles(c) || !connected(c.host)) return "Files are unavailable for this agent."
-        if (outgoing.waitingHost(c.host)) return "Wait for the current message."
-        if (retry == null && c.id in state.retries) return "Retry or discard the original file message first."
-        val files = retry?.files ?: state.drafts[c.id].orEmpty().toList()
-        if (files.size !in 1..4 || files.any { !validSendFile(it.name, it.mime, it.bytes.size) }) return "Invalid files."
-        val id = retry?.id ?: state.id(c.id, text)
-        val begin = message("message.begin", "conversation" to c.id, "text" to text,
-            "files" to files.map { it.declaration() }).put("id", id)
-        if (!fits(begin)) return "Message is too long."
-        val connection = connections[c.host] ?: return "Not connected."
+        if (state.busy(c.host)) return "Wait for the current message."
+        val send = (if (retry) state.retry(key) else state.begin(key, text))
+            ?: return if (retry) "No original message to retry." else "Retry or discard the original file message first."
+        fun notBegun(why: String): String { state.notBegun(key, send, why, retry); return why }
+        if (send.files.size !in 1..MAX_SEND_FILES || send.files.any { !validSendFile(it.name, it.mime, it.bytes.size) }) return notBegun("Invalid files.")
+        val begin = message("message.begin", "conversation" to c.id, "text" to send.text,
+            "files" to send.files.map { it.declaration() }).put("id", send.id)
+        if (!fits(begin)) return notBegun("Message is too long.")
+        val connection = connections[c.host] ?: return notBegun("Not connected.")
         if (c.id in drafts) {
-            for (frame in firstSent(c, true, text).dropLast(1)) {
-                if (!connection.send(message(frame.type, *frame.fields.toTypedArray()))) return "Not connected."
+            for (frame in firstSent(c, true, send.text).dropLast(1)) {
+                if (!connection.send(message(frame.type, *frame.fields.toTypedArray()))) return notBegun("Not connected.")
             }
         }
-        outgoing.send(c.id, c.host, text, withFiles = true, preserveDraft = retry != null) { id }
-        val token = Any()
-        state.active[c.id] = token
-        state.progress[c.id] = 0
-        fileWorker.execute {
-            var ok = false
-            try {
-                ok = state.active[c.id] === token && connection.sendPaced(begin)
-                if (ok) for ((n, part) in fileParts(id, files).withIndex()) {
-                    if (state.active[c.id] !== token || !state.current(c.id, id) || !connection.sendPaced(part)) { ok = false; break }
-                    main.post { if (state.active[c.id] === token && c.id in state.progress) state.progress[c.id] = ((n + 1) * 100 / files.sumOf { (it.bytes.size + 44_999) / 45_000 }) }
-                }
-            } finally {
-                if (!ok) connection.close("File send interrupted")
-                main.post {
-                    if (state.active[c.id] === token) {
-                        if (!ok) outgoing.ended(c.host, "File send interrupted; resend the whole message.")
-                        if (!ok) state.active.remove(c.id)
-                        state.progress.remove(c.id)
-                        if (ok) main.postDelayed({
-                            if (state.active[c.id] === token && outgoing.pending(c.id, id)) {
-                                outgoing.timedOut(c.id, id)
-                                connection.close("File receipt timed out")
-                            }
-                        }, 60_000)
-                    }
-                }
+        // The words now belong to the operation, shown with it until it settles.
+        if (!retry) outgoing.write(c.id, "")
+        said.remove(c.host)
+        val total = partCount(send.files)
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            val parts = fileParts(send.id, send.files).iterator()
+            // A receipt, a refusal or the connection's end settles it and cancels this job:
+            // withContext then throws on return, so no further part or progress goes.
+            var ok = withContext(fileUpload) { connection.sendPaced(begin) }
+            var n = 0
+            while (ok && state.uploading(key, send.id)) {
+                val went = withContext(fileUpload) { if (parts.hasNext()) connection.sendPaced(parts.next()) else null } ?: break
+                ok = went
+                if (ok) state.progress(key, send.id, ++n * 100 / total)
             }
+            if (!state.uploading(key, send.id)) return@launch
+            if (!ok) { state.interrupted(key, send.id); return@launch }
+            state.transmitted(key, send.id)
+            delay(fileReceiptMs)
+            // This operation only: the connection and other messages on it are not touched.
+            state.timedOut(key, send.id)
         }
+        state.started(key, send.id, job)
+        job.start()
         return null
     }
 
-    internal fun retryFiles(c: Conversation): String? {
-        val retry = outgoing.files.retries[c.id] ?: return "No original message to retry."
-        return sendFiles(c, retry.text, retry)
+    internal fun retryFiles(c: Conversation): String? = sendFiles(c, "", retry = true)
+
+    /**
+     * Prepares [picks] from [source] for [c]'s draft, off the main thread,
+     * reserving their bytes in the process-wide budget as they are read.
+     * Each one refused is named; the others join the draft.
+     */
+    internal fun prepareFiles(c: Conversation, picks: List<android.net.Uri>, source: FileSource, temporary: java.io.File? = null) {
+        val state = outgoing.files
+        val key = FileKey(c.host, c.id)
+        if (picks.isEmpty()) { temporary?.delete(); return }
+        if (state.phase(key) != FilePhase.Draft) { temporary?.delete(); state.error(key, "Wait for the current message."); return }
+        if (state.draft(key).size + picks.size > MAX_SEND_FILES) { temporary?.delete(); state.error(key, "Choose at most four files."); return }
+        val context = getApplication<Application>()
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            val self = coroutineContext[Job]!!
+            // What was prepared and not handed to the draft yet. withContext may finish its
+            // block and still throw on return when this job was cancelled meanwhile, so the
+            // result is held outside it and released in finally unless the draft took it.
+            var held: PreparedFiles? = null
+            try {
+                withContext(Dispatchers.IO) {
+                    // Each read checks for cancellation: a cancelled preparation stops at once
+                    // and releases what it had reserved (prepareSendFiles).
+                    held = prepareSendFiles(context, picks, source) { ensureActive() }
+                }
+                val result = held ?: return@launch
+                held = null
+                state.prepared(key, self, result.files, result.refused)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                state.preparationFailed(key, self, "These files could not be prepared.")
+            } finally {
+                held?.let { state.discard(it.files) }
+                temporary?.delete()
+                state.preparationEnded(key, self)
+            }
+        }
+        if (!state.preparing(key, job)) { temporary?.delete(); return }
+        job.start()
     }
 
     fun send(conversation: Conversation, text: String, includeFiles: Boolean = true): String? {
-        if (includeFiles && conversation.id in outgoing.files.preparing) return "Wait for file preparation."
+        val fileKey = FileKey(conversation.host, conversation.id)
+        if (includeFiles && outgoing.files.phase(fileKey) is FilePhase.Preparing) return "Wait for file preparation."
         if (ConversationKey(conversation.host, conversation.id) in deletion.pending) return "This conversation is being deleted."
         if (ConversationKey(conversation.host, conversation.id) in deletion.deleted) return "This conversation was deleted."
-        if (includeFiles && outgoing.files.drafts[conversation.id].orEmpty().isNotEmpty()) return sendFiles(conversation, text)
+        if (includeFiles && outgoing.files.draft(fileKey).isNotEmpty()) return sendFiles(conversation, text)
         said.remove(conversation.host)
         // A draft becomes a conversation on the bridge with its first message
         // ([firstSent]); it stays a draft until the bridge sends it back, so a
@@ -2015,7 +2071,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (!fits(out)) {
             return "Too long to send: ${text.toByteArray(Charsets.UTF_8).size / 1000} KB, and at most about 63 KB go at once."
         }
-        val sent = outgoing.send(conversation.id, conversation.host, text, withFiles = false) transmit@{
+        val sent = outgoing.send(conversation.id, conversation.host, text) transmit@{
             if (!connected(conversation.host)) return@transmit null
             val connection = connections[conversation.host] ?: return@transmit null
             for ((i, frame) in frames.withIndex()) {
@@ -2344,7 +2400,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         outgoing.clear()
-        fileWorker.shutdownNow()
         main.removeCallbacksAndMessages(null)
         PushTokens.changed = null
         agentImages.close()

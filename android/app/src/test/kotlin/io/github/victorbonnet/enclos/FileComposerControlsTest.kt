@@ -25,7 +25,7 @@ class FileComposerControlsTest {
     @get:Rule val compose = createComposeRule()
     private var online by mutableStateOf(true)
     private var preparing by mutableStateOf(false)
-    private var waiting by mutableStateOf(false)
+    private var sending by mutableStateOf(false)
     private var progress by mutableStateOf<Int?>(null)
     private var names by mutableStateOf(listOf("photo.jpg", "notes.pdf"))
     private val actions = mutableListOf<String>()
@@ -37,7 +37,7 @@ class FileComposerControlsTest {
                 CompositionLocalProvider(LocalDensity provides Density(density.density, if (large) 2f else 1f)) {
                     Box(Modifier.width(320.dp)) {
                         FileComposerControls(names, online = online, preparing = preparing,
-                            waiting = waiting, progress = progress,
+                            sending = sending, progress = progress,
                             onCamera = { actions += "Camera" }, onPhotos = { actions += "Photos" },
                             onFiles = { actions += "Files" },
                             onRemove = { index -> names = names.filterIndexed { i, _ -> i != index } },
@@ -60,26 +60,31 @@ class FileComposerControlsTest {
         assertEquals(listOf("Camera", "Photos", "Files"), actions)
         compose.onNodeWithContentDescription("Send").assertIsEnabled().performClick()
         assertEquals("Send", actions.last())
-        compose.onNodeWithText("photo.jpg · Remove").performScrollTo().performClick()
-        compose.onNodeWithText("photo.jpg · Remove").assertDoesNotExist()
-        compose.onNodeWithText("notes.pdf · Remove").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Remove photo.jpg").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Remove photo.jpg").assertDoesNotExist()
+        compose.onNodeWithText("photo.jpg").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Remove notes.pdf").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
     }
 
     @Test fun offline_preparation_transfer_and_receipt_wait_disable_send() {
         show()
         compose.runOnIdle { online = false }
-        compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
-        compose.runOnIdle { online = true; preparing = true }
+        // Offline, nothing is attached; Send itself waits for the connection in the screen (`live`).
+        compose.onNodeWithContentDescription("Attach files").assertIsNotEnabled()
+        compose.runOnIdle { online = true }
+        compose.onNodeWithContentDescription("Attach files").assertIsEnabled()
+        compose.runOnIdle { preparing = true }
         compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
         compose.onNodeWithContentDescription("Attach files").assertIsNotEnabled()
-        compose.onNodeWithText("photo.jpg · Remove").assertIsNotEnabled()
-        compose.runOnIdle { preparing = false; progress = 42 }
+        compose.onNodeWithContentDescription("Remove photo.jpg").assertIsNotEnabled()
+        compose.runOnIdle { preparing = false; sending = true; progress = 42 }
         compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
         compose.onNodeWithText("Sending files: 42%").assertExists()
-        compose.runOnIdle { progress = null; waiting = true }
+        compose.runOnIdle { progress = null }
+        compose.onNodeWithText("Waiting for receipt…").assertExists()
         compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
-        compose.runOnIdle { waiting = false }
+        compose.runOnIdle { sending = false }
         compose.onNodeWithContentDescription("Send").assertIsEnabled()
     }
 
@@ -88,8 +93,10 @@ class FileComposerControlsTest {
         names = listOf(name)
         show(large = true)
         compose.onNodeWithContentDescription("Attach files").performClick()
-        for (label in listOf("Camera", "Photos", "Files", "$name · Remove")) {
-            val button = compose.onNodeWithText(label).performScrollTo().assertIsDisplayed()
+        for (label in listOf("Camera", "Photos", "Files", name)) {
+            // A file's name is only shown; removing it takes its own button.
+            val button = (if (label == name) compose.onNodeWithContentDescription("Remove $name") else compose.onNodeWithText(label))
+                .performScrollTo().assertIsDisplayed()
                 .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
             val node = compose.onNodeWithText(label, useUnmergedTree = true)
                 .performScrollTo().assertIsDisplayed()
