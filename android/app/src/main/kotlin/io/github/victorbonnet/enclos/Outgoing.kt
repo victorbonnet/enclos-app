@@ -23,8 +23,21 @@ class Outgoing {
     /** By conversation: why what is back in the field was not sent. */
     val notSent: SnapshotStateMap<String, String> = mutableStateMapOf()
 
-    /** A message handed to the connection: [id] is its frame's, [back] whether its text was put back in the field since. */
-    private data class Sent(val host: String, val id: String, val text: String, val back: Boolean = false, val withFiles: Boolean = false, val literal: Boolean = false)
+    /** [back] ends the wait; [restored] separately records ownership of restored composer text. */
+    private data class Sent(val host: String, val id: String, val text: String, val back: Boolean = false, val withFiles: Boolean = false, val literal: Boolean = false, val restored: Boolean = false)
+
+    // A notice belongs to an outcome, independently of any composer text.
+    private val noticeOwner = mutableMapOf<String, String>()
+    private fun notice(c: String, id: String, text: String) {
+        notSent[c] = text
+        noticeOwner[c] = id
+    }
+    private fun settleNotice(c: String, id: String) {
+        if (noticeOwner[c] == id) {
+            noticeOwner.remove(c)
+            notSent.remove(c)
+        }
+    }
 
     /** By conversation: what was sent and the bridge has not shown back yet, oldest first. */
     private val sent = mutableStateMapOf<String, List<Sent>>()
@@ -38,11 +51,13 @@ class Outgoing {
         if (waiting(conversation) || reply !in offeredReplies(line, history)) return "This reply is no longer available."
         val draft = unsent[conversation]
         val previousError = notSent[conversation]
+        val previousOwner = noticeOwner[conversation]
         val before = sent[conversation].orEmpty().map { it.id }.toSet()
         val error = send(reply)
         put(conversation, sent[conversation].orEmpty().map { if (it.id !in before) it.copy(literal = true) else it })
         if (draft == null) unsent.remove(conversation) else unsent[conversation] = draft
         if (previousError == null) notSent.remove(conversation) else notSent[conversation] = previousError
+        if (previousOwner == null) noticeOwner.remove(conversation) else noticeOwner[conversation] = previousOwner
         return error
     }
 
@@ -60,6 +75,7 @@ class Outgoing {
     fun send(conversation: String, host: String, text: String, withFiles: Boolean = files.drafts[conversation].orEmpty().isNotEmpty(), preserveDraft: Boolean = false, transmit: () -> String?): Boolean {
         val id = transmit() ?: return false
         notSent.remove(conversation)
+        noticeOwner.remove(conversation)
         if (!preserveDraft) unsent.remove(conversation)
         if (withFiles) files.retain(conversation, id, text)
         sent[conversation] = sent[conversation].orEmpty().filterNot { it.id == id } + Sent(host, id, text, withFiles = withFiles)
@@ -72,15 +88,15 @@ class Outgoing {
      * its text had been put back in the field and is still there as it was,
      * it leaves the field again, so it is not sent twice.
      */
-    fun shown(conversation: String, text: String) {
+    fun shown(conversation: String, text: String, host: String? = null) {
         val now = sent[conversation] ?: return
         // One still waited for first: one put back may have been sent again since.
-        val at = now.indexOfFirst { it.text == text && !it.back && !it.withFiles }.takeIf { it >= 0 } ?: now.indexOfFirst { it.text == text && !it.withFiles }
+        val at = now.indexOfFirst { it.text == text && (host == null || it.host == host) && !it.back && !it.withFiles }.takeIf { it >= 0 } ?: now.indexOfFirst { it.text == text && (host == null || it.host == host) && !it.withFiles }
         if (at < 0) return
-        if (now[at].back && unsent[conversation] == text) {
+        if (now[at].restored && unsent[conversation] == text) {
             unsent.remove(conversation)
-            notSent.remove(conversation)
         }
+        settleNotice(conversation, now[at].id)
         put(conversation, now.filterIndexed { i, _ -> i != at })
     }
 
@@ -89,7 +105,7 @@ class Outgoing {
         if (waitingFiles(c)) return
         files.discardRetry(c)
         put(c, sent[c].orEmpty().filterNot { it.id == retry.id })
-        notSent.remove(c)
+        settleNotice(c, retry.id)
     }
     internal fun waitingHost(host: String) = sent.values.flatten().any { it.host == host && it.withFiles && !it.back }
     internal fun pending(c: String, id: String) = sent[c].orEmpty().any { it.id == id && !it.back }
@@ -104,7 +120,7 @@ class Outgoing {
                 files.discardRetry(c)
                 files.active.remove(c)
                 files.progress.remove(c)
-                notSent.remove(c)
+                settleNotice(c, one.id)
             }
             put(c, now - one)
         }
@@ -118,10 +134,13 @@ class Outgoing {
             files.active.remove(conversation)
             files.progress.remove(conversation)
             val textOnly = lost.filterNot { it.withFiles || it.literal }
-            if (textOnly.isNotEmpty()) restore(conversation, textOnly.map { it.text }, why)
-            if (lost.any { it.literal }) notSent[conversation] = "Reply unconfirmed. Check history before sending it again."
-            if (lost.any { it.withFiles }) notSent[conversation] = "Delivery unknown. Check history before retrying the original message."
-            put(conversation, now.map { if (it in lost) it.copy(back = true) else it })
+            if (textOnly.isNotEmpty()) {
+                restore(conversation, textOnly.map { it.text }, why)
+                noticeOwner[conversation] = textOnly.last().id
+            }
+            lost.lastOrNull { it.literal }?.let { notice(conversation, it.id, "Reply unconfirmed. Check history before sending it again.") }
+            lost.lastOrNull { it.withFiles }?.let { notice(conversation, it.id, "Delivery unknown. Check history before retrying the original message.") }
+            put(conversation, now.map { if (it in lost) it.copy(back = true, restored = it in textOnly) else it })
         }
     }
 
@@ -136,11 +155,14 @@ class Outgoing {
                 }
                 files.active.remove(conversation)
                 files.progress.remove(conversation)
-                notSent[conversation] = "Delivery unknown. Check history before retrying the original message."
+                notice(conversation, one.id, "Delivery unknown. Check history before retrying the original message.")
                 put(conversation, now.map { if (it.id == of) it.copy(back = true) else it })
                 return conversation
             }
-            if (!one.back && !one.literal) restore(conversation, listOf(one.text), why) else if (conversation !in notSent) notSent[conversation] = why
+            if (!one.back && !one.literal) {
+                restore(conversation, listOf(one.text), why)
+                noticeOwner[conversation] = one.id
+            } else if (conversation !in notSent) notice(conversation, one.id, why)
             // Refused, it will not be shown back.
             put(conversation, now - one)
             return conversation
@@ -155,6 +177,7 @@ class Outgoing {
             unsent.remove(it)
             notSent.remove(it)
             sent.remove(it)
+            noticeOwner.remove(it)
         }
     }
 
@@ -164,6 +187,7 @@ class Outgoing {
         unsent.clear()
         notSent.clear()
         sent.clear()
+        noticeOwner.clear()
     }
 
     /** What was sent goes before what the person wrote since, a blank line between. */

@@ -253,9 +253,9 @@ internal fun previewOf(lines: List<Line>): Line? = lines.lastOrNull { !it.quiet 
 internal fun lastSpoke(lines: List<Line>): Long? = lines.lastOrNull { it.from == "agent" && !it.quiet }?.time?.takeIf { it > 0 }
 
 /** Missing channels keep their history visible; only a host-confirmed removal can hide it. */
-internal fun listedWith(conversation: Conversation, lines: List<Line>, agents: List<Agent>, confirmedRemoved: Boolean = false): Boolean {
+internal fun listedWith(conversation: Conversation, lines: List<Line>, agents: List<Agent>, confirmedRemoved: Boolean = false, retainedOriginal: Boolean = false): Boolean {
     if (conversation.group) return true
-    return (conversation.home || lines.isNotEmpty()) &&
+    return (conversation.home || lines.isNotEmpty() || retainedOriginal) &&
         (!confirmedRemoved || agents.any { it.host == conversation.host && it.name == conversation.agent })
 }
 
@@ -1452,7 +1452,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 }
                 // The person's own, as the bridge stored it: sent.
                 if (line.from != "agent") {
-                    outgoing.shown(id, line.text)
+                    outgoing.shown(id, line.text, host.name)
                 }
                 if (line.from == "agent") {
                     val agent = m.getString("agent")
@@ -1640,7 +1640,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Whether the inbox lists [conversation] with its host's current removal confirmation. */
     fun listed(conversation: Conversation) = listedWith(conversation, lines[conversation.id].orEmpty(), agents,
-        forgetting.isRemoved(AgentKey(conversation.host, conversation.agent)))
+        forgetting.isRemoved(AgentKey(conversation.host, conversation.agent)),
+        conversation.id in outgoing.files.retries)
 
     /** Who a status line of [conversation] is from: its agent's runtime, else the agent. */
     fun statusSource(conversation: Conversation): String =
