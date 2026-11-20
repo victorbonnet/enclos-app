@@ -1738,7 +1738,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             },
             if (conversation.group) "Message the group, @ to address" else "Message $agent",
             canSend = live,
-            notice = listOfNotNull(unsent, notSent, away).joinToString(" ").ifEmpty { null },
+            notice = listOfNotNull(unsent, notSent, model.outgoing.notes[id], away).joinToString(" ").ifEmpty { null },
         ) {
             // Cleared once handed to the connection; else it stays, to send again.
             unsent = model.send(conversation, draft.trim())

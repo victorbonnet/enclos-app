@@ -20,6 +20,38 @@ class Outgoing {
     /** By conversation: why what is back in the field was not sent. */
     val notSent: SnapshotStateMap<String, String> = mutableStateMapOf()
 
+    /** By conversation: a note on the field, such as a draft kept in place of a question. It goes once the person writes. */
+    val notes: SnapshotStateMap<String, String> = mutableStateMapOf()
+
+    /** By conversation: the question the app last put in the field ([prefill]), to tell it from what the person wrote. */
+    private val prefilled = mutableMapOf<String, String>()
+
+    /**
+     * Puts [text] in [conversation]'s field for the person to read, change
+     * and send, when the field is empty or still holds, untouched, what was
+     * put there before. Text the person wrote is kept, with a note saying
+     * [text] was not added. Returns whether [text] is in the field.
+     */
+    fun prefill(conversation: String, text: String): Boolean {
+        val current = unsent[conversation]
+        if (!current.isNullOrEmpty() && current != prefilled[conversation]) {
+            notes[conversation] = "Your draft is kept: the question was not added."
+            return false
+        }
+        unsent[conversation] = text
+        prefilled[conversation] = text
+        notSent.remove(conversation)
+        notes.remove(conversation)
+        return true
+    }
+
+    /** [conversation]'s screen was left: a question put in its field and left untouched goes, with any note. */
+    fun leave(conversation: String) {
+        notes.remove(conversation)
+        val put = prefilled.remove(conversation) ?: return
+        if (unsent[conversation] == put) unsent.remove(conversation)
+    }
+
     /** A message handed to the connection: [id] is its frame's, [back] whether its text was put back in the field since. */
     private data class Sent(val host: String, val id: String, val text: String, val back: Boolean = false)
 
@@ -43,6 +75,7 @@ class Outgoing {
 
     /** The person wrote [text] in [conversation]'s field. */
     fun write(conversation: String, text: String) {
+        notes.remove(conversation)
         if (text.isEmpty()) unsent.remove(conversation) else unsent[conversation] = text
     }
 

@@ -61,15 +61,15 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /** What fills the window: the first screen (its two views), or a full screen over it. */
-private sealed interface Route {
+internal sealed interface Route {
     data object Tabs : Route
     data object Pair : Route
     data object Settings : Route
     data object NewChat : Route
     data class ApprovalPage(val key: String) : Route
-    /** A new conversation asking an agent why the policy request [key] was needed. */
-    data class AskWhy(val key: String) : Route
-    /** A conversation; opened from the policy request [about], Back returns to it, to decide. */
+    /** The new conversation screen, set to ask [agent] (an address) why the policy request [key] was needed. */
+    data class AskWhy(val key: String, val agent: String) : Route
+    /** A conversation; when opened from the policy request [about], Back returns to that request. */
     data class Chat(val id: String, val about: String? = null) : Route
     /** An agent's page (`host/sandbox/agent`), opened from its sandbox's page when [inSandbox]. */
     data class AgentPage(val address: String, val inSandbox: Boolean = false) : Route
@@ -109,8 +109,8 @@ private sealed interface Route {
         Settings -> "settings"
         NewChat -> "new"
         is ApprovalPage -> "approval:$key"
-        is AskWhy -> "ask-why:$key"
-        is Chat -> about?.let { "request-chat:$it\n$id" } ?: "chat:$id"
+        is AskWhy -> "ask-why:${joined(key, agent)}"
+        is Chat -> about?.let { "request-chat:${joined(it, id)}" } ?: "chat:$id"
         is AgentPage -> if (inSandbox) "sandbox-agent:$address" else "agent:$address"
         is RoutinesPage -> (if (inSandbox) "sandbox-agent-routines:" else if (fromAgent) "agent-routines:" else "routines:") + address
         is ModelPage -> (if (inSandbox) "sandbox-agent-model:" else "agent-model:") + address
@@ -121,6 +121,11 @@ private sealed interface Route {
     }
 
     companion object {
+        // Two host-given values in one saved string: each encoded, so neither can hold the space between them.
+        fun joined(a: String, b: String) = java.net.URLEncoder.encode(a, "UTF-8") + " " + java.net.URLEncoder.encode(b, "UTF-8")
+        fun split(saved: String): kotlin.Pair<String, String>? = saved.split(' ').takeIf { it.size == 2 }
+            ?.let { (a, b) -> java.net.URLDecoder.decode(a, "UTF-8") to java.net.URLDecoder.decode(b, "UTF-8") }
+
         fun restore(saved: String): Route = when {
             saved == "pair" -> Pair
             saved == "settings" -> Settings
@@ -129,8 +134,8 @@ private sealed interface Route {
             saved.startsWith("settings-host:") -> HostPage(saved.removePrefix("settings-host:"), fromSettings = true)
             saved.startsWith("host:") -> HostPage(saved.removePrefix("host:"))
             saved.startsWith("chat:") -> Chat(saved.removePrefix("chat:"))
-            saved.startsWith("ask-why:") -> AskWhy(saved.removePrefix("ask-why:"))
-            saved.startsWith("request-chat:") -> saved.removePrefix("request-chat:").let { Chat(it.substringAfter('\n'), about = it.substringBefore('\n')) }
+            saved.startsWith("ask-why:") -> split(saved.removePrefix("ask-why:"))?.let { (key, agent) -> AskWhy(key, agent) } ?: Tabs
+            saved.startsWith("request-chat:") -> split(saved.removePrefix("request-chat:"))?.let { (about, id) -> Chat(id, about) } ?: Tabs
             saved.startsWith("agent:") -> AgentPage(saved.removePrefix("agent:"))
             saved.startsWith("sandbox-agent:") -> AgentPage(saved.removePrefix("sandbox-agent:"), inSandbox = true)
             saved.startsWith("sandbox-agent-routines:") -> RoutinesPage(saved.removePrefix("sandbox-agent-routines:"), fromAgent = true, inSandbox = true)
@@ -289,8 +294,12 @@ private fun Screens(model: AppModel, ask: Ask) {
         scope.launch { views.animateScrollToPage(to.ordinal, animationSpec = Motion.change(Motion.MEDIUM)) }
         Unit
     }
-    val go = { to: Route ->
-        val leaving = (routes.targetState as? Route.Chat)?.takeIf { it.id != (to as? Route.Chat)?.id }
+    val go = { target: Route ->
+        // The conversation already open (from a notification or a sheet) stays as it was
+        // opened: from a policy request, Back still leads to that request.
+        val open = routes.targetState
+        val to = if (target is Route.Chat && target.about == null && open is Route.Chat && open.id == target.id) open else target
+        val leaving = (open as? Route.Chat)?.takeIf { it.id != (to as? Route.Chat)?.id }
         // Going anywhere drops a notification's conversation still to open:
         // it does not take the person away later, once it syncs.
         model.openedConversation.value = null
@@ -322,10 +331,11 @@ private fun Screens(model: AppModel, ask: Ask) {
     }
     // A conversation the phone does not hold, once what it kept is read: a
     // draft lost when the system stopped the app, or one forgotten or
-    // cleared while open. Back to the tabs rather than a blank screen.
+    // cleared while open. Back to where it was opened from (the tabs, or its
+    // policy request) rather than a blank screen.
     val showing = routes.targetState
     val missing = showing is Route.Chat && model.ready && model.conversations.none { it.id == showing.id }
-    LaunchedEffect(missing) { if (missing) go(Route.Tabs) }
+    LaunchedEffect(missing) { if (missing) go(showing.up) }
 
     // A pairing link opened the app: to the pairing screen, which asks.
     val opened = model.openedLink.value
@@ -370,20 +380,26 @@ private fun Screens(model: AppModel, ask: Ask) {
                         views.requestScrollToPage(View.Agents.ordinal)
                         go(Route.Tabs)
                     })
-                    is Route.ApprovalPage -> PolicyRequestScreen(model, route.key, back = { go(Route.Tabs) }, openChat = { go(Route.Chat(it, about = route.key)) }, ask = {
-                        // Its own conversation, with the question in the field; else a new one.
+                    is Route.ApprovalPage -> PolicyRequestScreen(model, route.key, back = { go(Route.Tabs) }, openChat = { go(Route.Chat(it, about = route.key)) }, ask = { agent ->
+                        // Its own conversation, with the question in the field; else a new
+                        // one with [agent], the one the link named when it was tapped.
                         val request = model.approvals[route.key]
                         val id = request?.let { model.askInConversation(it, askWhyQuestion(it)) }
-                        go(if (id != null) Route.Chat(id, about = route.key) else Route.AskWhy(route.key))
+                        if (request != null) go(if (id != null) Route.Chat(id, about = route.key) else Route.AskWhy(route.key, agent))
                     })
                     is Route.AskWhy -> {
                         val request = model.approvals[route.key]
-                        NewChatScreen(
+                        val agent = model.agents.firstOrNull { it.address == route.agent }
+                        // Once what the phone keeps is read: with no request or agent to ask (a
+                        // screen restored later), back to the request's page, which says why.
+                        val gone = model.ready && (request == null || agent == null)
+                        LaunchedEffect(gone) { if (gone) go(route.up) }
+                        if (request != null && agent != null) NewChatScreen(
                             model,
                             back = { go(route.up) },
                             opened = { go(Route.Chat(it, about = route.key)) },
-                            startWith = request?.let { r -> askWhyAgent(r, model.agents) { model.lastAt(it) }?.address },
-                            initial = request?.let { askWhyQuestion(it) }.orEmpty(),
+                            startWith = agent.address,
+                            initial = askWhyQuestion(request),
                         )
                     }
                     is Route.Chat -> ConversationScreen(model, route.id, back = { go(route.up) })
