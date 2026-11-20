@@ -4,20 +4,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PrefillNoticeOwnershipTest {
-    @Test fun literal_notice_survives_question_leave_until_confirmation() {
+    @Test fun restored_reply_blocks_question_prefill_and_survives_leave() {
         val out = literalLoss()
-        val notice = out.notSent["c"]
-        assertTrue(out.prefill("c", "Why?"))
-        assertEquals(notice, out.notSent["c"])
+        assertFalse(out.prefill("c", "Why?"))
         out.leave("c")
-        assertNull(out.unsent["c"])
-        assertEquals(notice, out.notSent["c"])
-        out.prefill("c", "Why again?")
+        assertEquals("Yes", out.unsent["c"])
+        assertEquals("loss", out.notSent["c"])
         out.shown("c", "Yes", "other-host")
-        assertEquals(notice, out.notSent["c"])
+        assertEquals("Yes", out.unsent["c"])
         out.shown("c", "Yes", "h")
+        assertNull(out.unsent["c"])
         assertNull(out.notSent["c"])
-        assertEquals("Why again?", out.unsent["c"])
     }
 
     @Test fun explicit_forget_and_clear_retire_owned_notice_after_prefill() {
@@ -96,7 +93,7 @@ class PrefillNoticeOwnershipTest {
             null
         })
         ended("h", "loss")
-        assertNull(unsent["c"])
-        assertEquals("Reply unconfirmed. Check history before sending it again.", notSent["c"])
+        assertEquals("Yes", unsent["c"])
+        assertEquals("loss", notSent["c"])
     }
 }

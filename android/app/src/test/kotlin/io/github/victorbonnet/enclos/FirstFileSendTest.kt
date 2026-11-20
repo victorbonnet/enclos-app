@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 @Config(application = Application::class)
 class FirstFileSendTest {
     @get:Rule val compose = createComposeRule()
-    @Test fun literal_disconnect_reports_uncertainty_without_polluting_draft() {
+    @Test fun suggested_disconnect_restores_reply_before_draft() {
         val out = Outgoing()
         val key = FileKey("h", "c")
         val line = Line(1, "agent", "Choose", "reply", 1, suggestedReplies = listOf("Yes"))
@@ -42,12 +42,12 @@ class FirstFileSendTest {
         })
         assertTrue(out.waiting("c"))
         out.ended("h", "connection ended before reply confirmation")
-        assertEquals("unrelated draft", out.unsent["c"])
+        assertEquals("Yes\n\nunrelated draft", out.unsent["c"])
         assertEquals(listOf(file), out.files.draft(key))
         assertEquals(FilePhase.Draft, out.files.phase(key))
         assertFalse(out.waiting("c"))
         println("LITERAL_LOSS notice=${out.notSent["c"]} draft=${out.unsent["c"]}")
-        assertEquals("unconfirmed literal reply needs a failure/unknown notice", REPLY_UNCONFIRMED, out.notSent["c"])
+        assertEquals("connection ended before reply confirmation", out.notSent["c"])
         out.clear()
     }
 
@@ -68,7 +68,7 @@ class FirstFileSendTest {
             null
         })
         out.refused("literal", "refused")
-        assertEquals("draft", out.unsent["c"])
+        assertEquals("Yes\n\ndraft", out.unsent["c"])
         assertEquals("refused", out.notSent["c"])
     }
 

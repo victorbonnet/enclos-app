@@ -11,8 +11,8 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
 class AskWhyNoticeTest {
-    @Test fun literal_unknown_empty_composer_ask_why_keeps_notice() = exercise(true, true, "")
-    @Test fun literal_unknown_existing_draft_ask_why_keeps_notice_positive() = exercise(true, true, "my separate draft")
+    @Test fun restored_reply_blocks_ask_why_prefill() = exercise(true, true, "")
+    @Test fun restored_reply_and_existing_draft_block_ask_why_prefill() = exercise(true, true, "my separate draft")
     @Test fun literal_unknown_no_ask_keeps_notice_positive() = exercise(true, false, "")
     @Test fun ordinary_restored_ask_why_preserves_draft_notice_positive() = exercise(false, true, "")
     private fun exercise(literal: Boolean, ask: Boolean, draft: String) {
@@ -36,7 +36,7 @@ class AskWhyNoticeTest {
             out.ended(c.host, "synthetic loss")
             val before = out.notSent[c.id]
             assertNotNull("accepted positive before mutation", before)
-            if (literal) assertEquals(REPLY_UNCONFIRMED, before)
+            assertEquals("synthetic loss", before)
             val request = PolicyRequest(c.host, "fixture-request", "box", c.agent, c.id, "network", "example.invalid:443", false,
                 "connect", 1, "pending", "", false, "fixture-revision", true, null)
             val question = askWhyQuestion(request)
@@ -44,15 +44,15 @@ class AskWhyNoticeTest {
             val after = out.notSent[c.id]
             assertEquals("asking doesn't send", listOf("message.send"), bridge.types())
             assertEquals(listOf(file), out.files.draft(key))
-            val expectedDraft = if (!literal) "Yes" else if (ask && draft.isEmpty()) question else draft.ifEmpty { null }
+            val expectedDraft = if (literal && draft.isNotEmpty()) "Yes\n\n$draft" else "Yes"
             assertEquals(expectedDraft, out.unsent[c.id])
             assertFalse(out.waiting(c.id))
             assertEquals(listOf("Yes"), offeredReplies(line, model.lines[c.id].orEmpty()))
             val canonical = message("message", "conversation" to c.id, "agent" to c.agent,
                 "seq" to 2, "from" to "person", "text" to "Yes", "kind" to "message")
             model.receive(c.host, canonical)
-            assertNull("genuine received retires its notice", out.notSent[c.id])
-            if (literal) assertEquals(expectedDraft, out.unsent[c.id])
+            if (expectedDraft == "Yes") assertNull(out.notSent[c.id]) else assertEquals(before, out.notSent[c.id])
+            assertEquals(expectedDraft.takeUnless { it == "Yes" }, out.unsent[c.id])
             assertEquals(listOf(file), out.files.draft(key))
             println("R5_NOTICE literal=$literal ask=$ask existingDraft=${draft.isNotEmpty()} before=$before afterAsk=$after frames=${bridge.frames.size} actualReceived=true")
             assertEquals("Ask why owns only its question, not an unconfirmed send's warning", before, after)

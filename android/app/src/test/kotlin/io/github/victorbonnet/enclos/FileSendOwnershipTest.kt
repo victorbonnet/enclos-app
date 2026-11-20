@@ -46,9 +46,9 @@ class FileSendOwnershipTest {
         if (newer == null) assertNull("nothing else speaks for the field", out.notSent["c"])
         else assertEquals("old original must preserve newer notice", notice, out.notSent["c"])
         if (newer == "literal") {
-            // The newer reply still owns its notice: its own confirmation retires it.
+            // History keeps the warning while the person has replaced the recovered text.
             out.shown("c", "Yes", "h")
-            assertNull(out.notSent["c"])
+            assertEquals(notice, out.notSent["c"])
         }
         out.clear()
     }
@@ -66,10 +66,10 @@ class FileSendOwnershipTest {
         out.shown("c", "Yes", "other-host")
         assertFalse("a receipt for files settles no text message", out.files.acknowledged("h", "literal"))
         assertEquals(notice, out.notSent["c"])
-        assertEquals("Yes", out.unsent["c"])
+        assertEquals("Yes\n\nYes", out.unsent["c"])
         out.shown("c", "Yes", "h")
-        assertNull(out.notSent["c"])
-        assertEquals("Yes", out.unsent["c"])
+        assertEquals(notice, out.notSent["c"])
+        assertEquals("Yes\n\nYes", out.unsent["c"])
     }
 
     @Test fun pending_file_cannot_be_discarded_but_pending_text_does_not_lock_retry() {

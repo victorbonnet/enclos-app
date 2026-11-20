@@ -116,12 +116,15 @@ internal class SendingFiles(val budget: PreparedBudget = PreparedBudget.process)
      * owned by none, so it is never deleted on another's behalf.
      */
     fun capturing(key: FileKey, file: File) = update(key) { now ->
-        now.capture?.takeIf { it != file }?.delete()
-        now.copy(capture = file)
+        // Saved camera paths are validated and returned in canonical form.
+        val capture = file.canonicalFile
+        now.capture?.takeIf { it != capture }?.delete()
+        now.copy(capture = capture)
     }
     /** [file]'s result came: whoever takes it now deletes it. Whether a conversation owned it. */
     fun captured(file: File): Boolean {
-        val key = all.entries.firstOrNull { it.value.capture == file }?.key ?: return false
+        val capture = file.canonicalFile
+        val key = all.entries.firstOrNull { it.value.capture == capture }?.key ?: return false
         update(key) { it.copy(capture = null) }
         return true
     }

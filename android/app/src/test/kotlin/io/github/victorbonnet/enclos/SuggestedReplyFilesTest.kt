@@ -85,14 +85,14 @@ class SuggestedReplyFilesTest {
             model.outgoing.ended(c.host, "disconnect")
             assertFalse(model.outgoing.waiting(c.id))
             val notice = model.outgoing.notSent[c.id]
-            assertEquals(REPLY_UNCONFIRMED, notice)
+            assertEquals("disconnect", notice)
             model.links[c.host] = HostLink.Ended("fixture disconnect")
             model.links[c.host] = HostLink.Connected("fixture-person")
             release.countDown()
             settle { true }
             assertEquals(notice, model.outgoing.notSent[c.id])
             assertEquals(listOf("message.send", "message.send"), bridge.types())
-            assertEquals("Unrelated draft for these private notes", model.outgoing.unsent[c.id])
+            assertEquals("Yes\n\nYes\n\nUnrelated draft for these private notes", model.outgoing.unsent[c.id])
             assertEquals(listOf(file), out.files.draft(key))
             assertEquals("reply button must not schedule file transfer from unseen draft", FilePhase.Draft, out.files.phase(key))
         } finally {

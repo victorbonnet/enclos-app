@@ -47,7 +47,7 @@ class AttachmentEchoTest {
             val beforeNotice = out.notSent[c.id]
             assertFalse("newer files wait for the original's outcome", out.files.preparing(key, Job()))
             assertNotNull(beforeNotice)
-            assertEquals(if (literal) "unrelated draft" else "Yes", beforeDraft)
+            assertEquals(if (literal) "Yes\n\nunrelated draft" else "Yes", beforeDraft)
             val canonical = message("message", "conversation" to c.id, "agent" to c.agent,
                 "seq" to 2, "from" to "person", "text" to (if (attached) fileText else "Yes"), "kind" to "message")
             if (attached) canonical.put("attachments", org.json.JSONArray().put(JSONObject().put("id", "fixture-attachment").put("name", "original.txt").put("mime", "text/plain").put("size", 3)))

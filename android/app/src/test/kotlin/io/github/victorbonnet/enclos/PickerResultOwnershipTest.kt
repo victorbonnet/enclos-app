@@ -96,6 +96,39 @@ class PickerResultOwnershipTest {
         }
     }
 
+    @Test fun canonical_camera_result_consumes_only_its_registered_capture_through_a_real_alias() {
+        val files = SendingFiles(PreparedBudget(1_000))
+        val key = FileKey(host, "one")
+        val other = FileKey(host, "two")
+        val root = java.nio.file.Files.createTempDirectory(context.cacheDir.toPath(), "capture-alias-")
+        val dir = cameraDir(context).apply { mkdirs() }.canonicalFile
+        val alias = java.nio.file.Files.createSymbolicLink(root.resolve("camera"), dir.toPath())
+        val shot = File(alias.toFile(), "${UUID.randomUUID()}.jpg").apply { writeText("capture") }
+        val unrelated = File(dir, "${UUID.randomUUID()}.jpg").apply { writeText("other capture") }
+        try {
+            assertNotEquals("the fixture must exercise a lexical alias", shot, shot.canonicalFile)
+            assertTrue(java.nio.file.Files.isSymbolicLink(alias))
+            files.capturing(key, shot)
+            files.capturing(other, unrelated)
+            val result = ownedCapture(context, shot.path)!!
+            assertEquals(shot.canonicalFile, result)
+            assertTrue("the validated canonical result must consume its registered alias", files.captured(result))
+            assertNull(files[key].capture)
+            assertEquals(unrelated, files[other].capture)
+            assertFalse("a result is consumed only once", files.captured(result))
+            files.forget("one")
+            assertTrue("preparation now owns the bytes", shot.exists())
+            assertTrue(unrelated.exists())
+            assertNull("canonicalization must not admit files outside the private camera folder",
+                ownedCapture(context, File(root.toFile(), "${UUID.randomUUID()}.jpg").path))
+        } finally {
+            files.clear()
+            shot.delete()
+            java.nio.file.Files.delete(alias)
+            java.nio.file.Files.delete(root)
+        }
+    }
+
     @Test fun deliberate_forgetting_cleans_its_own_capture_but_the_model_ending_and_a_restored_one_keep_theirs() {
         val files = SendingFiles(PreparedBudget(1_000))
         fun shot() = capture("${UUID.randomUUID()}.jpg").apply { writeBytes(byteArrayOf(1)) }
