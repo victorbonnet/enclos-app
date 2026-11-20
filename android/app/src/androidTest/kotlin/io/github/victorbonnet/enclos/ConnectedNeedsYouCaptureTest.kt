@@ -237,6 +237,35 @@ class ConnectedNeedsYouCaptureTest {
         return h1 to h2
     }
 
+    /** Synthetic-only parser evidence, after transport sentinels and before the unchanged setup check. */
+    private fun parserDiagnostics(script: BridgeScript, host: String, model: AppModel, run: Run) {
+        run.note("parser runtime: SDK ${Build.VERSION.SDK_INT}; Pattern loader=${java.util.regex.Pattern::class.java.classLoader}")
+        fun probe(label: String, parse: () -> String) {
+            try {
+                run.note("parser $label: ${parse()}")
+            } catch (t: Exception) {
+                // The input is exclusively scripts(Synthetic). Retain the actual exception and
+                // stack, which HeldTaskClient deliberately omits from production logs.
+                run.note("parser $label failed:\n${t.stackTraceToString()}")
+            }
+        }
+        probe("unicode-regex") { Regex("(?U)\\s+").split("synthetic whitespace").toString() }
+        script.sync.filter { it.optString("type") == "held_task" }.forEachIndexed { index, frame ->
+            val payload = frame.getJSONObject("held_task")
+            probe("$host frame $index ask=${payload.has("ask")}") {
+                val card = HeldTask.from(host, payload)
+                val present = onMain { model.heldTasks.cards.containsKey(card.key) }
+                "parsed task=${card.task} choices=${card.ask?.choices?.size} recommended=${card.ask?.recommended} Activity-present=$present"
+            }
+            if (payload.has("ask")) {
+                probe("$host frame $index without-ask control") {
+                    val control = JSONObject(payload.toString()).apply { remove("ask") }
+                    "parsed task=${HeldTask.from(host, control).task}"
+                }
+            }
+        }
+    }
+
     private fun scenario(fixture: ReplacementFixture, owner: ActivityOwner, native: Native, run: Run, s: Synthetic) {
         run.note("scenario starts")
         fixture.acquire()
@@ -258,6 +287,11 @@ class ConnectedNeedsYouCaptureTest {
         setup(onMain { model.connected(s.h1) && model.connected(s.h2) }) { "not both connected: ${onMain { model.links.toMap() }}" }
         val live = mutableListOf(s1 to s.h1, s2 to s.h2)
         fun barrier(label: String) = processingBarrier(model, live, b1, b2, label, run)
+
+        // Diagnostic replay only: these are the same finite synthetic frames already sent.
+        // Never merge the replay into the Activity model or replace its setup assertion.
+        parserDiagnostics(script1, s.h1, model, run)
+        parserDiagnostics(script2, s.h2, model, run)
 
         // ---- the Activity's own model holds exactly what was synced
         onMain {
