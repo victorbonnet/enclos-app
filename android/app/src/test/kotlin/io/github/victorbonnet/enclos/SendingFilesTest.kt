@@ -198,16 +198,17 @@ class SendingFilesTest {
             finally { source.recycle() }
             val budget = PreparedBudget(80_000_000)
             val prepared = prepareSendFile(context, android.net.Uri.fromFile(file), FileSource.Photos, null, 0, 1, budget)
-            assertEquals("image/jpeg", prepared.mime)
-            assertEquals("photo.jpg", prepared.name)
+            // A new ARGB bitmap is transparent: a PNG source with transparency stays PNG, written again.
+            assertEquals("image/png", prepared.mime)
+            assertEquals("photo.png", prepared.name)
             assertEquals(prepared.bytes.size.toLong(), budget.used())
-            assertEquals(0xff, prepared.bytes[0].toInt() and 255)
-            assertEquals(0xd8, prepared.bytes[1].toInt() and 255)
+            assertEquals(0x89, prepared.bytes[0].toInt() and 255)
+            assertEquals('P'.code, prepared.bytes[1].toInt() and 255)
             assertFalse(prepared.bytes.toString(Charsets.ISO_8859_1).contains("Exif"))
             val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
             android.graphics.BitmapFactory.decodeByteArray(prepared.bytes, 0, prepared.bytes.size, bounds)
-            assertEquals("JPEG must decode at the target width", 2048, bounds.outWidth)
-            assertEquals("JPEG must preserve the scaled aspect ratio", 2, bounds.outHeight)
+            assertEquals("the image must decode at the target width", 2048, bounds.outWidth)
+            assertEquals("the image must preserve the scaled aspect ratio", 2, bounds.outHeight)
         } finally { file.delete() }
     }
 }

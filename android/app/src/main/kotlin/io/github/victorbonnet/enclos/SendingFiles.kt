@@ -3,8 +3,10 @@ package io.github.victorbonnet.enclos
 import androidx.compose.runtime.mutableStateMapOf
 import kotlinx.coroutines.Job
 import org.json.JSONObject
+import java.io.File
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal fun fileSendAvailable(group: Boolean, bridge: Boolean, agent: Boolean) = !group && bridge && agent
 
@@ -38,8 +40,14 @@ internal fun sendFileType(name: String): String? {
 internal fun validSendFile(name: String, mime: String, size: Int): Boolean =
     size in 1..MAX_SEND_FILE_BYTES && validSendFileName(name) && sendFileType(name) == mime
 
-/** A prepared file. Its bytes are reserved in [PreparedBudget] until released by their one owner. */
+/**
+ * A prepared file. Its bytes are reserved in [PreparedBudget] until released
+ * by their one owner, once: a second release (a late callback, a discard
+ * after a removal) does nothing, so it never frees another owner's bytes.
+ */
 internal class SendFile(val name: String, val mime: String, val bytes: ByteArray) {
+    private val released = AtomicBoolean(false)
+    fun releaseFrom(budget: PreparedBudget) { if (released.compareAndSet(false, true)) budget.release(bytes.size) }
     fun declaration() = JSONObject().put("name", name).put("mime", mime).put("size", bytes.size)
 }
 
@@ -47,7 +55,7 @@ internal class SendFile(val name: String, val mime: String, val bytes: ByteArray
 internal class PrepareRefused(val safe: String) : Exception(safe)
 
 /** Process-wide cap on prepared bytes held for drafts and operations, across every conversation. */
-internal class PreparedBudget(private val limit: Long) {
+internal class PreparedBudget(val limit: Long) {
     private var used = 0L
     @Synchronized fun reserve(bytes: Int): Boolean {
         if (bytes < 0 || used + bytes > limit) return false
@@ -69,26 +77,60 @@ internal sealed interface FilePhase {
     data class Sending(val send: FileSend, val progress: Int, val job: Job? = null) : FilePhase
     /** Every part went; [job] waits for the receipt, cancelled once it settles. */
     data class AwaitingAck(val send: FileSend, val job: Job? = null) : FilePhase
-    /** The bridge refused it, saying [reason]: final, nothing to retry. */
-    data class Failed(val send: FileSend, val reason: String) : FilePhase
+    /**
+     * The bridge refused send [id], saying [reason]: final, nothing to retry.
+     * Its bytes were released when it was refused; its words and names stay to say what was not sent.
+     */
+    data class Failed(val id: String, val text: String, val names: List<String>, val reason: String) : FilePhase
     /** Delivery unknown: retry the same original, or discard it. */
     data class Unknown(val send: FileSend) : FilePhase
 }
 
 internal data class FileKey(val host: String, val conversation: String)
 
-/** A conversation's files: its newer draft and the phase of its one operation. */
-internal data class FileConversation(val draft: List<SendFile> = emptyList(), val phase: FilePhase = FilePhase.Draft, val error: String? = null)
+/**
+ * A conversation's files: its newer draft, the phase of its one operation,
+ * and the camera file this process asked for it ([capture]) until its result
+ * is taken.
+ */
+internal data class FileConversation(
+    val draft: List<SendFile> = emptyList(),
+    val phase: FilePhase = FilePhase.Draft,
+    val error: String? = null,
+    val capture: File? = null,
+)
 
 /**
  * Files to send, by host and conversation, while the app runs. Bytes have
- * exactly one owner (the draft, then its operation) and are released when it
- * is confirmed, discarded or forgotten. Nothing is stored or sent later.
+ * exactly one owner (the draft, then its operation) and are released once,
+ * when it is confirmed, refused, removed, discarded or forgotten. Nothing is
+ * stored or sent later.
  */
-internal class SendingFiles(private val budget: PreparedBudget = PreparedBudget.process) {
+internal class SendingFiles(val budget: PreparedBudget = PreparedBudget.process) {
     private val all = mutableStateMapOf<FileKey, FileConversation>()
+
+    /**
+     * The camera is open for [key], writing [file]: the conversation owns it
+     * until its result is taken, and forgetting the conversation deletes it.
+     * A capture restored from saved state after the process's recreation is
+     * owned by none, so it is never deleted on another's behalf.
+     */
+    fun capturing(key: FileKey, file: File) = update(key) { now ->
+        now.capture?.takeIf { it != file }?.delete()
+        now.copy(capture = file)
+    }
+    /** [file]'s result came: whoever takes it now deletes it. Whether a conversation owned it. */
+    fun captured(file: File): Boolean {
+        val key = all.entries.firstOrNull { it.value.capture == file }?.key ?: return false
+        update(key) { it.copy(capture = null) }
+        return true
+    }
+
     /** What is kept of a confirmed operation: where it went and its files' names, never their bytes. */
-    private class Confirmed(val key: FileKey, val names: List<String>)
+    private class Confirmed(val key: FileKey, val names: List<String>) {
+        /** A late `error` was told: another for the same id is consumed, said nowhere. */
+        var told = false
+    }
 
     /** Operations confirmed lately, by host and id, so a late `error` still names its conversation and files. */
     private val confirmed = object : LinkedHashMap<Pair<String, String>, Confirmed>() {
@@ -99,7 +141,7 @@ internal class SendingFiles(private val budget: PreparedBudget = PreparedBudget.
     fun draft(key: FileKey) = get(key).draft
     fun phase(key: FileKey) = get(key).phase
     /** Whether an operation owns [conversation]: it outlives leaving the screen. */
-    fun owns(conversation: String) = all.any { (k, v) -> k.conversation == conversation && v.phase.send() != null }
+    fun owns(conversation: String) = all.any { (k, v) -> k.conversation == conversation && v.phase.operation() != null }
     /** Whether an operation is going over [host]'s connection now. */
     fun busy(host: String) = all.any { (k, v) -> k.host == host && (v.phase is FilePhase.Sending || v.phase is FilePhase.AwaitingAck) }
 
@@ -162,7 +204,7 @@ internal class SendingFiles(private val budget: PreparedBudget = PreparedBudget.
         val now = get(key)
         if (now.phase != FilePhase.Draft || now.draft.isEmpty()) return null
         val send = FileSend(UUID.randomUUID().toString(), key.host, key.conversation, text, now.draft)
-        put(key, FileConversation(phase = FilePhase.Sending(send, 0)))
+        put(key, now.copy(draft = emptyList(), phase = FilePhase.Sending(send, 0), error = null))
         return send
     }
 
@@ -215,8 +257,8 @@ internal class SendingFiles(private val budget: PreparedBudget = PreparedBudget.
     fun acknowledged(host: String, id: String): Boolean {
         val key = keyOf(host, id) ?: return false
         val now = get(key)
-        val send = now.phase.send() ?: return false
         if (now.phase is FilePhase.Failed) return true
+        val send = now.phase.send() ?: return false
         cancel(now.phase)
         release(send.files)
         confirmed[host to id] = Confirmed(key, send.files.map { it.name })
@@ -227,13 +269,19 @@ internal class SendingFiles(private val budget: PreparedBudget = PreparedBudget.
     /**
      * The bridge's `error` correlated to [id] by its `of`, before or after
      * the receipt. A [definitive] refusal is final ([FilePhase.Failed], no
-     * retry); any other leaves delivery unknown ([FilePhase.Unknown]).
+     * retry) and releases its bytes at once; any other leaves delivery
+     * unknown ([FilePhase.Unknown]), the original kept for an explicit retry.
+     * After the receipt only names were kept: it is told once in the
+     * original conversation, whichever is open; a repeat is consumed there,
+     * so it never falls through to another conversation or the host.
      */
     fun refused(host: String, id: String, code: String, reason: String): Boolean {
         val final = code in definitive
         val key = keyOf(host, id)
         if (key == null) {
-            val late = confirmed.remove(host to id) ?: return false
+            val late = confirmed[host to id] ?: return false
+            if (late.told) return true
+            late.told = true
             val names = late.names.joinToString(", ") { safeFileName(it) }
             update(late.key) {
                 it.copy(error = if (final) "Not accepted after its receipt ($names): $reason"
@@ -242,14 +290,17 @@ internal class SendingFiles(private val budget: PreparedBudget = PreparedBudget.
             return true
         }
         val now = get(key)
-        val send = now.phase.send() ?: return false
         if (now.phase is FilePhase.Failed) return true
+        val send = now.phase.send() ?: return false
         cancel(now.phase)
-        put(key, now.copy(phase = if (final) FilePhase.Failed(send, reason) else FilePhase.Unknown(send)))
+        if (final) {
+            release(send.files)
+            put(key, now.copy(phase = FilePhase.Failed(send.id, send.text, send.files.map { it.name }, reason)))
+        } else put(key, now.copy(phase = FilePhase.Unknown(send)))
         return true
     }
 
-    /** The person discards an unknown or refused original: its bytes are released. */
+    /** The person discards an unknown original (its bytes are released) or dismisses a refusal. */
     fun dismiss(key: FileKey) {
         val now = get(key)
         if (now.phase !is FilePhase.Unknown && now.phase !is FilePhase.Failed) return
@@ -275,43 +326,59 @@ internal class SendingFiles(private val budget: PreparedBudget = PreparedBudget.
         all.keys.filter { it.conversation == conversation }.forEach(::forget)
         confirmed.values.removeAll { it.key.conversation == conversation }
     }
-    fun forget(key: FileKey) {
-        confirmed.values.removeAll { it.key == key }
-        val now = all.remove(key) ?: return
-        cancel(now.phase)
-        release(now.draft)
-        now.phase.send()?.let { release(it.files) }
-    }
+    /** [key] is deleted, discarded or its host forgotten: its bytes are released and its own capture deleted. */
+    fun forget(key: FileKey) = drop(key, deleteCapture = true)
+    /** Everything forgotten on purpose (the cache cleared): as [forget] for each. */
     fun clear() {
         all.keys.toList().forEach(::forget)
         confirmed.clear()
     }
+    /**
+     * The ViewModel ends, which may be the process's recreation: bytes are
+     * released, but a capture is not deleted, as its result may still come
+     * back to the restored screen ([ownedCapture]).
+     */
+    fun close() {
+        all.keys.toList().forEach { drop(it, deleteCapture = false) }
+        confirmed.clear()
+    }
+    private fun drop(key: FileKey, deleteCapture: Boolean) {
+        confirmed.values.removeAll { it.key == key }
+        val now = all.remove(key) ?: return
+        if (deleteCapture) now.capture?.delete()
+        cancel(now.phase)
+        release(now.draft)
+        now.phase.send()?.let { release(it.files) }
+    }
 
-    private fun keyOf(host: String, id: String) = all.entries.firstOrNull { (k, v) -> k.host == host && v.phase.send()?.id == id }?.key
+    private fun keyOf(host: String, id: String) = all.entries.firstOrNull { (k, v) -> k.host == host && v.phase.operation() == id }?.key
     private fun onPhase(key: FileKey, id: String, f: (FileConversation) -> FileConversation) {
         val now = all[key] ?: return
-        if (now.phase.send()?.id == id) put(key, f(now))
+        if (now.phase.operation() == id) put(key, f(now))
     }
     private fun cancel(phase: FilePhase) {
         (phase as? FilePhase.Preparing)?.job?.cancel()
         (phase as? FilePhase.Sending)?.job?.cancel()
         (phase as? FilePhase.AwaitingAck)?.job?.cancel()
     }
-    private fun release(files: List<SendFile>) = files.forEach { budget.release(it.bytes.size) }
+    private fun release(files: List<SendFile>) = files.forEach { it.releaseFrom(budget) }
 
     private companion object {
         /** Error codes that say the bridge did not take the message: anything else may have been stored. */
-        val definitive = setOf("unsupported", "not_allowed", "bad_message")
+        val definitive = setOf("unsupported", "not_allowed", "bad_message", "operation_failed")
     }
 }
 
+/** The send whose bytes this phase holds: none once refused. */
 internal fun FilePhase.send(): FileSend? = when (this) {
     is FilePhase.Sending -> send
     is FilePhase.AwaitingAck -> send
-    is FilePhase.Failed -> send
     is FilePhase.Unknown -> send
     else -> null
 }
+
+/** The id of this phase's send, refused included: it owns its conversation until settled. */
+internal fun FilePhase.operation(): String? = (this as? FilePhase.Failed)?.id ?: send()?.id
 
 private fun FilePhase.inFlight(): FileSend? = when (this) {
     is FilePhase.Sending -> send

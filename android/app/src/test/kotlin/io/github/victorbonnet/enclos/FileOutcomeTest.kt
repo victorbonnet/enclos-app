@@ -54,7 +54,7 @@ class FileOutcomeTest {
     @Test fun a_final_refusal_says_why_and_offers_only_dismiss() {
         val clicks = mutableListOf<String>()
         compose.setContent { EnclosTheme(dark = false) {
-            FileOutcome(FilePhase.Failed(send, "file name refused"), send.text, send.files.map { it.name }, { clicks += "retry" }, { clicks += "dismiss" })
+            FileOutcome(FilePhase.Failed(send.id, send.text, send.files.map { it.name }, "file name refused"), send.text, send.files.map { it.name }, { clicks += "retry" }, { clicks += "dismiss" })
         } }
         compose.onNodeWithText("Not sent: file name refused").assertExists()
         compose.onNodeWithText("Retry original message").assertDoesNotExist()

@@ -1955,6 +1955,30 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     internal fun offersFiles(c: Conversation) = fileSendAvailable(c.group, hostSupports(c.host, "message.begin"),
         agents.any { it.host == c.host && it.name == c.agent && "incoming_files" in it.capabilities })
 
+    /** Whether [c]'s agent takes images too (`incoming_images`, which needs `incoming_files`); without it, documents only. */
+    internal fun offersImages(c: Conversation) = offersFiles(c) &&
+        agents.any { it.host == c.host && it.name == c.agent && "incoming_images" in it.capabilities }
+
+    /**
+     * A picker's result, for the conversation that asked ([owner], saved
+     * state: [pickOwner]), whichever is shown now ([current]). One whose
+     * owner was lost, or is gone, is not put in another: [current] says so,
+     * to choose again, and a camera [capture] is deleted.
+     */
+    internal fun pickedFiles(owner: String?, current: Conversation, picks: List<android.net.Uri>, source: FileSource, capture: java.io.File? = null) {
+        // The screen's captured Conversation may have been forgotten while a picker was open.
+        // Saved ownership never authorizes recreating that stale destination.
+        val target = owner?.let { saved -> conversations.firstOrNull { pickOwner(it) == saved } }
+        capture?.let { outgoing.files.captured(it) }
+        if (picks.isEmpty()) { capture?.delete(); return }
+        if (target == null) {
+            capture?.delete()
+            outgoing.files.error(FileKey(current.host, current.id), if (source == FileSource.Camera) PICK_UNMATCHED_PHOTO else PICK_UNMATCHED)
+            return
+        }
+        prepareFiles(target, picks, source, capture)
+    }
+
     /** One upload at a time, off the main thread; each part is built just before it goes. */
     private val fileUpload = Dispatchers.IO.limitedParallelism(1)
 
@@ -1974,6 +1998,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val send = (if (retry) state.retry(key) else state.begin(key, text))
             ?: return if (retry) "No original message to retry." else "Retry or discard the original file message first."
         fun notBegun(why: String): String { state.notBegun(key, send, why, retry); return why }
+        // Checked again as it goes, a retry included: the agent may have stopped taking images since.
+        val images = send.files.filter { it.mime.startsWith("image/") }.map { safeFileName(it.name) }
+        if (images.isNotEmpty() && !offersImages(c)) return notBegun(
+            if (retry) "This agent does not take images now (${images.joinToString()}): discard the original, or retry once it does."
+            else "This agent does not take images now: remove ${images.joinToString()} to send the rest.")
         if (send.files.size !in 1..MAX_SEND_FILES || send.files.any { !validSendFile(it.name, it.mime, it.bytes.size) }) return notBegun("Invalid files.")
         val begin = message("message.begin", "conversation" to c.id, "text" to send.text,
             "files" to send.files.map { it.declaration() }).put("id", send.id)
@@ -2025,6 +2054,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (state.phase(key) != FilePhase.Draft) { temporary?.delete(); state.error(key, "Wait for the current message."); return }
         if (state.draft(key).size + picks.size > MAX_SEND_FILES) { temporary?.delete(); state.error(key, "Choose at most four files."); return }
         val context = getApplication<Application>()
+        // Images only for an agent that takes them; each one refused by name otherwise.
+        val images = offersImages(c)
+        // The draft cannot change while it prepares: new names stay distinct from its own.
+        val taken = state.draft(key).map { it.name }
         val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             val self = coroutineContext[Job]!!
             // What was prepared and not handed to the draft yet. withContext may finish its
@@ -2035,7 +2068,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.IO) {
                     // Each read checks for cancellation: a cancelled preparation stops at once
                     // and releases what it had reserved (prepareSendFiles).
-                    held = prepareSendFiles(context, picks, source) { ensureActive() }
+                    held = prepareSendFiles(context, picks, source, images = images, taken = taken, alive = { ensureActive() })
                 }
                 val result = held ?: return@launch
                 held = null
@@ -2399,7 +2432,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
-        outgoing.clear()
+        outgoing.clear(closing = true)
         main.removeCallbacksAndMessages(null)
         PushTokens.changed = null
         agentImages.close()

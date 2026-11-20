@@ -192,9 +192,12 @@ class Outgoing {
         }
     }
 
-    /** Forgets everything (the cache cleared). */
-    fun clear() {
-        files.clear()
+    /**
+     * Forgets everything: the cache cleared, or the ViewModel's end
+     * ([closing]), which keeps a camera capture whose result may still come.
+     */
+    fun clear(closing: Boolean = false) {
+        if (closing) files.close() else files.clear()
         unsent.clear()
         notSent.clear()
         sent.clear()

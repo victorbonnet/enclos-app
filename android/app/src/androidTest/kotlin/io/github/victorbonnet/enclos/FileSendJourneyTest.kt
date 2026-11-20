@@ -87,7 +87,7 @@ class FileSendJourneyTest {
             BridgeConnection::class.java.getDeclaredField("session").apply { isAccessible = true }.set(connection, session)
             runner.runOnMainSync {
                 m.conversations.add(c)
-                m.agents.add(Agent(c.host, c.agent, "hermes", listOf("incoming_files")))
+                m.agents.add(Agent(c.host, c.agent, "hermes", listOf("incoming_files", "incoming_images")))
                 m.links[c.host] = HostLink.Connected("fixture-person")
                 field<MutableMap<String, Set<String>>>(m, "hostCapabilities")[c.host] = setOf("message.begin")
                 field<MutableMap<String, BridgeConnection>>(m, "connections")[c.host] = connection
