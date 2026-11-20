@@ -1625,6 +1625,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** The screen of [conversation] was left: a draft with nothing sent goes, as if never started. */
     fun left(conversation: String) {
+        outgoing.leave(conversation)
         if (conversation !in drafts || !lines[conversation].isNullOrEmpty()) return
         drafts -= conversation
         conversations.removeAll { it.id == conversation }
