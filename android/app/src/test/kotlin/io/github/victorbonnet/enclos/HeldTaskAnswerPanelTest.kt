@@ -12,6 +12,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -80,6 +81,7 @@ class HeldTaskAnswerPanelTest {
         val client = client(written)
         show(client, written)
         compose.onNodeWithText("Details").performScrollTo().performClick()
+        compose.onNodeWithText("Answer in your own words").performScrollTo().performClick()
         compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("Wait for Monday")
         compose.runOnIdle {
             online = false
@@ -108,7 +110,7 @@ class HeldTaskAnswerPanelTest {
         val client = client(written)
         show(client, written)
         compose.onNodeWithText("Allow one more hour to fix Hermes backups?").assertExists()
-        compose.onNodeWithText("Blocked: The two approved coding runs are used up.").assertExists()
+        compose.onNodeWithText("The two approved coding runs are used up.").assertExists()
         compose.onNodeWithText("Recommended", useUnmergedTree = true).assertExists()
         assertTrue("recommended first", top("Allow one 60-min fix, then review and CI") < top("Keep #346 paused"))
         // Details are folded: the task's id, the runtime's reason and the other actions.
@@ -127,9 +129,12 @@ class HeldTaskAnswerPanelTest {
     }
 
     @Test
-    fun a_typed_answer_is_sent_with_send() {
+    fun a_typed_answer_is_folded_until_wanted_and_sent_with_send() {
         val client = client(written)
         show(client, written)
+        compose.onNode(hasSetTextAction()).assertDoesNotExist()
+        compose.onNodeWithText("Send").assertDoesNotExist()
+        compose.onNodeWithText("Answer in your own words").performScrollTo().performClick()
         compose.onNodeWithText("Send").performScrollTo().assertIsNotEnabled()
         compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("  Wait for Monday ")
         compose.onNodeWithText("Send").assertIsEnabled().performClick()
@@ -137,15 +142,32 @@ class HeldTaskAnswerPanelTest {
     }
 
     @Test
-    fun a_card_no_agent_wrote_asks_the_agent_and_shows_the_runtimes_reason() {
-        val card = written.copy(ask = null)
+    fun a_card_no_agent_wrote_shows_the_whole_reason_and_asks_the_agent_for_choices() {
+        val long = "Existing decision remains unanswered: " + "both reviews hold, the coding runs are spent. ".repeat(12) + "Allow one more hour, or keep paused?"
+        val card = written.copy(ask = null, reason = long)
         val client = client(card)
         show(client, card)
         compose.onNodeWithText("Deliver the Hermes backup fix").assertExists()
-        compose.onNodeWithText("Blocked: Both coding runs are spent; the person must decide.").assertExists()
+        // The reason in full, not cut to two lines, and not again under Details.
+        compose.onNodeWithText(long).assertExists()
+        compose.onNodeWithText(ASK_FOR_CHOICES_HINT).assertExists()
         compose.onNodeWithText("Resume task").assertDoesNotExist()
-        compose.onNodeWithText("Ask the agent").performScrollTo().performClick()
+        compose.onNodeWithText("Details").performScrollTo().performClick()
+        compose.onNodeWithText("Task t_f9f3").assertExists()
+        assertEquals(1, compose.onAllNodesWithText(long).fetchSemanticsNodes().size)
+        compose.onNodeWithText(ASK_FOR_CHOICES).performScrollTo().performClick()
         assertEquals(HeldTaskAnswer.Agent, sent.single().answer)
+    }
+
+    @Test
+    fun an_ask_without_choices_opens_the_field_at_once() {
+        val card = written.copy(ask = HeldTaskAsk("What should the release notes say?", "The notes need the person's words."))
+        val client = client(card)
+        show(client, card)
+        compose.onNodeWithText("Answer in your own words").assertDoesNotExist()
+        compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("Say it fixes backups")
+        compose.onNodeWithText("Send").performScrollTo().performClick()
+        assertEquals(HeldTaskAnswer.Text("Say it fixes backups"), sent.single().answer)
     }
 
     @Test

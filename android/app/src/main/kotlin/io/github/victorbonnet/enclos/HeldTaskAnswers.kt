@@ -1,5 +1,6 @@
 package io.github.victorbonnet.enclos
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,7 +19,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.victorbonnet.enclos.ui.*
 
@@ -26,15 +26,22 @@ import io.github.victorbonnet.enclos.ui.*
 internal fun heldTaskHeader(agentLabel: String, card: HeldTask): String =
     card.assignee?.let { "$agentLabel · $it's task" } ?: agentLabel
 
-/** What the sheet says is blocked: the agent's words, else the runtime's reason (drawn on two lines). */
+/** What the sheet says is blocked: the agent's words, else the runtime's reason, in full. */
 internal fun heldTaskBlocked(card: HeldTask): String = card.ask?.blocked?.takeIf { it.isNotBlank() } ?: card.reason
+
+/** What a card no agent wrote says its one button does. */
+internal const val ASK_FOR_CHOICES = "Ask the agent for choices"
+internal const val ASK_FOR_CHOICES_HINT = "The agent looks into it and writes its question here, with choices to tap."
 
 /**
  * A held task in a Needs you sheet, from a bridge that takes the person's answer (enclos ADR
- * 0073): the decision, what is blocked, then the answers first, one button per choice of the
- * agent's ask (the recommended one first, marked) and a typed answer. A card no agent wrote offers
- * **Ask the agent** and, where the runtime allows it, Resume. Every other part is under a folded
- * **Details**: the task's id and title, the runtime's reason, then [details] (View task, View
+ * 0073), laid out so the person decides without opening anything: the decision, what is blocked
+ * in full, then the answers. Each choice of the agent's ask is one tap: the recommended one first,
+ * filled and marked, the others outlined. A typed answer is folded behind **Answer in your own
+ * words** (open at once when the ask has no choices, or a draft is kept). A card no agent wrote
+ * shows the runtime's title and its whole reason, and offers **Ask the agent for choices** and,
+ * where the runtime allows it, Resume. **Details** folds the rest: the task's id and title, the
+ * runtime's reason when the agent's words replaced it, then [details] (View task, View
  * conversation, Open task board, Dismiss reminder). A tap sends one `held_task.answer` at the
  * card's revision and waits for its result; nothing is sent again on its own. An answered card
  * says what the person answered.
@@ -44,6 +51,7 @@ fun HeldTaskAnswerPanel(client: HeldTaskClient, card: HeldTask, details: @Compos
     val p = palette
     var open by rememberSaveable(card.host, card.agent, card.task) { mutableStateOf(false) }
     var draft by rememberSaveable(card.host, card.agent, card.task) { mutableStateOf("") }
+    var writing by rememberSaveable(card.host, card.agent, card.task) { mutableStateOf(false) }
     val ask = card.ask
     val answering = client.offersAnswer(card)
     val unavailable = client.answerUnavailable(card)
@@ -54,14 +62,8 @@ fun HeldTaskAnswerPanel(client: HeldTaskClient, card: HeldTask, details: @Compos
         if (card.state == HeldTaskState.Answered) {
             Text(answeredLine(card), style = Type.body, color = p.text)
         } else {
-            val blocked = heldTaskBlocked(card)
-            val fromAgent = ask?.blocked?.isNotBlank() == true
-            SelectionContainer {
-                Text(
-                    "Blocked: $blocked", style = Type.body, color = p.text,
-                    maxLines = if (fromAgent) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis,
-                )
-            }
+            // Everything the person needs to decide, never cut: the card holds at most 1,000 characters.
+            SelectionContainer { Text(heldTaskBlocked(card), style = Type.body, color = p.text) }
             if (answering) {
                 if (ask != null) {
                     ask.shown().forEach { (index, label) ->
@@ -70,25 +72,30 @@ fun HeldTaskAnswerPanel(client: HeldTaskClient, card: HeldTask, details: @Compos
                         }
                     }
                 } else {
-                    PrimaryButton("Ask the agent", enabled = enabled) { client.answer(card, HeldTaskAnswer.Agent) }
+                    PrimaryButton(ASK_FOR_CHOICES, enabled = enabled) { client.answer(card, HeldTaskAnswer.Agent) }
+                    Text(ASK_FOR_CHOICES_HINT, style = Type.small, color = p.textMuted)
                     if (client.offersResume(card)) {
                         RequestSecondaryButton("Resume task", enabled = client.canResume(card)) { client.resume(card) }
                     }
                 }
-                FormField(
-                    draft, { draft = it },
-                    label = "Something else…",
-                    placeholder = "Write your answer",
-                    enabled = enabled,
-                    singleLine = false,
-                    minLines = 2,
-                )
-                val typed = heldAnswerText(draft)
-                if (draft.isNotBlank() && typed == null) {
-                    Text("Remove tabs or hidden characters, or shorten the answer, to send it.", style = Type.small, color = p.textMuted)
-                }
-                RequestSecondaryButton("Send", enabled = enabled && typed != null) {
-                    typed?.let { client.answer(card, HeldTaskAnswer.Text(it)) }
+                if (writing || draft.isNotEmpty() || ask?.choices?.isEmpty() == true) {
+                    FormField(
+                        draft, { draft = it },
+                        label = "Your answer",
+                        placeholder = "Write your answer",
+                        enabled = enabled,
+                        singleLine = false,
+                        minLines = 2,
+                    )
+                    val typed = heldAnswerText(draft)
+                    if (draft.isNotBlank() && typed == null) {
+                        Text("Remove tabs or hidden characters, or shorten the answer, to send it.", style = Type.small, color = p.textMuted)
+                    }
+                    RequestSecondaryButton("Send", enabled = enabled && typed != null) {
+                        typed?.let { client.answer(card, HeldTaskAnswer.Text(it)) }
+                    }
+                } else {
+                    TextLink("Answer in your own words") { writing = true }
                 }
                 unavailable?.let { Text(it, style = Type.small, color = p.textMuted) }
             } else {
@@ -100,7 +107,8 @@ fun HeldTaskAnswerPanel(client: HeldTaskClient, card: HeldTask, details: @Compos
         if (open) {
             Text("Task ${card.task}", style = Type.small, color = p.textMuted)
             SelectionContainer { Text(card.title, style = Type.name, color = p.text) }
-            SelectionContainer { Text(card.reason, style = Type.small, color = p.text) }
+            // Shown above already when no agent wrote the card.
+            if (ask != null) SelectionContainer { Text(card.reason, style = Type.small, color = p.text) }
             // A card the agent wrote keeps Resume here, where the runtime allows it.
             if (ask != null && client.offersResume(card) && card.state == HeldTaskState.Held) {
                 RequestSecondaryButton("Resume task", enabled = client.canResume(card)) { client.resume(card) }
@@ -111,18 +119,29 @@ fun HeldTaskAnswerPanel(client: HeldTaskClient, card: HeldTask, details: @Compos
     }
 }
 
-/** One choice of the agent's ask: the whole line wraps; the recommended one is outlined in the accent colour and says so. */
+/**
+ * One choice of the agent's ask, one tap: the whole line wraps. The recommended one is filled
+ * like the app's primary button and says so; the others are outlined.
+ */
 @Composable
 private fun HeldChoiceButton(label: String, recommended: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val p = palette
+    val text = when {
+        !enabled -> p.textFaint
+        recommended -> p.buttonText
+        else -> p.text
+    }
     Column(
         Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).clip(Shapes.control)
-            .border(if (recommended) 2.dp else 1.dp, if (recommended && enabled) p.accent else p.line, Shapes.control)
+            .then(
+                if (recommended) Modifier.background(if (enabled) p.buttonBg else p.surface)
+                else Modifier.border(1.dp, if (enabled) p.lineStrong else p.line, Shapes.control),
+            )
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        if (recommended) Text("Recommended", style = Type.small, color = if (enabled) p.accent else p.textFaint)
-        Text(label, style = Type.label, color = if (enabled) p.text else p.textFaint)
+        if (recommended) Text("Recommended", style = Type.small, color = text)
+        Text(label, style = Type.label, color = text)
     }
 }
