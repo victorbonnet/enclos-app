@@ -33,8 +33,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TestRule
 import org.junit.runner.RunWith
+import org.junit.runners.model.Statement
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
 import java.security.SecureRandom
@@ -71,6 +74,27 @@ import java.util.concurrent.TimeUnit
 class ConnectedNeedsYouCaptureTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val target: Context = instrumentation.targetContext
+
+    /** The run the test started ([start]), concluded by [evidence]. */
+    private var current: Run? = null
+
+    /**
+     * Concludes the test's run ([Run.conclude]) whatever stopped the test:
+     * its outcome noted; an evidence write that failed fails the test,
+     * carried in the test's own failure when there is one, never in its place.
+     */
+    @get:Rule
+    val evidence = TestRule { base, _ ->
+        object : Statement() {
+            override fun evaluate() {
+                val failed = runCatching { base.evaluate() }.exceptionOrNull()
+                val run = current
+                if (run != null) run.conclude(failed) else throwAll(failed, emptyList())
+            }
+        }
+    }
+
+    private fun start(name: String): Run = Run.start(target, name).also { current = it }
 
     /**
      * What the app may send in these runs: reads, sync, a conversation's read
@@ -129,7 +153,7 @@ class ConnectedNeedsYouCaptureTest {
 
     @Test
     fun held_task_sheet_exact_conversation_return() {
-        val run = Run.start(target, "sheet-return")
+        val run = start("sheet-return")
         val s = Synthetic(run.nonce)
         val hooks = Hooks.now()
         // Refused before anything is taken: read only.
@@ -138,21 +162,27 @@ class ConnectedNeedsYouCaptureTest {
         val fixture = ReplacementFixture(AppStores(target), modelAllowed = true)
         val owner = ActivityOwner(fixture, run)
         val native = Native(instrumentation.uiAutomation, target.packageName, run)
-        // The flags are restored in the finally even when open() itself failed half way.
-        var primary: Throwable? = null
-        try {
-            native.open()
-            owner.around { scenario(fixture, owner, native, run, s) }
-        } catch (t: Throwable) {
-            primary = t
-            throw t
-        } finally {
-            val notRestored = runCatching { native.close() }.exceptionOrNull()
-            if (notRestored != null) primary?.addSuppressed(notRestored) ?: throw notRestored
-        }
+        withNative(native, run) { owner.around { scenario(fixture, owner, native, run, s) } }
         assertGivenBack(owner, fixture, hooks, listOf(s.h1, s.h2), run, bridges = 2)
         assertTrue("SETUP: UiAutomation's flags not restored", native.restored())
-        run.finish("PASS")
+    }
+
+    /**
+     * Runs [body] with [native] open, then restores its flags whatever
+     * stopped it (open() itself half way included), after the body's own
+     * teardown and independent of it and of the evidence. The body's failure
+     * is thrown, the restoration's and [run]'s failed writes carried in it,
+     * or the restoration's alone, the failed writes in it ([Run.raise]): a
+     * scenario's, a fixture's, an evidence write's and the flags' failures
+     * together, each the original object.
+     */
+    private fun withNative(native: Native, run: Run, body: () -> Unit) {
+        val failed = runCatching {
+            native.open()
+            body()
+        }.exceptionOrNull()
+        val notRestored = runCatching { native.close() }.exceptionOrNull()
+        run.raise(failed, listOfNotNull(notRestored))
     }
 
     private fun scripts(s: Synthetic): Pair<BridgeScript, BridgeScript> {
@@ -432,7 +462,7 @@ class ConnectedNeedsYouCaptureTest {
      */
     @Test
     fun each_occupied_store_and_hook_is_refused_with_bytes_and_hooks_unchanged() {
-        val run = Run.start(target, "occupied")
+        val run = start("occupied")
         refuseOccupied(AppStores(target), run)
         val stores = AppStores(target, "c82-occ-${run.nonce}-")
         refuseEachStore(stores, run)
@@ -440,22 +470,19 @@ class ConnectedNeedsYouCaptureTest {
         val listener: (String) -> Unit = {}
         val originalListener = PushTokens.changed
         PushTokens.changed = listener
-        try {
+        val listenerChecked = runCatching {
             assertRefused(stores, run, "a live model's push-token listener")
             assertSame("the listener changed by the refusal", listener, PushTokens.changed)
-        } finally {
-            PushTokens.changed = originalListener
-        }
+        }.exceptionOrNull()
+        attemptAll(listenerChecked, listOf { PushTokens.changed = originalListener })
         val original = Platform.get()
         val leaked = LoopbackCleartext(original)
         Platform.resetForTests(leaked)
-        try {
+        val hookChecked = runCatching {
             assertRefused(stores, run, "a leaked platform hook")
             assertSame("the hook changed by the refusal", leaked, Platform.get())
-        } finally {
-            Platform.resetForTests(original)
-        }
-        run.finish("PASS")
+        }.exceptionOrNull()
+        attemptAll(hookChecked, listOf { Platform.resetForTests(original) })
     }
 
     /**
@@ -466,49 +493,41 @@ class ConnectedNeedsYouCaptureTest {
      */
     @Test
     fun a_store_path_found_present_is_kept_by_the_sentinel_check() {
-        val run = Run.start(target, "occupied-present")
+        val run = start("occupied-present")
         refuseOccupied(AppStores(target), run)
         val stores = AppStores(target, "c82-pre-${run.nonce}-")
         // The first cache path (its folder, the app's cache folder, always exists): every preference and database path before it is made, refused and removed first.
         val found = stores.paths().first { it.parentFile == target.cacheDir }
         setup(!found.exists()) { "${found.name} exists already: not this control's" }
         val bytes = randomBytes()
-        var primary: Throwable? = null
-        try {
+        val failed = runCatching {
             found.writeBytes(bytes)
             val thrown = runCatching { refuseEachStore(stores, run) }.exceptionOrNull()
             assertTrue("not stopped at ${found.name}: $thrown", thrown is AssertionError && thrown.message.orEmpty().startsWith("SETUP") && found.name in thrown.message.orEmpty())
             assertTrue("the path found present not kept", found.readBytes().contentEquals(bytes))
             assertTrue("the check's own sentinels left", stores.paths().filter { it != found }.none(File::exists))
-        } catch (t: Throwable) {
-            primary = t
-            throw t
-        } finally {
-            // Made by this control after it was found absent: its own to remove, and only it.
-            attemptAll(primary, listOf { setup(found.delete() || !found.exists()) { "${found.name} not removed" } })
-        }
-        run.finish("PASS")
+        }.exceptionOrNull()
+        // Made by this control after it was found absent: its own to remove, and only it.
+        attemptAll(failed, listOf { setup(found.delete() || !found.exists()) { "${found.name} not removed" } })
     }
 
     /** A device key no paired host names (AppModel's sweep would delete it) is refused too, the key kept. */
     @Test
     fun an_unpaired_device_key_is_refused_and_kept() {
-        val run = Run.start(target, "key-refusal")
+        val run = start("key-refusal")
         refuseOccupied(AppStores(target), run)
         val alias = "${DEVICE_KEY_PREFIX}c82-occupied-${run.nonce}"
         // Only a key this check made is its own to delete: not one found under the alias before.
         var ownsKey = false
-        try {
+        val failed = runCatching {
             setup(!AppStores.keyStore().containsAlias(alias)) { "$alias exists already: not this check's" }
             ownsKey = true
             Keys.newDeviceKey(alias)
             assertRefused(AppStores(target), run, "an unpaired device key")
             assertTrue("the key was not kept", AppStores.keyStore().containsAlias(alias))
-        } finally {
-            if (ownsKey) AppStores.keyStore().run { if (containsAlias(alias)) deleteEntry(alias) }
-        }
+        }.exceptionOrNull()
+        attemptAll(failed, listOf { if (ownsKey) AppStores.keyStore().run { if (containsAlias(alias)) deleteEntry(alias) } })
         assertFalse("the check's own key was not deleted", AppStores.keyStore().containsAlias(alias))
-        run.finish("PASS")
     }
 
     /**
@@ -518,11 +537,11 @@ class ConnectedNeedsYouCaptureTest {
      */
     @Test
     fun an_existing_wrapping_key_is_refused_and_kept() {
-        val run = Run.start(target, "wrap-refusal")
+        val run = start("wrap-refusal")
         // Found absent here (the occupancy check): only a key this check made is its own to delete.
         refuseOccupied(AppStores(target), run)
         var ownsKey = false
-        try {
+        val failed = runCatching {
             setup(!AppStores.keyStore().containsAlias(NOISE_WRAP_ALIAS)) { "$NOISE_WRAP_ALIAS exists already: not this check's" }
             ownsKey = true
             val plain = randomBytes()
@@ -531,17 +550,15 @@ class ConnectedNeedsYouCaptureTest {
             assertRefused(AppStores(target), run, "an existing wrapping key")
             assertEquals("the wrapping key replaced", created, AppStores.keyStore().getCreationDate(NOISE_WRAP_ALIAS))
             assertTrue("the wrapping key changed: what it wrapped no longer unwraps", Keys.unwrap(wrapped).contentEquals(plain))
-        } finally {
-            if (ownsKey) AppStores.keyStore().run { if (containsAlias(NOISE_WRAP_ALIAS)) deleteEntry(NOISE_WRAP_ALIAS) }
-        }
+        }.exceptionOrNull()
+        attemptAll(failed, listOf { if (ownsKey) AppStores.keyStore().run { if (containsAlias(NOISE_WRAP_ALIAS)) deleteEntry(NOISE_WRAP_ALIAS) } })
         assertFalse("the check's own wrapping key was not deleted", AppStores.keyStore().containsAlias(NOISE_WRAP_ALIAS))
-        run.finish("PASS")
     }
 
     /** A setup stopped half way (H2's bridge, after H1 was paired): what was made is given back, only that; the failure is the one thrown. */
     @Test
     fun a_partial_acquisition_is_given_back() {
-        val run = Run.start(target, "partial")
+        val run = start("partial")
         val hooks = Hooks.now()
         refuseOccupied(AppStores(target), run)
         val s = Synthetic(run.nonce)
@@ -560,7 +577,6 @@ class ConnectedNeedsYouCaptureTest {
         assertEquals("teardown failures carried", 0, thrown!!.suppressed.size)
         assertEquals("hosts left", emptyList<String>(), pairedHostNames())
         assertGivenBack(owner, fixture, hooks, listOf(s.h1, s.h2), run, bridges = 1)
-        run.finish("PASS")
     }
 
     /**
@@ -575,7 +591,7 @@ class ConnectedNeedsYouCaptureTest {
      */
     @Test
     fun a_persistent_model_cleanup_failure_keeps_storage_until_a_later_retry() {
-        val run = Run.start(target, "model-held")
+        val run = start("model-held")
         val hooks = Hooks.now()
         refuseOccupied(AppStores(target), run)
         val s = Synthetic(run.nonce)
@@ -642,7 +658,6 @@ class ConnectedNeedsYouCaptureTest {
         val count = fixture.released.size
         fixture.release()
         assertEquals("a second release changed something: ${fixture.released}", count, fixture.released.size)
-        run.finish("PASS")
     }
 
     /**
@@ -654,7 +669,7 @@ class ConnectedNeedsYouCaptureTest {
      */
     @Test
     fun a_persistent_bridge_cleanup_failure_keeps_its_dependencies_until_a_later_retry() {
-        val run = Run.start(target, "bridge-held")
+        val run = start("bridge-held")
         val hooks = Hooks.now()
         refuseOccupied(AppStores(target), run)
         val s = Synthetic(run.nonce)
@@ -689,20 +704,210 @@ class ConnectedNeedsYouCaptureTest {
         val count = fixture.released.size
         fixture.release()
         assertEquals("a second release changed something: ${fixture.released}", count, fixture.released.size)
-        run.finish("PASS")
     }
 
-    /** Runs [checks]; then, whatever they did, stops the injected failure's effect by a later release; a failure of either is thrown, the other carried. */
+    /**
+     * Every evidence write of the owner refused ([blockedRun]: real I/O)
+     * while the check fails, connected, and H1's bridge's first close fails
+     * (injected): the model step ends the Activity, its notes before the
+     * finish and after the Store's close failing; the bridge is closed on
+     * the retry, then the storage given back. The check's own failure is the
+     * one thrown, the bridge's and every failed write carried in it, each the
+     * original object. Concluded, that run throws the same failure, its
+     * outcome's own failed write in it; with no failure, its first failed
+     * write: never a pass.
+     */
+    @Test
+    fun a_failed_evidence_write_stops_no_release_or_retry_and_fails_the_run() {
+        val run = start("evidence-failure")
+        val hooks = Hooks.now()
+        refuseOccupied(AppStores(target), run)
+        val s = Synthetic(run.nonce)
+        val blocked = blockedRun(run)
+        val fixture = ReplacementFixture(AppStores(target), modelAllowed = true)
+        val owner = ActivityOwner(fixture, blocked)
+        val attempts = mutableListOf<String>()
+        val injected = mutableListOf<Throwable>()
+        fixture.beforeCleanup = { label ->
+            attempts += label
+            if (label == "bridge ${s.h1}" && injected.isEmpty()) throw Injected(label).also { injected += it }
+        }
+        val primary = AssertionError("deliberate failure while connected")
+        val thrown = runCatching {
+            owner.around {
+                fixture.acquire()
+                val b = fixture.pair(s.h1, scripts(s).first)
+                fixture.beforeModel()
+                fixture.holdModel(owner::endActivity)
+                owner.launch(instrumentation)
+                setup(b.nextSession() != null) { "no connection: ${b.problems}" }
+                awaitSentinel(owner.model!!, "${s.h1}/${s.agent}", "sync-1")
+                throw primary
+            }
+        }.exceptionOrNull()
+        laterRetry(fixture, run) {
+            run.note("blocked writes: ${blocked.writesFailed.size}; cleanup attempts: $attempts; held ${fixture.held}")
+            assertSame("not the check's own failure: $thrown", primary, thrown)
+            assertEquals("the bridge's close not failed once: $injected", 1, injected.size)
+            assertTrue("the bridge's failure not carried: ${primary.suppressed.toList()}", primary.reaches(injected.single()))
+            assertTrue("no write failed after the probe: ${blocked.writesFailed}", blocked.writesFailed.size > 1)
+            assertTrue("a failed write not carried", blocked.writesFailed.all(primary::reaches))
+            assertEquals("model steps attempted: $attempts", 1, attempts.count { it == "model" })
+            assertEquals("bridge closes attempted: $attempts", 2, attempts.count { it == "bridge ${s.h1}" })
+            assertTrue("the model step not done: Activity, model or Store", owner.liveActivities().isEmpty() && owner.modelCleared && owner.storeClosed)
+            assertTrue("not given back on the retry: ${fixture.held}", fixture.held.isEmpty() && !fixture.owned)
+            val before = blocked.writesFailed
+            val concluded = runCatching { blocked.conclude(primary) }.exceptionOrNull()
+            assertSame("the conclusion replaced the check's failure: $concluded", primary, concluded)
+            assertEquals("the outcome's own write did not fail", before.size + 1, blocked.writesFailed.size)
+            assertTrue("a failed write not carried by the conclusion", blocked.writesFailed.all(primary::reaches))
+            val alone = runCatching { blocked.conclude(null) }.exceptionOrNull()
+            assertSame("a run with failed writes alone not failed by its first: $alone", blocked.writesFailed.first(), alone)
+            assertTrue("a failed write not carried by the first", blocked.writesFailed.all { alone!!.reaches(it) })
+        }
+        assertGivenBack(owner, fixture, hooks, listOf(s.h1), run, bridges = 1)
+    }
+
+    /**
+     * UiAutomation's flags with every evidence write refused: the check, the
+     * fixture's first release (its platform step, injected) and the flags'
+     * first try (injected) failing together, the check's failure is the one
+     * thrown, the fixture's, the flags' and the failed writes in it; the
+     * fixture is given back and the flags restored by their retries, no
+     * longer owed (a later close tries nothing). Both tries failing, the
+     * first try's own failure is thrown, the second in it, the flags still
+     * owed until a later close restores them.
+     */
+    @Test
+    fun the_ui_flags_are_restored_and_reported_whatever_the_evidence_or_the_fixture_did() {
+        val run = start("ui-flags")
+        val hooks = Hooks.now()
+        refuseOccupied(AppStores(target), run)
+        val blocked = blockedRun(run)
+        val fixture = ReplacementFixture(AppStores(target), modelAllowed = false)
+        val owner = ActivityOwner(fixture, blocked)
+        val native = Native(instrumentation.uiAutomation, target.packageName, blocked)
+        val released = mutableListOf<Throwable>()
+        fixture.beforeCleanup = { if (it == "platform" && released.isEmpty()) throw Injected(it).also { e -> released += e } }
+        var tries = 0
+        var failing = 1
+        val ui = mutableListOf<Throwable>()
+        native.beforeRestore = {
+            tries++
+            if (failing > 0) {
+                failing--
+                throw Injected("UiAutomation flags, try $tries").also { ui += it }
+            }
+        }
+        val primary = AssertionError("deliberate failure with the flags changed")
+        val checked = runCatching {
+            val thrown = runCatching { withNative(native, blocked) { owner.around { fixture.acquire(); throw primary } } }.exceptionOrNull()
+            run.note("together: $thrown; carried ${thrown?.suppressed?.toList()}")
+            assertSame("not the check's own failure: $thrown", primary, thrown)
+            assertTrue("the fixture's or the flags' failure not carried", released.size == 1 && ui.size == 1 && primary.reaches(released[0]) && primary.reaches(ui[0]))
+            assertTrue("a failed write not carried", blocked.writesFailed.size > 1 && blocked.writesFailed.all(primary::reaches))
+            assertTrue("the fixture not given back on its retry: ${fixture.held}", fixture.held.isEmpty() && !fixture.owned)
+            assertSame("the platform hook not restored", hooks.platform, Platform.get())
+            assertTrue("the flags not restored by the retry: $tries tries", tries == 2 && native.restored())
+            native.close()
+            assertEquals("a close after the flags were restored tried again", 2, tries)
+            failing = 2
+            val bothFailed = runCatching { withNative(native, blocked) {} }.exceptionOrNull()
+            run.note("both tries failed: $bothFailed; carried ${bothFailed?.suppressed?.toList()}")
+            assertTrue("not the first try's own failure, the second in it: $bothFailed", ui.size == 3 && bothFailed === ui[1] && ui[1].reaches(ui[2]))
+            assertFalse("restored after both tries failed", native.restored())
+            native.close()
+            assertTrue("the flags not restored by a later close: $tries tries", tries == 5 && native.restored())
+        }.exceptionOrNull()
+        // Whatever the checks did: the flags restored, the fixture given back.
+        native.beforeRestore = {}
+        attemptAll(checked, listOf({ native.close() }, { fixture.beforeCleanup = {}; fixture.release() }))
+        assertGivenBack(owner, fixture, hooks, emptyList(), run, bridges = 0)
+        assertTrue("SETUP: UiAutomation's flags not restored", native.restored())
+    }
+
+    /**
+     * A check's failure that can carry nothing (its suppression disabled)
+     * loses no other: with every evidence write refused, the fixture's
+     * release and its retry (the platform step, injected) and both of the
+     * flags' tries (injected) failing too, the one thrown is a [Carried],
+     * its cause the check's own failure, the raw object, holding nothing,
+     * and every other failure, each the original object, reachable from it.
+     * Concluded, the run throws that same [Carried], its outcome's own failed
+     * write in it. A later close and release restore the flags and give the
+     * fixture back.
+     */
+    @Test
+    fun a_failure_that_carries_nothing_loses_no_other() {
+        val run = start("uncarried")
+        val hooks = Hooks.now()
+        refuseOccupied(AppStores(target), run)
+        val primary = CarriesNothing("deliberate failure that carries nothing")
+        primary.addSuppressed(Injected("suppression probe"))
+        setup(primary.suppressed.isEmpty()) { "the failure's suppression is not disabled: ${primary.suppressed.toList()}" }
+        assertSame("a lone failure not thrown as itself", primary, runCatching { throwAll(primary, emptyList()) }.exceptionOrNull())
+        val blocked = blockedRun(run)
+        val fixture = ReplacementFixture(AppStores(target), modelAllowed = false)
+        val owner = ActivityOwner(fixture, blocked)
+        val native = Native(instrumentation.uiAutomation, target.packageName, blocked)
+        val released = mutableListOf<Throwable>()
+        fixture.beforeCleanup = { if (it == "platform") throw Injected("$it, release ${released.size + 1}").also { e -> released += e } }
+        val ui = mutableListOf<Throwable>()
+        native.beforeRestore = { throw Injected("UiAutomation flags, try ${ui.size + 1}").also { ui += it } }
+        val checked = runCatching {
+            val thrown = runCatching { withNative(native, blocked) { owner.around { fixture.acquire(); throw primary } } }.exceptionOrNull()
+            run.note("carries nothing: $thrown; carried ${thrown?.suppressed?.toList()}")
+            assertTrue("not a Carried: $thrown", thrown is Carried)
+            val carried = thrown as Carried
+            assertSame("the check's own failure not its cause", primary, carried.cause)
+            assertTrue("the check's own failure holds something: ${primary.suppressed.toList()}", primary.suppressed.isEmpty())
+            assertEquals("releases failed: $released", 2, released.size)
+            assertEquals("the flags' tries failed: $ui", 2, ui.size)
+            assertTrue("no write failed after the probe: ${blocked.writesFailed}", blocked.writesFailed.size > 1)
+            val others = released + ui + blocked.writesFailed
+            assertTrue("a failure lost: ${others.filterNot(carried::reaches)}", others.all(carried::reaches))
+            assertTrue("the fixture not held after both releases failed: ${fixture.held}", "platform" in fixture.held)
+            assertFalse("the flags restored after both tries failed", native.restored())
+            val before = blocked.writesFailed.size
+            val concluded = runCatching { blocked.conclude(carried) }.exceptionOrNull()
+            assertSame("the conclusion replaced the Carried: $concluded", carried, concluded)
+            assertEquals("the outcome's own write did not fail", before + 1, blocked.writesFailed.size)
+            assertTrue("a failed write not carried by the conclusion", blocked.writesFailed.all(carried::reaches))
+        }.exceptionOrNull()
+        // Whatever the checks did: the flags restored, the fixture given back.
+        native.beforeRestore = {}
+        attemptAll(checked, listOf({ native.close() }, { fixture.beforeCleanup = {}; fixture.release() }))
+        assertGivenBack(owner, fixture, hooks, emptyList(), run, bridges = 0)
+        assertTrue("SETUP: UiAutomation's flags not restored", native.restored())
+    }
+
+    /**
+     * A second run of [run]'s test whose every transcript write fails: its
+     * transcript is a folder (a real write failure, in its own evidence
+     * folder beside [run]'s, nothing else changed). Checked: a note fails.
+     */
+    private fun blockedRun(run: Run): Run {
+        val blocked = Run(target, "${run.name}-blocked", run.nonce)
+        blocked.begin()
+        val transcript = File(blocked.dir, "transcript.txt")
+        setup(transcript.delete() && transcript.mkdir()) { "the blocked run's transcript not replaced by a folder" }
+        blocked.note("a write that must fail")
+        setup(blocked.writesFailed.size == 1) { "a write to a folder did not fail: ${blocked.writesFailed}" }
+        return blocked
+    }
+
+    /**
+     * Runs [checks]; then, whatever they did, stops the injected failure's
+     * effect by a later release, attempted whatever the checks or the
+     * evidence did. The checks' failure is thrown, the release's carried in
+     * it, or the release's alone, with the run's failed writes ([Run.raise]).
+     */
     private fun laterRetry(fixture: ReplacementFixture, run: Run, checks: () -> Unit) {
         val checked = runCatching(checks).exceptionOrNull()
         fixture.beforeCleanup = {}
         val retried = runCatching { fixture.release() }.exceptionOrNull()
         run.note("later retry: ${retried ?: "given back"}; released ${fixture.released}")
-        if (checked != null) {
-            retried?.let(checked::addSuppressed)
-            throw checked
-        }
-        retried?.let { throw it }
+        run.raise(checked, listOfNotNull(retried))
     }
 
     /**
@@ -721,8 +926,7 @@ class ConnectedNeedsYouCaptureTest {
             setup(!root.exists()) { "${root.name}, the check's own, not removed" }
             owned -= root
         }
-        var primary: Throwable? = null
-        try {
+        val failed = runCatching {
             stores.paths().forEach { path ->
                 setup(!path.exists()) { "${path.name} exists already: not this check's, kept" }
                 val folder = path.parentFile ?: setupFail("${path.name} has no folder")
@@ -741,25 +945,19 @@ class ConnectedNeedsYouCaptureTest {
                 assertRefused(stores, run, "store ${path.name}")
                 remove(path)
             }
-        } catch (t: Throwable) {
-            primary = t
-            throw t
-        } finally {
-            attemptAll(primary, owned.reversed().map { root -> { remove(root) } })
-        }
+        }.exceptionOrNull()
+        attemptAll(failed, owned.reversed().map { root -> { remove(root) } })
     }
 
-    /** Runs every one of [steps], each attempted; their failures are carried in [primary], or, with none, the first thrown, the others in it. */
-    private fun attemptAll(primary: Throwable?, steps: List<() -> Unit>) {
-        val failures = steps.mapNotNull { runCatching(it).exceptionOrNull() }
-        if (failures.isEmpty()) return
-        if (primary != null) {
-            failures.forEach(primary::addSuppressed)
-            return
-        }
-        failures.drop(1).forEach(failures.first()::addSuppressed)
-        throw failures.first()
-    }
+    /**
+     * Runs every one of [steps], each attempted whatever [primary] or the
+     * others did; then throws [primary], their failures carried in it, or,
+     * with none, the first of them, the others in it ([throwAll]); returns
+     * when nothing failed. Called after what [primary] stopped, never in a
+     * `finally`: what it throws replaces nothing.
+     */
+    private fun attemptAll(primary: Throwable?, steps: List<() -> Unit>) =
+        throwAll(primary, steps.mapNotNull { runCatching(it).exceptionOrNull() })
 
     private fun assertRefused(stores: AppStores, run: Run, what: String) {
         val before = stores.bytes()
@@ -817,6 +1015,9 @@ class ConnectedNeedsYouCaptureTest {
 
     private class Injected(at: String) : RuntimeException("injected failure at $at")
 
+    /** A failure whose suppression is disabled, as some the platform throws are: addSuppressed on it does nothing. */
+    private class CarriesNothing(message: String) : RuntimeException(message, null, false, true)
+
     /** What the refusing factory throws: the Activity's ViewModelStore holds no AppModel. */
     private class NoModel : IllegalStateException("the Activity's ViewModelStore holds no AppModel")
 
@@ -834,7 +1035,8 @@ class ConnectedNeedsYouCaptureTest {
      * closed) through the
      * fixture's model step, then the rest ([ReplacementFixture.release]). A
      * cleanup that failed is tried once more; what still fails stays held and
-     * is thrown, carried in the check's own failure when there is one.
+     * is thrown, carried in the check's own failure when there is one. A note
+     * never throws ([Run.note]): no evidence write stops a release or a retry.
      */
     private inner class ActivityOwner(private val fixture: ReplacementFixture, private val run: Run) {
         /** The Activity's model, read back, never made. */
@@ -868,41 +1070,35 @@ class ConnectedNeedsYouCaptureTest {
         var bridgesMade: List<FakeBridge> = emptyList()
             private set
 
+        /**
+         * Runs [check], then [finish] whatever stopped it. Throws the check's
+         * failure, the teardown's and the run's failed writes carried in it,
+         * or the teardown's, the failed writes in it ([Run.raise]), each the
+         * original object. Failed writes alone are left to the run's
+         * conclusion ([Run.conclude]): the checks after the teardown still run.
+         */
         fun around(check: () -> Unit) {
-            var primary: Throwable? = null
-            try {
-                check()
-            } catch (t: Throwable) {
-                primary = t
-                run.note("check failed: $t")
-            }
+            val failed = runCatching(check).exceptionOrNull()
+            failed?.let { run.note("check failed: $it") }
             // Before any release: the fixture holds every bridge it made until it closed it.
             bridgesMade = fixture.bridges.toList()
             val teardown = finish()
-            if (primary != null) {
-                teardown?.let(primary::addSuppressed)
-                run.finish("FAIL")
-                throw primary
-            }
-            if (teardown != null) {
-                run.finish("TEARDOWN FAIL")
-                throw teardown
-            }
+            teardown?.let { run.note("teardown failed: $it") }
+            if (failed != null || teardown != null) run.raise(failed, listOfNotNull(teardown))
         }
 
-        /** Releases, once more if anything is still held; null when all was given back at the first attempt. */
+        /**
+         * Releases, once more if anything is still held; null when all was
+         * given back at the first attempt. Otherwise the first failure, the
+         * retry's carried in it ([carrying]): reported even when the retry
+         * gave all back, never hidden by it.
+         */
         private fun finish(): Throwable? {
             val first = runCatching { fixture.release() }.exceptionOrNull() ?: return null
             run.note("not all given back: $first; held ${fixture.held}; retried")
             val second = runCatching { fixture.release() }.exceptionOrNull()
-            if (second == null && fixture.held.isEmpty()) {
-                // Given back, but the failure is still reported: never hidden by the retry.
-                run.note("given back on retry: ${fixture.released}")
-                return first
-            }
-            second?.let(first::addSuppressed)
-            run.note("still held after the retry: ${fixture.held}")
-            return first
+            run.note(if (fixture.held.isEmpty()) "given back on retry: ${fixture.released}" else "still held after the retry: ${fixture.held}")
+            return carrying(first, listOfNotNull(second))
         }
 
         /** Launches MainActivity as the system does, and reads back the model it made (never makes one). */
@@ -1000,6 +1196,7 @@ class ConnectedNeedsYouCaptureTest {
                 val live = liveActivities()
                 if (live.isEmpty()) break
                 if (SystemClock.uptimeMillis() >= until) throw IllegalStateException("activities not destroyed within 20 s: $live")
+                // A note never throws (Run.note): a failed write neither keeps the Activity live nor the step held.
                 run.note("ending activities $live")
                 // Read back before it is finished: a model is never let go unseen.
                 live.forEach { readBack(it as MainActivity) }
@@ -1106,21 +1303,37 @@ class ConnectedNeedsYouCaptureTest {
             ui.serviceInfo = info
         }
 
-        /** Restores the flags, tried twice; still owed (and thrown, both failures) when both fail. */
+        /** Run just before each restoration try ([restore]): a control injects a failed try here. */
+        var beforeRestore: () -> Unit = {}
+
+        /**
+         * Restores the flags, tried twice. Restored by either try, they are
+         * no longer owed: a later close does nothing. A failed first try is
+         * never hidden: its raw failure is thrown even when the retry
+         * restored them, the retry's carried in it when it failed too, the
+         * flags then still owed (and the next close tries again).
+         */
         fun close() {
             if (!restoring) return
             val flags = flagsBefore ?: return
-            val first = runCatching { ui.serviceInfo = ui.serviceInfo.also { it.flags = flags } }.exceptionOrNull()
-            if (first != null) {
-                run.note("UiAutomation flags not restored: $first; retried")
-                runCatching { ui.serviceInfo = ui.serviceInfo.also { it.flags = flags } }.exceptionOrNull()?.let {
-                    first.addSuppressed(it)
-                    throw first
-                }
+            val first = restore(flags)
+            if (first == null) {
+                restoring = false
+                run.note("UiAutomation flags restored: $flags")
+                return
             }
-            restoring = false
-            run.note("UiAutomation flags restored: $flags")
+            run.note("UiAutomation flags not restored: $first; retried")
+            val second = restore(flags)
+            if (second == null) restoring = false
+            run.note(if (second == null) "UiAutomation flags restored on retry: $flags; the first failure is still thrown" else "UiAutomation flags still owed: $second")
+            throw carrying(first, listOfNotNull(second))
         }
+
+        /** One restoration try: its failure, or null once the flags were set back. */
+        private fun restore(flags: Int): Throwable? = runCatching {
+            beforeRestore()
+            ui.serviceInfo = ui.serviceInfo.also { it.flags = flags }
+        }.exceptionOrNull()
 
         fun restored(): Boolean = !restoring && flagsBefore.let { it == null || ui.serviceInfo.flags == it }
 
@@ -1266,8 +1479,7 @@ class ConnectedNeedsYouCaptureTest {
             }
             val timeout = AssertionError("C82 FAIL: not seen within $seconds s: $what${last?.let { " ($it)" }.orEmpty()}")
             // The evidence of the timeout, missing, is carried in it: never hides the timeout itself.
-            runCatching { capture("timeout-${what.take(40)}") }.exceptionOrNull()?.let(timeout::addSuppressed)
-            throw timeout
+            throw carrying(timeout, listOfNotNull(runCatching { capture("timeout-${what.take(40)}") }.exceptionOrNull()))
         }
     }
 
@@ -1275,11 +1487,21 @@ class ConnectedNeedsYouCaptureTest {
      * One run's evidence: logcat (tag `C82`) from the start; its folder in the
      * target's external files only once [begin] is called, after the target
      * was found empty, so a refusal writes nothing at all.
+     *
+     * A note never throws: a write that failed is kept, the failure itself
+     * ([writesFailed]), so no release, restoration or retry depends on the
+     * evidence being written. Every failed write fails the run, carried in
+     * whatever is thrown at a boundary ([raise]) and at its end ([conclude]).
      */
     private class Run(private val target: Context, val name: String, val nonce: String) {
         private val pending = mutableListOf<String>()
         private var folder: File? = null
         val dir: File get() = folder ?: throw AssertionError("SETUP: evidence written before the target was found empty")
+
+        private val failedWrites = mutableListOf<Throwable>()
+
+        /** Every note that failed to be written, its own failure, each once, in order. */
+        val writesFailed: List<Throwable> get() = failedWrites.toList()
 
         /** Opens `<external files>/c82/<name>-<nonce>` and writes what was noted so far. */
         fun begin() {
@@ -1292,10 +1514,43 @@ class ConnectedNeedsYouCaptureTest {
             note("evidence ${made.absolutePath}")
         }
 
+        /** Notes [text] in logcat and the transcript; never throws: a failed write is kept ([writesFailed]). */
         fun note(text: String) {
-            val line = "${SystemClock.uptimeMillis()} pid=${Process.myPid()} $text"
-            Log.i("C82", line)
-            folder?.let { File(it, "transcript.txt").appendText(line + "\n") } ?: pending.add(line)
+            try {
+                val line = "${SystemClock.uptimeMillis()} pid=${Process.myPid()} $text"
+                Log.i("C82", line)
+                folder?.let { File(it, "transcript.txt").appendText(line + "\n") } ?: pending.add(line)
+            } catch (t: Throwable) {
+                if (failedWrites.none { it === t }) failedWrites += t
+            }
+        }
+
+        /**
+         * Throws [first], or with none the first of [others], every other one
+         * and every failed write carried in it ([throwAll]); returns when
+         * neither is given: failed writes alone are left to [conclude].
+         */
+        fun raise(first: Throwable?, others: List<Throwable>) {
+            if (first != null || others.isNotEmpty()) throwAll(first, others + writesFailed)
+        }
+
+        /**
+         * Ends the run: its outcome noted, then [failure] (the test's own)
+         * thrown, every failed write carried in it, the outcome's own
+         * included; with no failure, the first failed write, the others in
+         * it. Missing evidence is never a pass, nor in a failure's place.
+         */
+        fun conclude(failure: Throwable?) {
+            // A Carried stands for its cause: a refusal is still one.
+            val origin = if (failure is Carried) failure.cause else failure
+            val outcome = when {
+                origin != null && origin.message.orEmpty().startsWith("REFUSED") -> "REFUSED"
+                failure != null -> "FAIL"
+                writesFailed.isNotEmpty() -> "FAIL (evidence not written)"
+                else -> "PASS"
+            }
+            note("outcome $outcome; evidence ${folder?.absolutePath ?: "logcat only (tag C82)"}")
+            throwAll(failure, writesFailed)
         }
 
         /** An observation of existing behaviour, never an assertion: `observations.txt`, in order. */
@@ -1323,8 +1578,6 @@ class ConnectedNeedsYouCaptureTest {
             )
         }
 
-        fun finish(outcome: String) = note("outcome $outcome; evidence ${folder?.absolutePath ?: "logcat only (tag C82)"}")
-
         companion object {
             fun start(target: Context, name: String): Run {
                 val nonce = ByteArray(4).also(SecureRandom()::nextBytes).joinToString("") { "%02x".format(it) }
@@ -1339,7 +1592,7 @@ class ConnectedNeedsYouCaptureTest {
         val reasons = stores.occupancy()
         run.note("occupancy: ${reasons.ifEmpty { listOf("empty") }}")
         if (reasons.isNotEmpty()) {
-            run.finish("REFUSED")
+            // Its outcome, REFUSED, is noted as the run concludes (Run.conclude).
             throw AssertionError("REFUSED (nothing taken, nothing changed): this test runs on an empty disposable emulator only: $reasons")
         }
         // Empty: only now is anything written, the evidence folder first.

@@ -16,6 +16,61 @@ import java.security.SecureRandom
 internal const val NOISE_WRAP_ALIAS = "enclos-noise-wrap"
 
 /**
+ * [first] carrying each of [others] among its suppressed ones, as it is
+ * (its identity, its causes, its own suppressed): [first] itself, the
+ * original object, whenever it can hold them. A failure made with its
+ * suppression disabled holds none (addSuppressed does nothing): then a
+ * [Carried] is returned, its cause [first], its suppressed every one [first]
+ * could not hold. Either way each of [others] is reachable ([reaches]) from
+ * what is returned, none lost; none is added twice (one already reachable,
+ * a failure a retry threw again or one carried before, is skipped), and
+ * carrying never throws (no self-suppression). Each failure the fixture and
+ * its tests report goes through it.
+ */
+internal fun carrying(first: Throwable, others: List<Throwable>): Throwable {
+    var holder = first
+    others.forEach { other ->
+        if (holder.reaches(other)) return@forEach
+        holder.addSuppressed(other)
+        // Only [first] may refuse it (a Carried is an AssertionError, its suppression enabled): one Carried at most.
+        if (holder === first && !first.reaches(other)) holder = Carried(first).also { it.addSuppressed(other) }
+    }
+    return holder
+}
+
+/**
+ * What is thrown in place of [primary] when it cannot carry the failures
+ * that came with it (its suppression disabled): [primary] is its cause, the
+ * raw object, and those failures its suppressed ([carrying]).
+ */
+internal class Carried(primary: Throwable) : AssertionError("carried with failures it could not hold itself: $primary", primary)
+
+/** Whether [other] is this failure, or one of its causes or suppressed ones, at any depth (by identity; a cycle is walked once). */
+internal fun Throwable.reaches(other: Throwable): Boolean {
+    val seen = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Throwable, Boolean>())
+    val next = ArrayDeque(listOf(this))
+    while (next.isNotEmpty()) {
+        val t = next.removeFirst()
+        if (t === other) return true
+        if (!seen.add(t)) continue
+        t.cause?.let { next.add(it) }
+        next.addAll(t.suppressed)
+    }
+    return false
+}
+
+/**
+ * Throws [first], or, with none, the first of [others], every other one
+ * carried in it ([carrying]); returns when there is none. The one thrown is
+ * the original object, never a copy; only one whose suppression is disabled
+ * is thrown as the cause of a [Carried] that holds the others.
+ */
+internal fun throwAll(first: Throwable?, others: List<Throwable>) {
+    val thrown = first ?: others.firstOrNull() ?: return
+    throw carrying(thrown, others)
+}
+
+/**
  * Every store the app persists that a connected run may write, by raw path,
  * read without opening any of them (no SharedPreferences or SQLite instance
  * is made, so nothing is migrated or written by a check). [prefix] names an
@@ -91,8 +146,8 @@ internal class AppStores(val context: Context, val prefix: String = "") {
  * at the end the run made. Each resource is recorded as the fixture's before
  * it is made, so a setup that fails half way still gives back what it made,
  * and only that. [release] attempts every cleanup even when one fails,
- * restores the platform hook last, in a `finally`, and throws what failed,
- * the others suppressed in it. What it could not give back stays held, for a
+ * restores the platform hook last, whatever failed before, and throws what
+ * failed, the others carried in it. What it could not give back stays held, for a
  * later [release]; a resource given back is not touched again.
  *
  * Dependency fences: while the model step is held (its Activity or AppModel
@@ -211,23 +266,26 @@ internal class ReplacementFixture(
     /**
      * Gives back all the fixture holds, each cleanup attempted on its own,
      * the platform hook restored last whatever failed; then throws the first
-     * failure, the others suppressed in it. Called again after a complete
-     * release, it does nothing.
+     * failure (one outside any step first), the others carried in it
+     * ([throwAll]), a log line that failed among them: a log line never
+     * stops a step. Called again after a complete release, it does nothing.
      */
     fun release() {
         val failures = mutableListOf<Throwable>()
-        fun attempt(label: String, action: () -> Unit): Boolean = try {
-            beforeCleanup(label)
-            action()
-            released += label
-            log("released $label")
-            true
-        } catch (t: Throwable) {
-            log("not released $label: $t")
-            failures += t
-            false
+        fun attempt(label: String, action: () -> Unit): Boolean {
+            val failed = try {
+                beforeCleanup(label)
+                action()
+                null
+            } catch (t: Throwable) {
+                t
+            }
+            if (failed == null) released += label else failures += failed
+            log(if (failed == null) "released $label" else "not released $label: $failed")
+            return failed == null
         }
-        try {
+        // A failure outside a step (none expected) neither skips the platform step nor hides the steps' failures.
+        val outside = runCatching {
             if (owned) {
                 // Out of the foreground first: no retry of an ended connection outlives the test.
                 model?.let { end -> if (attempt("model", end)) model = null }
@@ -239,17 +297,15 @@ internal class ReplacementFixture(
                     releaseStorage(::attempt)
                 }
             }
-        } finally {
-            originalPlatform?.let { original ->
-                if (attempt("platform") { Platform.resetForTests(original) }) originalPlatform = null
-            }
-            if (held.isEmpty()) owned = false
+        }.exceptionOrNull()
+        originalPlatform?.let { original ->
+            if (attempt("platform") { Platform.resetForTests(original) }) originalPlatform = null
         }
-        if (failures.isNotEmpty()) {
-            val first = failures.first()
-            failures.drop(1).forEach(first::addSuppressed)
-            throw first
-        }
+        if (held.isEmpty()) owned = false
+        // Each log line that failed (here or since the last release) reported once, after every step.
+        val unlogged = logFailures.toList()
+        logFailures.clear()
+        throwAll(outside, failures + unlogged)
     }
 
     /** Hosts and keys independent of retained bridges, then the stores once nothing that may use them is held. */
@@ -358,8 +414,15 @@ internal class ReplacementFixture(
         if (!condition) throw AssertionError("SETUP (no product result): ${why()}")
     }
 
+    /** The fixture's own log lines that failed: never stopping a step, thrown by the next [release] with its own failures. */
+    private val logFailures = mutableListOf<Throwable>()
+
     private fun log(text: String) {
-        Log.i("C82-fixture", text)
+        try {
+            Log.i("C82-fixture", text)
+        } catch (t: Throwable) {
+            logFailures += t
+        }
     }
 
     companion object {
