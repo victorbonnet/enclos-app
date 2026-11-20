@@ -67,7 +67,10 @@ private sealed interface Route {
     data object Settings : Route
     data object NewChat : Route
     data class ApprovalPage(val key: String) : Route
-    data class Chat(val id: String) : Route
+    /** A new conversation asking an agent why the policy request [key] was needed. */
+    data class AskWhy(val key: String) : Route
+    /** A conversation; opened from the policy request [about], Back returns to it, to decide. */
+    data class Chat(val id: String, val about: String? = null) : Route
     /** An agent's page (`host/sandbox/agent`), opened from its sandbox's page when [inSandbox]. */
     data class AgentPage(val address: String, val inSandbox: Boolean = false) : Route
     data class RoutinesPage(val address: String, val fromAgent: Boolean = false, val inSandbox: Boolean = false) : Route
@@ -85,6 +88,8 @@ private sealed interface Route {
     val up: Route get() = when {
         this is HostPage && fromSettings -> Settings
         this is PolicyPage -> SandboxPage(address)
+        this is AskWhy -> ApprovalPage(key)
+        this is Chat && about != null -> ApprovalPage(about)
         this is RoutinesPage && fromAgent -> AgentPage(address, inSandbox)
         this is ModelPage -> AgentPage(address, inSandbox)
         this is AgentPage && inSandbox -> SandboxPage(address.substringBeforeLast('/'))
@@ -104,7 +109,8 @@ private sealed interface Route {
         Settings -> "settings"
         NewChat -> "new"
         is ApprovalPage -> "approval:$key"
-        is Chat -> "chat:$id"
+        is AskWhy -> "ask-why:$key"
+        is Chat -> about?.let { "request-chat:$it\n$id" } ?: "chat:$id"
         is AgentPage -> if (inSandbox) "sandbox-agent:$address" else "agent:$address"
         is RoutinesPage -> (if (inSandbox) "sandbox-agent-routines:" else if (fromAgent) "agent-routines:" else "routines:") + address
         is ModelPage -> (if (inSandbox) "sandbox-agent-model:" else "agent-model:") + address
@@ -123,6 +129,8 @@ private sealed interface Route {
             saved.startsWith("settings-host:") -> HostPage(saved.removePrefix("settings-host:"), fromSettings = true)
             saved.startsWith("host:") -> HostPage(saved.removePrefix("host:"))
             saved.startsWith("chat:") -> Chat(saved.removePrefix("chat:"))
+            saved.startsWith("ask-why:") -> AskWhy(saved.removePrefix("ask-why:"))
+            saved.startsWith("request-chat:") -> saved.removePrefix("request-chat:").let { Chat(it.substringAfter('\n'), about = it.substringBefore('\n')) }
             saved.startsWith("agent:") -> AgentPage(saved.removePrefix("agent:"))
             saved.startsWith("sandbox-agent:") -> AgentPage(saved.removePrefix("sandbox-agent:"), inSandbox = true)
             saved.startsWith("sandbox-agent-routines:") -> RoutinesPage(saved.removePrefix("sandbox-agent-routines:"), fromAgent = true, inSandbox = true)
@@ -282,7 +290,7 @@ private fun Screens(model: AppModel, ask: Ask) {
         Unit
     }
     val go = { to: Route ->
-        val leaving = (routes.targetState as? Route.Chat)?.takeIf { it != to }
+        val leaving = (routes.targetState as? Route.Chat)?.takeIf { it.id != (to as? Route.Chat)?.id }
         // Going anywhere drops a notification's conversation still to open:
         // it does not take the person away later, once it syncs.
         model.openedConversation.value = null
@@ -362,8 +370,23 @@ private fun Screens(model: AppModel, ask: Ask) {
                         views.requestScrollToPage(View.Agents.ordinal)
                         go(Route.Tabs)
                     })
-                    is Route.ApprovalPage -> PolicyRequestScreen(model, route.key, back = { go(Route.Tabs) }, openChat = { go(Route.Chat(it)) })
-                    is Route.Chat -> ConversationScreen(model, route.id, back = { go(Route.Tabs) })
+                    is Route.ApprovalPage -> PolicyRequestScreen(model, route.key, back = { go(Route.Tabs) }, openChat = { go(Route.Chat(it, about = route.key)) }, ask = {
+                        // Its own conversation, with the question in the field; else a new one.
+                        val request = model.approvals[route.key]
+                        val id = request?.let { model.askInConversation(it, askWhyQuestion(it)) }
+                        go(if (id != null) Route.Chat(id, about = route.key) else Route.AskWhy(route.key))
+                    })
+                    is Route.AskWhy -> {
+                        val request = model.approvals[route.key]
+                        NewChatScreen(
+                            model,
+                            back = { go(route.up) },
+                            opened = { go(Route.Chat(it, about = route.key)) },
+                            startWith = request?.let { r -> askWhyAgent(r, model.agents) { model.lastAt(it) }?.address },
+                            initial = request?.let { askWhyQuestion(it) }.orEmpty(),
+                        )
+                    }
+                    is Route.Chat -> ConversationScreen(model, route.id, back = { go(route.up) })
                     Route.Settings -> Column(Modifier.fillMaxSize()) {
                         AppBar { IconButton(Glyphs.back, "Back", { go(Route.Tabs) }) }
                         SettingsScreen(model, pair = { go(Route.Pair) }, ask = ask, openHost = { go(Route.HostPage(it, fromSettings = true)) })

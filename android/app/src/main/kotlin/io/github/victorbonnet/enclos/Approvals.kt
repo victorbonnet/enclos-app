@@ -59,6 +59,54 @@ fun shownScope(target: String, scope: String): String = Visible.revealed(scope.i
 fun scopeLeadsElsewhere(kind: String, target: String, scope: String): Boolean =
     kind == "write" && scope.isNotBlank() && scope.trimEnd('/') != target.trimEnd('/')
 
+/**
+ * Whom to ask why [request] was needed: the agent that asked, else, as the
+ * proxy cannot tell which agent tried, its sandbox's agent most recently
+ * active ([lastAt]). Null when the phone lists none of them, or no longer
+ * the agent that asked.
+ */
+fun askWhyAgent(request: PolicyRequest, agents: List<Agent>, lastAt: (String) -> Long?): Agent? {
+    val ofSandbox = agents.filter { it.host == request.host && it.sandbox == request.sandbox }
+    if (request.agent.isNotBlank()) return ofSandbox.firstOrNull { it.name == request.agent }
+    return ofSandbox.maxByOrNull { lastAt(it.address) ?: 0L }
+}
+
+private val utc = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").withZone(java.time.ZoneOffset.UTC)
+
+/**
+ * The person's question about [request], put in the field for them to read,
+ * change and send: what was refused and when (in UTC, as logs are), why it
+ * is needed, and that the decision is theirs. Nothing is sent for them.
+ */
+fun askWhyQuestion(request: PolicyRequest): String {
+    val what = when (request.kind) {
+        "network" -> "a connection to ${request.shown}"
+        "write" -> "writing to ${request.shown}"
+        "read" -> "reading ${request.shown}"
+        else -> "\"${Visible.stripped(request.action)}\""
+    }
+    val at = utc.format(java.time.Instant.ofEpochSecond(request.time))
+    val asked = if (request.agent.isNotBlank()) {
+        "The ${request.sandbox} sandbox's policy refused $what, which you tried at $at. Why do you need it, and what will you do with it?"
+    } else {
+        "The ${request.sandbox} sandbox's policy refused $what at $at; its proxy cannot tell which agent tried it. Was it you, or do you know who? Why is it needed, and what would it be used for?"
+    }
+    return "$asked Don't look for another way around it: I'll decide whether to allow it once I know."
+}
+
+/**
+ * Puts [question] in the field of [request]'s own conversation, a direct
+ * one the phone holds and has not archived, unless the person already wrote
+ * there, and returns its id; null when there is none, to ask in a new one.
+ */
+fun AppModel.askInConversation(request: PolicyRequest, question: String): String? {
+    val id = request.conversation ?: return null
+    val conversation = conversations.firstOrNull { it.host == request.host && it.id == id } ?: return null
+    if (conversation.group || conversation.archived) return null
+    if (unsent[id].isNullOrEmpty()) outgoing.write(id, question)
+    return id
+}
+
 @Composable
 fun PolicyRequestRow(request: PolicyRequest, agentLabel: (String) -> String = { it.substringAfterLast('/') }, open: () -> Unit) {
     val p = palette
@@ -163,7 +211,7 @@ private fun PolicyOutlineButton(label: String, enabled: Boolean, modifier: Modif
 }
 
 @Composable
-fun PolicyRequestScreen(model: AppModel, key: String, back: () -> Unit, openChat: (String) -> Unit) {
+fun PolicyRequestScreen(model: AppModel, key: String, back: () -> Unit, openChat: (String) -> Unit, ask: () -> Unit = {}) {
     val p = palette
     val request = model.approvals[key]
     var closing by rememberSaveable(key) { mutableStateOf(false) }
@@ -209,9 +257,16 @@ fun PolicyRequestScreen(model: AppModel, key: String, back: () -> Unit, openChat
                 Gap(12.dp)
                 Text("Approval is saved for the whole sandbox. Every agent learns its active policy for later work. The attempted action is not replayed automatically.", style = Type.small, color = p.textMuted)
                 request.reason?.let { Gap(12.dp); Text(it, style = Type.small, color = p.textMuted) }
+                // Asking decides nothing: the request stays, to approve or deny once the answer is in.
+                val asked = if (request.pending || request.state == "failed") askWhyAgent(request, model.agents) { model.lastAt(it) } else null
+                if (asked != null) {
+                    Gap(16.dp)
+                    Text("Ask ${model.agentLabel(asked.address)} why →", style = Type.name, color = p.accent, modifier = Modifier.heightIn(min = 48.dp).clickable(role = Role.Button, onClick = ask).padding(vertical = 12.dp))
+                    if (request.agent.isBlank()) Text("That is the agent of ${request.sandbox} active most recently; you can pick another before sending.", style = Type.small, color = p.textFaint)
+                }
                 val conversation = request.conversation
                 if (conversation != null && model.conversations.any { it.host == request.host && it.id == conversation }) {
-                    Gap(16.dp)
+                    Gap(if (asked != null) 4.dp else 16.dp)
                     Text("Open conversation →", style = Type.name, color = p.accent, modifier = Modifier.heightIn(min = 48.dp).clickable(role = Role.Button) { openChat(conversation) }.padding(vertical = 12.dp))
                 }
             }

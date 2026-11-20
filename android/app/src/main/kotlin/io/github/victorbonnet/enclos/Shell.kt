@@ -824,14 +824,15 @@ private data class Made(val key: String, val id: String)
  * (the one most recently active first), its card in the middle, and the
  * field. The first message starts the conversation, which then opens. The
  * chip's list also starts a group: two to six agents of one sandbox,
- * ticked, and a name if the person gives one.
+ * ticked, and a name if the person gives one. It starts with [startWith]
+ * (an address) when given, and [initial] in the field.
  */
 @Composable
-fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
+fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit, startWith: String? = null, initial: String = "") {
     val p = palette
     val agents = model.agents.sortedByDescending { model.lastAt(it.address) ?: 0L }
-    var chosen by remember { mutableStateOf(agents.firstOrNull()) }
-    var text by remember { mutableStateOf("") }
+    var chosen by remember { mutableStateOf(agents.firstOrNull { it.address == startWith } ?: agents.firstOrNull()) }
+    var text by remember { mutableStateOf(initial) }
     var picking by remember { mutableStateOf(false) }
     // A group: the agents ticked, of one sandbox of one host.
     var grouping by remember { mutableStateOf(false) }
