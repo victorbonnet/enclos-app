@@ -141,9 +141,19 @@ internal fun heldAnswerText(typed: String): String? {
     return text.takeUnless { Visible.hasHidden(it, lines = true) }
 }
 
-/** [text] on one line, as enclos-protocol's `one_line`: each run of white space one space, hidden characters dropped. */
+/**
+ * A run of Unicode White_Space, the set Rust's `char::is_whitespace` matches, listed: `\s` is
+ * ASCII only, Java's and Kotlin's white space checks also count U+001C to U+001F (hidden to the
+ * bridge, so dropped), and Android does not support Java's `(?U)` flag.
+ */
+private val HELD_WHITE_SPACE = Regex("[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+")
+
+/**
+ * [text] on one line, as enclos-protocol's `one_line`: each run of white space one space, then
+ * hidden characters dropped, once; white space a dropped character kept apart stays two spaces.
+ */
 private fun heldOneLine(text: String): String =
-    Visible.stripped(text.split(Regex("(?U)\\s+")).filter { it.isNotEmpty() }.joinToString(" "))
+    Visible.stripped(text.split(HELD_WHITE_SPACE).filter { it.isNotEmpty() }.joinToString(" "))
 
 /** [text] trimmed and cut to [max] characters (code points), as `held_task::cut` does. */
 private fun heldCut(text: String, max: Int): String {
