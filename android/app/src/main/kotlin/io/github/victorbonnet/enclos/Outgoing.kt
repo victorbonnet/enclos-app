@@ -58,7 +58,8 @@ class Outgoing {
         }
         unsent[conversation] = text
         prefilled[conversation] = text
-        notSent.remove(conversation)
+        // Prefill owns the question, not another operation's outcome evidence.
+        if (conversation !in noticeOwner) notSent.remove(conversation)
         notes.remove(conversation)
         return true
     }
