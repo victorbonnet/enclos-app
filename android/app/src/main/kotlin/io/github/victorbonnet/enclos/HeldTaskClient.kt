@@ -67,6 +67,12 @@ class HeldTaskClient(
      * runtime) no longer knows the task, so no action, until the bridge sends a newer card.
      */
     val gone = mutableStateMapOf<HeldTaskKey, Long>()
+    /**
+     * Cards the host sent a newer revision of that this app could not read, by that revision: the
+     * kept card is stale, so no action (an answer would only meet `conflict`) until a readable
+     * card of that revision or a newer one comes.
+     */
+    val unreadable = mutableStateMapOf<HeldTaskKey, Long>()
     /** Certain refusals awaiting sync: whether this connection sent the refresh. */
     private val unsupported = mutableStateMapOf<HeldTaskKey, Boolean>()
     /** Cards whose last request was an answer rather than a resume: what a doubt says. */
@@ -133,6 +139,7 @@ class HeldTaskClient(
 
     /** What keeps either action from being tapped now: a request waiting, a doubt, the connection or the sync. */
     private fun busy(card: HeldTask, action: String): String? = when {
+        card.key in unreadable -> "${card.host} sent a newer version of this task that this app cannot read. Update the app to $action."
         card.key in pending -> if (pending[card.key]?.answer != null) "Sending your answer…" else "Waiting for the runtime to confirm…"
         uncertain[card.key] == true && !connected(card.host) ->
             if (lastAnswer[card.key] == true) "Reconnect to ${card.host} to check whether your answer arrived."
@@ -157,12 +164,16 @@ class HeldTaskClient(
         }
         val current = cards[incoming.key]
         val selected = newestHeldTask(current, incoming)
+        unreadable[selected.key]?.let { if (selected.revision >= it) unreadable.remove(selected.key) }
         if (selected != current) {
             if (unsupported.remove(incoming.key) != null) notes.remove(incoming.key)
             cards[incoming.key] = selected
             // A newer card from the bridge replaces what `not_found` said.
             gone.remove(selected.key)
             // A card that changed state elsewhere: what the last attempt said no longer applies.
+            // A newer card: what the last attempt said was about the older one. A doubt keeps
+            // its note until the sync ends and says what it found.
+            if (current != null && selected.key !in pending && selected.key !in uncertain) notes.remove(selected.key)
             if (current != null && selected.state != current.state && selected.key !in pending) {
                 notes.remove(selected.key)
                 receipts.remove(selected.key)
@@ -310,7 +321,8 @@ class HeldTaskClient(
             val of = message.optString("of")
             val card = parsed(host, message)
             if (card != null) {
-                result(host, of, card)
+                // A result for no request of this phone's still brings the card.
+                if (!result(host, of, card)) merge(card)
             } else {
                 // An answer to this phone's request that cannot be read: the outcome is not known.
                 requests[of]?.takeIf { it.card.host == host }?.let { request ->
@@ -324,9 +336,25 @@ class HeldTaskClient(
         else -> false
     }
 
+    /**
+     * The card [message] carries, or null when it cannot be read. A card newer than the one kept
+     * is then marked [unreadable], so the stale one offers no action; the log names the task and
+     * revision and the exception's class, never the card's text.
+     */
     private fun parsed(host: String, message: JSONObject): HeldTask? =
         runCatching { HeldTask.from(host, message.getJSONObject("held_task")) }
-            .onFailure { dropped("${message.optString("type")} from $host could not be read: ${it.javaClass.simpleName}") }
+            .onFailure { why ->
+                val info = message.optJSONObject("held_task")
+                val agent = info?.opt("agent") as? String
+                val task = info?.opt("task") as? String
+                val revision = (info?.opt("revision") as? Number)?.toLong()
+                dropped("${message.optString("type")} from $host for task ${task?.take(128)} at revision $revision could not be read: ${why.javaClass.simpleName}")
+                if (agent != null && task != null && revision != null) {
+                    val key = HeldTaskKey(host, agent, task)
+                    val kept = cards[key]
+                    if (kept != null && revision > kept.revision && revision > (unreadable[key] ?: -1)) unreadable[key] = revision
+                }
+            }
             .getOrNull()
 
     /**
@@ -355,7 +383,8 @@ class HeldTaskClient(
             val card = cards[key] ?: return@forEach
             val note = when {
                 // A card that left `held` says so in its state line.
-                card.state != HeldTaskState.Held || key in gone -> null
+                // The host has a newer card than this app could read: the actions say so.
+                card.state != HeldTaskState.Held || key in gone || key in unreadable -> null
                 lastAnswer[key] == true -> "Checked: $host still lists it as waiting for you."
                 offersResume(card) -> "Checked: $host still lists it as held."
                 else -> null
@@ -394,7 +423,7 @@ class HeldTaskClient(
     private fun forgetCard(key: HeldTaskKey) {
         pending[key]?.let(::finish)
         unsupported.remove(key)
-        cards.remove(key); notes.remove(key); uncertain.remove(key); receipts.remove(key); gone.remove(key)
+        cards.remove(key); notes.remove(key); uncertain.remove(key); receipts.remove(key); gone.remove(key); unreadable.remove(key)
         answered.remove(key); lastAnswer.remove(key)
     }
 

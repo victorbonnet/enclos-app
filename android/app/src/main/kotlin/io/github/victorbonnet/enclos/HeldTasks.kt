@@ -141,9 +141,30 @@ internal fun heldAnswerText(typed: String): String? {
     return text.takeUnless { Visible.hasHidden(it, lines = true) }
 }
 
-/** [text] on one line, as enclos-protocol's `one_line`: each run of white space one space, hidden characters dropped. */
-private fun heldOneLine(text: String): String =
-    Visible.stripped(text.split(Regex("(?U)\\s+")).filter { it.isNotEmpty() }.joinToString(" "))
+/**
+ * [text] on one line, as enclos-protocol's `held_task::one_line`: each run of white space one
+ * space, hidden characters dropped. No regex: Android's engine refuses the inline Unicode-class
+ * flag the JVM accepts, which threw on every card with an ask or an answer, so phones never
+ * showed those cards.
+ */
+internal fun heldOneLine(text: String): String {
+    val line = StringBuilder()
+    var gap = false
+    text.codePoints().forEach { c ->
+        if (isUnicodeWhiteSpace(c)) gap = true
+        else {
+            if (gap && line.isNotEmpty()) line.append(' ')
+            gap = false
+            line.appendCodePoint(c)
+        }
+    }
+    return Visible.stripped(line.toString())
+}
+
+/** Unicode's White_Space property, as Rust's `char::is_whitespace`. */
+internal fun isUnicodeWhiteSpace(c: Int): Boolean =
+    c in 0x09..0x0D || c == 0x20 || c == 0x85 || c == 0xA0 || c == 0x1680 || c in 0x2000..0x200A ||
+        c == 0x2028 || c == 0x2029 || c == 0x202F || c == 0x205F || c == 0x3000
 
 /** [text] trimmed and cut to [max] characters (code points), as `held_task::cut` does. */
 private fun heldCut(text: String, max: Int): String {
