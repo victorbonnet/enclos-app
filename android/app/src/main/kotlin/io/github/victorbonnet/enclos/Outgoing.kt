@@ -38,6 +38,38 @@ class Outgoing {
             notSent.remove(c)
         }
     }
+    /** By conversation: a note on the field, such as a draft kept in place of a question. It goes once the person writes. */
+    val notes: SnapshotStateMap<String, String> = mutableStateMapOf()
+
+    /** By conversation: the question the app last put in the field ([prefill]), to tell it from what the person wrote. */
+    private val prefilled = mutableMapOf<String, String>()
+
+    /**
+     * Puts [text] in [conversation]'s field for the person to read, change
+     * and send, when the field is empty or still holds, untouched, what was
+     * put there before. Text the person wrote is kept, with a note saying
+     * [text] was not added. Returns whether [text] is in the field.
+     */
+    fun prefill(conversation: String, text: String): Boolean {
+        val current = unsent[conversation]
+        if (!current.isNullOrEmpty() && current != prefilled[conversation]) {
+            notes[conversation] = "Your draft is kept: the question was not added."
+            return false
+        }
+        unsent[conversation] = text
+        prefilled[conversation] = text
+        notSent.remove(conversation)
+        notes.remove(conversation)
+        return true
+    }
+
+    /** [conversation]'s screen was left: a question put in its field and left untouched goes, with any note. */
+    fun leave(conversation: String) {
+        notes.remove(conversation)
+        val put = prefilled.remove(conversation) ?: return
+        if (unsent[conversation] == put) unsent.remove(conversation)
+    }
+
 
     /** By conversation: what was sent and the bridge has not shown back yet, oldest first. */
     private val sent = mutableStateMapOf<String, List<Sent>>()
@@ -63,6 +95,7 @@ class Outgoing {
 
     /** The person wrote [text] in [conversation]'s field. */
     fun write(conversation: String, text: String) {
+        notes.remove(conversation)
         if (text.isEmpty()) unsent.remove(conversation) else unsent[conversation] = text
     }
 
@@ -88,7 +121,9 @@ class Outgoing {
      * its text had been put back in the field and is still there as it was,
      * it leaves the field again, so it is not sent twice.
      */
-    fun shown(conversation: String, text: String, host: String? = null) {
+    fun shown(conversation: String, text: String, host: String? = null, hasAttachments: Boolean = false) {
+        // File history confirms only its file operation, never an equal-text send.
+        if (hasAttachments) return
         val now = sent[conversation] ?: return
         // One still waited for first: one put back may have been sent again since.
         val at = now.indexOfFirst { it.text == text && (host == null || it.host == host) && !it.back && !it.withFiles }.takeIf { it >= 0 } ?: now.indexOfFirst { it.text == text && (host == null || it.host == host) && !it.withFiles }
@@ -178,6 +213,8 @@ class Outgoing {
             notSent.remove(it)
             sent.remove(it)
             noticeOwner.remove(it)
+            notes.remove(it)
+            prefilled.remove(it)
         }
     }
 
@@ -188,6 +225,8 @@ class Outgoing {
         notSent.clear()
         sent.clear()
         noticeOwner.clear()
+        notes.clear()
+        prefilled.clear()
     }
 
     /** What was sent goes before what the person wrote since, a blank line between. */

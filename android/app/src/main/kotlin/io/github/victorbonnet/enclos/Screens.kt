@@ -1201,7 +1201,9 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
                 val agents = its.filter { it.sandbox == sandbox.name }
                 item(key = "sandbox-${sandbox.address}") {
                     Arriving {
-                        val runtime = sandbox.runtime?.replaceFirstChar { it.uppercase() } ?: "No runtime installed"
+                        val runtime = runtimeLine(sandbox)
+                            ?.let { if (sandbox.update != null) "$it · update available" else it }
+                            ?: "No runtime installed"
                         ListHeading(sandbox.name, runtime, open = { openSandbox(sandbox.address) }, top = 12.dp) { SandboxMark(live, side = 16.dp) }
                     }
                 }
@@ -1739,7 +1741,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             canSend = live && filesReady,
             hasFiles = model.outgoing.files.drafts[id].orEmpty().isNotEmpty(),
             attachment = attach,
-            notice = listOfNotNull(unsent, notSent, away).joinToString(" ").ifEmpty { null },
+            notice = listOfNotNull(unsent, notSent, model.outgoing.notes[id], away).joinToString(" ").ifEmpty { null },
         ) {
             // Cleared once handed to the connection; else it stays, to send again.
             unsent = model.send(conversation, draft.trim())

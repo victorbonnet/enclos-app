@@ -1,8 +1,36 @@
 package io.github.victorbonnet.enclos
 
 /** A sandbox listed by its host, including one that has no runtime or agent yet. */
-data class Sandbox(val host: String, val name: String, val runtime: String?, val state: String? = null) {
+data class Sandbox(
+    val host: String,
+    val name: String,
+    val runtime: String?,
+    val state: String? = null,
+    /** Its runtime's version installed, when the host knows it (enclos ADR 0074). */
+    val runtimeVersion: String? = null,
+    /** Its runtime's latest release, when the host has one kept, however old. */
+    val release: RuntimeRelease? = null,
+    /** Whether [release] is newer than [runtimeVersion]: null when the host cannot tell. */
+    val outdated: Boolean? = null,
+) {
     val address: String get() = "$host/$name"
+
+    /** Its runtime's latest release, when the host says it is newer than the version installed. */
+    val update: RuntimeRelease? get() = release?.takeIf { outdated == true }
+}
+
+/** A runtime's latest release, the one its installer installs by default, as the host found it. */
+data class RuntimeRelease(
+    val version: String,
+    /** Whether the host's enclos was checked with it. */
+    val checked: Boolean,
+)
+
+/** A runtime's name as people write it. */
+fun runtimeName(runtime: String): String = when (runtime) {
+    "hermes" -> "Hermes"
+    "openclaw" -> "OpenClaw"
+    else -> runtime.replaceFirstChar { it.uppercase() }
 }
 
 /** A runtime the host offers for installation, in the host's order. */

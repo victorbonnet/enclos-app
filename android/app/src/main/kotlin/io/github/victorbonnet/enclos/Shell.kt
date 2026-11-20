@@ -378,7 +378,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 }
             }
             Section("Runs on") {
-                Info("Runtime", agent.runtime.replaceFirstChar { it.uppercase() })
+                Info("Runtime", runtimeName(agent.runtime))
                 Info("Sandbox", agent.sandbox)
                 Info("Host", "${agent.host} · ${if (model.connected(agent.host)) "connected" else model.links[agent.host].shown()}")
                 // Choosing the model is the host's person's alone.
@@ -642,7 +642,9 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
             return@Column
         }
         val live = model.connected(host)
-        val runtime = (listed?.runtime ?: agents.firstOrNull()?.runtime)?.replaceFirstChar { it.uppercase() }
+        val runtime = (listed?.runtime ?: agents.firstOrNull()?.runtime)?.let(::runtimeName)
+        // With the version installed when the host lists it (enclos ADR 0074).
+        val runtimeShown = listed?.let(::runtimeLine) ?: runtime
         val groups = model.conversations
             .filter { it.group && !it.archived && it.host == host && it.members.first().substringBefore('/') == sandbox }
             .sortedByDescending { model.lines[it.id]?.lastOrNull()?.time ?: 0L }
@@ -651,7 +653,7 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                 SandboxMark(live, side = 56.dp)
                 Gap(14.dp)
                 Text(sandbox, style = Type.heading, color = p.text)
-                Text("${runtime ?: "No runtime installed"} · $host", style = Type.code, color = p.textFaint)
+                Text("${runtimeShown ?: "No runtime installed"} · $host", style = Type.code, color = p.textFaint)
             }
             if (runtime == null) {
                 Gap(24.dp)
@@ -693,7 +695,16 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                 SandboxPolicySummary(model, address, openPolicy)
             }
             ListHeading("Runs on")
-            Info("Runtime", runtime ?: "Not installed")
+            Info("Runtime", runtimeShown ?: "Not installed")
+            listed?.let(::releaseLine)?.let { Info("Latest", it) }
+            listed?.update?.let {
+                Text(
+                    "Updating the runtime from the app comes later.",
+                    style = Type.small,
+                    color = p.textMuted,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
             Info("Host", "$host · ${if (live) "connected" else model.links[host].shown()}")
             listed?.state?.let { Info("State", it) }
             Text(
@@ -813,14 +824,18 @@ private data class Made(val key: String, val id: String)
  * (the one most recently active first), its card in the middle, and the
  * field. The first message starts the conversation, which then opens. The
  * chip's list also starts a group: two to six agents of one sandbox,
- * ticked, and a name if the person gives one.
+ * ticked, and a name if the person gives one. Given [startWith] (an
+ * address), it starts with that agent, or none when the phone does not
+ * list it, never another in its place; and with [initial] in the field.
  */
 @Composable
-fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
+fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit, startWith: String? = null, initial: String = "") {
     val p = palette
     val agents = model.agents.sortedByDescending { model.lastAt(it.address) ?: 0L }
-    var chosen by remember { mutableStateOf(agents.firstOrNull()) }
-    var text by remember { mutableStateOf("") }
+    var chosen by remember { mutableStateOf(if (startWith != null) agents.firstOrNull { it.address == startWith } else agents.firstOrNull()) }
+    var text by remember { mutableStateOf(initial) }
+    // Why the last send did not go, until the person writes again.
+    var notSent by remember { mutableStateOf<String?>(null) }
     var picking by remember { mutableStateOf(false) }
     // A group: the agents ticked, of one sandbox of one host.
     var grouping by remember { mutableStateOf(false) }
@@ -908,7 +923,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                     Gap(14.dp)
                     Text(agent.label, style = Type.heading, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Gap(4.dp)
-                    Text("${agent.sandbox} · ${agent.runtime.replaceFirstChar { it.uppercase() }} · ${agent.host}", style = Type.small, color = p.textMuted)
+                    Text("${agent.sandbox} · ${runtimeName(agent.runtime)} · ${agent.host}", style = Type.small, color = p.textMuted)
                     val count = model.commands[agent.address]?.size ?: 0
                     if (count > 0) Text("$count commands: type / to see them", style = Type.small, color = p.textFaint)
                 }
@@ -919,10 +934,14 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
         val enough = !grouping || members.size in 2..6
         Composer(
             text,
-            { text = it },
+            {
+                text = it
+                notSent = null
+            },
             if (grouping) "Message the group, @ to address" else "Message ${agent?.let { model.agentLabel(it.address) } ?: ""}".trim(),
             canSend = live && enough,
             notice = when {
+                notSent != null -> notSent
                 agent != null && !live -> "Not connected to ${agent.host}: send once it's back."
                 !enough -> "Tick two to six agents of one sandbox."
                 grouping && madeGroup != null -> model.refusedGroups[madeGroup?.id]?.let { "The group was not started: $it" }
@@ -937,7 +956,8 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                     ?: model.newGroup(members.toList(), name)?.also { madeGroup = Made(key, it) }
                     ?: return@Composer
                 val group = model.conversations.firstOrNull { it.id == id } ?: return@Composer
-                if (model.send(group, text.trim()) == null) opened(id)
+                notSent = model.send(group, text.trim())
+                if (notSent == null) opened(id)
                 return@Composer
             }
             // The draft an earlier tap made, while the agent is the same; another agent's goes.
@@ -947,7 +967,8 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit) {
                     madeDraft = Made(agent.address, made)
                 }
             val started = model.conversations.firstOrNull { it.id == id } ?: return@Composer
-            if (model.send(started, text.trim()) == null) opened(id)
+            notSent = model.send(started, text.trim())
+            if (notSent == null) opened(id)
         }
     }
 }
