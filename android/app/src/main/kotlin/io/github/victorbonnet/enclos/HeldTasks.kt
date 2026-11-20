@@ -142,18 +142,29 @@ internal fun heldAnswerText(typed: String): String? {
 }
 
 /**
- * A run of Unicode White_Space, the set Rust's `char::is_whitespace` matches, listed: `\s` is
- * ASCII only, Java's and Kotlin's white space checks also count U+001C to U+001F (hidden to the
- * bridge, so dropped), and Android does not support Java's `(?U)` flag.
+ * [text] on one line, as enclos-protocol's `held_task::one_line`: each run of white space one
+ * space, hidden characters dropped. No regex: Android's engine refuses the inline Unicode-class
+ * flag the JVM accepts, which threw on every card with an ask or an answer, so phones never
+ * showed those cards.
  */
-private val HELD_WHITE_SPACE = Regex("[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+")
+internal fun heldOneLine(text: String): String {
+    val line = StringBuilder()
+    var gap = false
+    text.codePoints().forEach { c ->
+        if (isUnicodeWhiteSpace(c)) gap = true
+        else {
+            if (gap && line.isNotEmpty()) line.append(' ')
+            gap = false
+            line.appendCodePoint(c)
+        }
+    }
+    return Visible.stripped(line.toString())
+}
 
-/**
- * [text] on one line, as enclos-protocol's `one_line`: each run of white space one space, then
- * hidden characters dropped, once; white space a dropped character kept apart stays two spaces.
- */
-private fun heldOneLine(text: String): String =
-    Visible.stripped(text.split(HELD_WHITE_SPACE).filter { it.isNotEmpty() }.joinToString(" "))
+/** Unicode's White_Space property, as Rust's `char::is_whitespace`. */
+internal fun isUnicodeWhiteSpace(c: Int): Boolean =
+    c in 0x09..0x0D || c == 0x20 || c == 0x85 || c == 0xA0 || c == 0x1680 || c in 0x2000..0x200A ||
+        c == 0x2028 || c == 0x2029 || c == 0x202F || c == 0x205F || c == 0x3000
 
 /** [text] trimmed and cut to [max] characters (code points), as `held_task::cut` does. */
 private fun heldCut(text: String, max: Int): String {

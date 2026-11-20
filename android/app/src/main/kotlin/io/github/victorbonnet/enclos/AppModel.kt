@@ -414,7 +414,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         changed = { card -> save { heldTask(card) } },
         later = { wait, action -> main.postDelayed({ action() }, wait) },
         resync = { host -> connections[host]?.send(message("sync", "since" to since(host), "open_items" to true)) == true },
-        dropped = { why -> android.util.Log.d("enclos", "held task not shown: $why") },    )
+        dropped = { why -> android.util.Log.w("enclos", "held task not shown: $why") },    )
     internal val taskBoard = TaskBoardClient(
         send = { host, command -> connections[host]?.send(command) == true },
         current = ::currentTaskBoard,
@@ -1625,6 +1625,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** The screen of [conversation] was left: a draft with nothing sent goes, as if never started. */
     fun left(conversation: String) {
+        outgoing.leave(conversation)
         if (conversation !in drafts || !lines[conversation].isNullOrEmpty()) return
         drafts -= conversation
         conversations.removeAll { it.id == conversation }

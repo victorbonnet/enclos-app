@@ -365,4 +365,66 @@ class HeldTaskAnswerTest {
         }
         assertEquals(listOf(row), withoutAnswered(listOf(row), mapOf(card.key to card.copy(stateWire = "held"))))
     }
+
+    private fun frame(type: String, card: JSONObject) =
+        JSONObject().put("v", 1).put("id", "h-1").put("type", type).put("held_task", card)
+
+    @Test fun a_newer_card_this_app_cannot_read_leaves_the_kept_one_without_actions() {
+        val f = Fixture(home)
+        val card = heldFromFixture()
+        f.ready(card)
+        // Revision 2 with a field this app refuses: the kept revision 1 is stale.
+        val unreadable = card.json().put("revision", 2).put("title", 5)
+        assertTrue(f.client.received("mac", frame("held_task", unreadable)))
+        assertEquals(card, f.client.cards[card.key])
+        assertFalse(f.client.canAnswer(card))
+        assertFalse(f.client.canResume(card))
+        assertEquals("mac sent a newer version of this task that this app cannot read. Update the app to answer.", f.client.answerUnavailable(card))
+        assertNull(f.client.answer(card, HeldTaskAnswer.Choice(0)))
+        // An older unreadable frame marks nothing.
+        val other = Fixture(home)
+        other.ready(card.copy(revision = 5))
+        other.client.received("mac", frame("held_task", card.json().put("revision", 4).put("title", 5)))
+        assertTrue(other.client.unreadable.isEmpty())
+        // A readable card of that revision brings the actions back.
+        f.client.received("mac", frame("held_task", card.copy(revision = 2).json()))
+        assertTrue(f.client.unreadable.isEmpty())
+        assertTrue(f.client.canAnswer(card.copy(revision = 2)))
+    }
+
+    @Test fun a_doubt_the_sync_cannot_settle_says_to_update_not_that_the_task_waits() {
+        val f = Fixture(home)
+        val card = heldFromFixture()
+        f.ready(card)
+        val id = f.client.answer(card, HeldTaskAnswer.Agent)!!
+        // The answered card comes back in a form this app cannot read: result and sync alike.
+        val answered = card.json().put("state", "answered").put("revision", 2).put("title", 5)
+        f.client.received("mac", frame("held_task.result", answered.put("of", id)).put("of", id))
+        f.client.received("mac", frame("held_task", answered))
+        f.client.synced("mac")
+        assertNull(f.client.notes[card.key])
+        assertEquals("mac sent a newer version of this task that this app cannot read. Update the app to answer.", f.client.answerUnavailable(card))
+    }
+
+    @Test fun a_newer_card_takes_away_what_the_last_attempt_said() {
+        val f = Fixture(home)
+        val card = heldFromFixture()
+        f.ready(card)
+        val id = f.client.answer(card, HeldTaskAnswer.Choice(1))!!
+        f.client.received("mac", f.error(id, "conflict"))
+        f.client.synced("mac")
+        assertEquals("Checked: mac still lists it as waiting for you.", f.client.notes[card.key])
+        // The agent asks again: same state, newer revision.
+        f.client.received("mac", frame("held_task", card.copy(revision = 2).json()))
+        assertNull(f.client.notes[card.key])
+    }
+
+    @Test fun a_result_for_no_request_of_this_phone_still_brings_the_card() {
+        val f = Fixture(home)
+        val card = heldFromFixture()
+        f.ready(card)
+        val newer = card.copy(stateWire = "answered", revision = 2, answer = "Keep #346 paused")
+        f.client.received("mac", frame("held_task.result", newer.json()).put("of", "another-phone"))
+        assertEquals(newer, f.client.cards[card.key])
+    }
 }
