@@ -47,16 +47,18 @@ internal class AppStores(val context: Context, val prefix: String = "") {
 
     /**
      * Why the app's data is not an empty target, read only: any store present,
-     * a device signing key (AppModel's sweep deletes those no host names), a
-     * process hook a run sets still set (OkHttp's platform hook swapped, an
-     * AppModel's push-token listener), or push configured in this build
-     * (Firebase would be asked for a token, written to `push`, with a
-     * permission dialog over the screens). Empty when the target is empty.
+     * a device signing key (AppModel's sweep deletes those no host names), the
+     * Noise wrapping key (the app's: never reused, never deleted), a process
+     * hook a run sets still set (OkHttp's platform hook swapped, an AppModel's
+     * push-token listener), or push configured in this build (Firebase would
+     * be asked for a token, written to `push`, with a permission dialog over
+     * the screens). Empty when the target is empty.
      */
     fun occupancy(): List<String> {
         val reasons = mutableListOf<String>()
         paths().filter(File::exists).forEach { reasons += "store present: ${it.path.removePrefix(context.dataDir.path)}" }
         deviceAliases().forEach { reasons += "device key $it" }
+        if (keyStore().containsAlias(NOISE_WRAP_ALIAS)) reasons += "the Noise wrapping key $NOISE_WRAP_ALIAS exists: the app's, not reused"
         if (Platform.get() is LoopbackCleartext) reasons += "OkHttp's platform hook is a test's: an earlier run did not give it back"
         if (PushTokens.changed != null) reasons += "an AppModel's push-token listener is set: a model is live in this process"
         if (PushSetup.configured) reasons += "push is configured in this build: a run would ask Firebase for a token and write the push preferences"
@@ -79,8 +81,8 @@ internal class AppStores(val context: Context, val prefix: String = "") {
 
 /**
  * What a connected run takes over in the app under test, and gives back:
- * the app's stores ([AppStores]), device keys in the Keystore (and the Noise
- * wrapping key, when the run made it), OkHttp's process-wide platform hook,
+ * the app's stores ([AppStores]), device keys and the Noise wrapping key in
+ * the Keystore (each absent before), OkHttp's process-wide platform hook,
  * the fake bridges and the model of the real Activity.
  *
  * Nothing is taken before [acquire] found the target empty, read only: a
@@ -94,14 +96,16 @@ internal class AppStores(val context: Context, val prefix: String = "") {
  * later [release]; a resource given back is not touched again.
  *
  * Dependency fences: while the model step is held (its Activity or AppModel
- * not ended, writers not drained), hosts, keys and stores stay held,
+ * not ended, writers not drained, its Store not closed, or its end not
+ * provable), hosts, keys and stores stay held,
  * untouched. A bridge not closed keeps its host and key held, and any
  * retained bridge keeps the stores held. A host whose removal was not
  * written keeps its device key held. The stores go last, each on a checked
  * result: preferences once a commit barrier drained their queued writes and
  * `deleteSharedPreferences` answered with the files gone, the database once
- * it and its side files are gone, a cache folder once it is gone. There is
- * no sweep: only what the fixture owns is touched.
+ * it and its side files are gone (only after the model step, which closes
+ * the model's Store, its one connection), a cache folder once it is gone.
+ * There is no sweep: only what the fixture owns is touched.
  */
 internal class ReplacementFixture(
     private val stores: AppStores,
@@ -136,9 +140,9 @@ internal class ReplacementFixture(
 
     /**
      * Refuses a target that is not empty ([AppStores.occupancy]), before
-     * anything is taken or written; otherwise owns every store (each absent),
-     * the Noise wrapping key when absent, and swaps OkHttp's platform hook
-     * for [LoopbackCleartext].
+     * anything is taken or written; otherwise owns every store and the Noise
+     * wrapping key (each found absent), and swaps OkHttp's platform hook for
+     * [LoopbackCleartext].
      */
     fun acquire() {
         check(!owned && held.isEmpty()) { "the fixture is already acquired: $held" }
@@ -151,8 +155,8 @@ internal class ReplacementFixture(
         // Each one recorded before anything touches it: absent now, whatever is there later the run made.
         data += stores.preferences.map { "preferences $it" } + "database ${stores.database}" + stores.caches.map { "cache $it" }
         beforeStep("wrap key")
-        // The Noise wrapping key is the app's when it exists already: never deleted then.
-        wrapKey = !AppStores.keyStore().containsAlias(NOISE_WRAP_ALIAS)
+        // Found absent by the occupancy check: made by the run (the first Keys.wrap), so the fixture's.
+        wrapKey = true
         beforeStep("platform")
         val original = Platform.get()
         originalPlatform = original
@@ -198,7 +202,7 @@ internal class ReplacementFixture(
         setup(modelAllowed && stores.prefix.isEmpty()) { "this fixture's data is isolated: an AppModel would use the app's own data" }
     }
 
-    /** Records how to end the AppModel made (Activity destroyed, model cleared, writers drained): registered before the Activity exists. */
+    /** Records how to end the AppModel made (Activity destroyed, model cleared, writers drained, its Store closed): registered before the Activity exists. */
     fun holdModel(end: () -> Unit) {
         check(owned && model == null) { "a model not the fixture's" }
         model = end
@@ -311,9 +315,13 @@ internal class ReplacementFixture(
 
     /**
      * Deletes the database and checks it is gone: its file and the files
-     * SQLite keeps beside it. Absent already, it is done. Still there after
-     * `deleteDatabase` (which answers false and throws nothing), it throws
-     * [NotDeleted]: the database stays the fixture's, for a later [release].
+     * SQLite keeps beside it. Reached only after the model step, which
+     * closed the model's Store (AppModel's one connection to it): never
+     * deleted under an open connection, whose later close could remove the
+     * WAL files of a database a next run made under the same name. Absent
+     * already, it is done. Still there after `deleteDatabase` (which answers
+     * false and throws nothing), it throws [NotDeleted]: the database stays
+     * the fixture's, for a later [release].
      */
     private fun deleteDatabase() {
         val files = stores.databaseFiles()

@@ -17,6 +17,7 @@ import android.os.Bundle
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
+import android.util.Xml
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -34,6 +35,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.xmlpull.v1.XmlPullParser
 import java.io.File
 import java.security.SecureRandom
 import java.util.concurrent.CountDownLatch
@@ -62,16 +64,36 @@ import java.util.concurrent.TimeUnit
  * `adb pull`. It holds synthetic names only: no key, no secret.
  *
  * Disposable emulator only: it refuses, read only and before anything is
- * taken, a target with any app store, device key, a process hook a run sets,
- * or push configured ([AppStores.occupancy]).
+ * taken, a target with any app store, device key, the Noise wrapping key, a
+ * process hook a run sets, or push configured ([AppStores.occupancy]).
  */
 @RunWith(AndroidJUnit4::class)
 class ConnectedNeedsYouCaptureTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val target: Context = instrumentation.targetContext
 
-    /** What the app must never send in these runs: an answer, a resume, a dismissal, a message, a board. */
-    private val forbidden = setOf(HELD_TASK_ANSWER, "held_task.resume", "open_item.dismiss", "message.send", "conversation.new", HELD_TASK_BOARD)
+    /**
+     * What the app may send in these runs: reads, sync, a conversation's read
+     * position, and the `error` it answers the barrier with. Every frame the
+     * app sends is built by `message(type, …)` (Bridge.kt).
+     */
+    private val reads = setOf(
+        "agents", "sync", "conversation.read", "error", "agent.avatar.get", "agent.name.get", "usage.get", "audit", "sandboxes", "runtimes",
+        "sandbox.policy.get", "attachment.get",
+    )
+
+    /**
+     * The production frames that act on a host, each one a `C82 FAIL` here: an
+     * answer, a resume, a dismissal, a message (`message.send`, a new
+     * conversation's `conversation.new` first), a board, and every other
+     * change. Any type in neither set fails too, as unclassified: never let
+     * through unnoticed.
+     */
+    private val writes = setOf(
+        HELD_TASK_ANSWER, "held_task.resume", HELD_TASK_BOARD, "open_item.dismiss", "message.send", "conversation.new", "conversation.rename",
+        "conversation.archive", "conversation.delete", "group.new", "group.stop", "question.answer", "question.close", "approval.decide",
+        "approval.close", "agent.forget", "agents.removed", "device.forget", "agent.name.set", "agent.avatar.set", "sandbox.policy.apply", "sandbox.create", "runtime.install", "model.request", "routine.request", "push.token", "pair.request",
+    )
 
     /** The synthetic fixture, named afresh for the run. */
     private class Synthetic(val nonce: String) {
@@ -110,7 +132,6 @@ class ConnectedNeedsYouCaptureTest {
         val run = Run.start(target, "sheet-return")
         val s = Synthetic(run.nonce)
         val hooks = Hooks.now()
-        val wrapBefore = AppStores.keyStore().containsAlias(NOISE_WRAP_ALIAS)
         // Refused before anything is taken: read only.
         refuseOccupied(AppStores(target), run)
         run.metadata(instrumentation, "held_task_sheet_exact_conversation_return", s.nonce, listOf(s.h1, s.h2))
@@ -129,7 +150,7 @@ class ConnectedNeedsYouCaptureTest {
             val notRestored = runCatching { native.close() }.exceptionOrNull()
             if (notRestored != null) primary?.addSuppressed(notRestored) ?: throw notRestored
         }
-        assertGivenBack(owner, fixture, hooks, wrapBefore, listOf(s.h1, s.h2), run, bridges = 2)
+        assertGivenBack(owner, fixture, hooks, listOf(s.h1, s.h2), run, bridges = 2)
         assertTrue("SETUP: UiAutomation's flags not restored", native.restored())
         run.finish("PASS")
     }
@@ -381,7 +402,9 @@ class ConnectedNeedsYouCaptureTest {
      * thread idled (a tap's send has run), the app-to-bridge round trip
      * ([FakeBridge.Session.roundTrip]: all the app queued is at the bridge),
      * then a sentinel the model holds (all the bridge sent is read). Then
-     * nothing [forbidden] was received over any connection of either bridge.
+     * every type received over any connection of either bridge is one of
+     * [reads]: one of [writes] is a `C82 FAIL`, any other an unclassified
+     * `SETUP` failure.
      */
     private fun processingBarrier(model: AppModel, live: List<Pair<FakeBridge.Session, String>>, b1: FakeBridge, b2: FakeBridge, label: String, run: Run) {
         instrumentation.waitForIdleSync()
@@ -393,8 +416,10 @@ class ConnectedNeedsYouCaptureTest {
         }
         val sent = (b1.receivedAll() + b2.receivedAll()).map { it.optString("type") }
         run.note("barrier $label: received ${sent.groupingBy { it }.eachCount()}")
-        val actions = sent.filter { it in forbidden }
+        val actions = sent.filter { it in writes }
         assertTrue("C82 FAIL: the app sent $actions by $label", actions.isEmpty())
+        val unclassified = sent.filter { it !in reads }
+        setup(unclassified.isEmpty()) { "the app sent $unclassified by $label: neither a read nor a known write; classify it" }
     }
 
     // ---- focused safety controls -----------------------------------------------------------------
@@ -410,40 +435,58 @@ class ConnectedNeedsYouCaptureTest {
         val run = Run.start(target, "occupied")
         refuseOccupied(AppStores(target), run)
         val stores = AppStores(target, "c82-occ-${run.nonce}-")
-        try {
-            stores.paths().forEach { path ->
-                setup(!path.exists()) { "${path.name} exists already: not this check's" }
-                if (path.parentFile == target.cacheDir) {
-                    path.mkdirs()
-                    File(path, "sentinel.bin").writeBytes(randomBytes())
-                } else {
-                    path.parentFile?.mkdirs()
-                    path.writeBytes(randomBytes())
-                }
-                assertRefused(stores, run, "store ${path.name}")
-                setup(path.deleteRecursively() && !path.exists()) { "the sentinel ${path.name} not removed" }
-            }
-            val listener: (String) -> Unit = {}
-            PushTokens.changed = listener
-            try {
-                assertRefused(stores, run, "a live model's push-token listener")
-                assertSame("the listener changed by the refusal", listener, PushTokens.changed)
-            } finally {
-                PushTokens.changed = null
-            }
-            val original = Platform.get()
-            val leaked = LoopbackCleartext(original)
-            Platform.resetForTests(leaked)
-            try {
-                assertRefused(stores, run, "a leaked platform hook")
-                assertSame("the hook changed by the refusal", leaked, Platform.get())
-            } finally {
-                Platform.resetForTests(original)
-            }
-        } finally {
-            stores.paths().forEach { it.deleteRecursively() }
-        }
+        refuseEachStore(stores, run)
         assertTrue("sentinels left", stores.paths().none(File::exists))
+        val listener: (String) -> Unit = {}
+        val originalListener = PushTokens.changed
+        PushTokens.changed = listener
+        try {
+            assertRefused(stores, run, "a live model's push-token listener")
+            assertSame("the listener changed by the refusal", listener, PushTokens.changed)
+        } finally {
+            PushTokens.changed = originalListener
+        }
+        val original = Platform.get()
+        val leaked = LoopbackCleartext(original)
+        Platform.resetForTests(leaked)
+        try {
+            assertRefused(stores, run, "a leaked platform hook")
+            assertSame("the hook changed by the refusal", leaked, Platform.get())
+        } finally {
+            Platform.resetForTests(original)
+        }
+        run.finish("PASS")
+    }
+
+    /**
+     * A sentinel path found present (one this control made first, as another
+     * owner would have) stops [refuseEachStore] as a `SETUP` failure: that
+     * path is kept, byte for byte, and only the sentinels the check made are
+     * gone.
+     */
+    @Test
+    fun a_store_path_found_present_is_kept_by_the_sentinel_check() {
+        val run = Run.start(target, "occupied-present")
+        refuseOccupied(AppStores(target), run)
+        val stores = AppStores(target, "c82-pre-${run.nonce}-")
+        // The first cache path (its folder, the app's cache folder, always exists): every preference and database path before it is made, refused and removed first.
+        val found = stores.paths().first { it.parentFile == target.cacheDir }
+        setup(!found.exists()) { "${found.name} exists already: not this control's" }
+        val bytes = randomBytes()
+        var primary: Throwable? = null
+        try {
+            found.writeBytes(bytes)
+            val thrown = runCatching { refuseEachStore(stores, run) }.exceptionOrNull()
+            assertTrue("not stopped at ${found.name}: $thrown", thrown is AssertionError && thrown.message.orEmpty().startsWith("SETUP") && found.name in thrown.message.orEmpty())
+            assertTrue("the path found present not kept", found.readBytes().contentEquals(bytes))
+            assertTrue("the check's own sentinels left", stores.paths().filter { it != found }.none(File::exists))
+        } catch (t: Throwable) {
+            primary = t
+            throw t
+        } finally {
+            // Made by this control after it was found absent: its own to remove, and only it.
+            attemptAll(primary, listOf { setup(found.delete() || !found.exists()) { "${found.name} not removed" } })
+        }
         run.finish("PASS")
     }
 
@@ -468,12 +511,38 @@ class ConnectedNeedsYouCaptureTest {
         run.finish("PASS")
     }
 
+    /**
+     * The Noise wrapping key present (the app's, made here by the app's own
+     * Keys.wrap) is refused before anything is taken: the same key is kept,
+     * proved by unwrapping what it wrapped before the refusal.
+     */
+    @Test
+    fun an_existing_wrapping_key_is_refused_and_kept() {
+        val run = Run.start(target, "wrap-refusal")
+        // Found absent here (the occupancy check): only a key this check made is its own to delete.
+        refuseOccupied(AppStores(target), run)
+        var ownsKey = false
+        try {
+            setup(!AppStores.keyStore().containsAlias(NOISE_WRAP_ALIAS)) { "$NOISE_WRAP_ALIAS exists already: not this check's" }
+            ownsKey = true
+            val plain = randomBytes()
+            val wrapped = Keys.wrap(plain)
+            val created = AppStores.keyStore().getCreationDate(NOISE_WRAP_ALIAS)
+            assertRefused(AppStores(target), run, "an existing wrapping key")
+            assertEquals("the wrapping key replaced", created, AppStores.keyStore().getCreationDate(NOISE_WRAP_ALIAS))
+            assertTrue("the wrapping key changed: what it wrapped no longer unwraps", Keys.unwrap(wrapped).contentEquals(plain))
+        } finally {
+            if (ownsKey) AppStores.keyStore().run { if (containsAlias(NOISE_WRAP_ALIAS)) deleteEntry(NOISE_WRAP_ALIAS) }
+        }
+        assertFalse("the check's own wrapping key was not deleted", AppStores.keyStore().containsAlias(NOISE_WRAP_ALIAS))
+        run.finish("PASS")
+    }
+
     /** A setup stopped half way (H2's bridge, after H1 was paired): what was made is given back, only that; the failure is the one thrown. */
     @Test
     fun a_partial_acquisition_is_given_back() {
         val run = Run.start(target, "partial")
         val hooks = Hooks.now()
-        val wrapBefore = AppStores.keyStore().containsAlias(NOISE_WRAP_ALIAS)
         refuseOccupied(AppStores(target), run)
         val s = Synthetic(run.nonce)
         val fixture = ReplacementFixture(AppStores(target), modelAllowed = true)
@@ -489,8 +558,8 @@ class ConnectedNeedsYouCaptureTest {
         }.exceptionOrNull()
         assertTrue("not the injected failure: $thrown", thrown is Injected)
         assertEquals("teardown failures carried", 0, thrown!!.suppressed.size)
-        assertEquals("hosts left", emptyList<String>(), storedHostNames())
-        assertGivenBack(owner, fixture, hooks, wrapBefore, listOf(s.h1, s.h2), run, bridges = 1)
+        assertEquals("hosts left", emptyList<String>(), pairedHostNames())
+        assertGivenBack(owner, fixture, hooks, listOf(s.h1, s.h2), run, bridges = 1)
         run.finish("PASS")
     }
 
@@ -498,15 +567,16 @@ class ConnectedNeedsYouCaptureTest {
      * The model's cleanup failing on every attempt of the owner (injected,
      * before the Activity is finished): the bridges are closed and the hook
      * restored, but the hosts, keys and stores the live model may use stay
-     * held, untouched, and the Activity live. A later retry, once the failure
-     * stops, ends the Activity, drains, then gives them back; a release after
-     * that does nothing.
+     * held, untouched, and the Activity live. A release with that failure
+     * stopped but the model's Store close failing (injected) ends the
+     * Activity and clears the model, and still keeps the model step and the
+     * storage held. A later retry, once that failure stops too, closes the
+     * Store, then gives them back; a release after that does nothing.
      */
     @Test
     fun a_persistent_model_cleanup_failure_keeps_storage_until_a_later_retry() {
         val run = Run.start(target, "model-held")
         val hooks = Hooks.now()
-        val wrapBefore = AppStores.keyStore().containsAlias(NOISE_WRAP_ALIAS)
         refuseOccupied(AppStores(target), run)
         val s = Synthetic(run.nonce)
         val fixture = ReplacementFixture(AppStores(target), modelAllowed = true)
@@ -541,13 +611,34 @@ class ConnectedNeedsYouCaptureTest {
             val held = fixture.held
             assertTrue("not held: $held", "model" in held && "host ${s.h1}" in held && "key ${ReplacementFixture.aliasOf(s.h1)}" in held && "database conversations.db" in held)
             assertFalse("the bridge or the hook still held: $held", held.any { it.startsWith("bridge ") || it == "platform" })
-            assertTrue("the pairing not kept", s.h1 in storedHostNames())
+            assertTrue("the pairing not kept", s.h1 in pairedHostNames())
             assertTrue("the key not kept", AppStores.keyStore().containsAlias(ReplacementFixture.aliasOf(s.h1)))
             assertEquals("the Activity not kept live", 1, owner.liveActivities().size)
             assertSame("the hook not restored while the model was held", hooks.platform, Platform.get())
+            // The model step let through, its Store's close failing: the model ends, the step and the storage stay held.
+            failing = false
+            owner.beforeStoreClose = { throw Injected("store close") }
+            val closeFailed = try {
+                runCatching { fixture.release() }.exceptionOrNull()
+            } finally {
+                owner.beforeStoreClose = {}
+            }
+            run.note("store close injected: $closeFailed; held ${fixture.held}")
+            assertTrue("not the injected close failure: $closeFailed", closeFailed is IllegalStateException && closeFailed.cause is Injected)
+            assertFalse("the Store reported closed", owner.storeClosed)
+            assertTrue("the model not ended before its Store's close", owner.modelCleared && owner.liveActivities().isEmpty())
+            val stillHeld = fixture.held
+            assertTrue("not held after the failed close: $stillHeld", "model" in stillHeld && "host ${s.h1}" in stillHeld && "key ${ReplacementFixture.aliasOf(s.h1)}" in stillHeld && "database conversations.db" in stillHeld)
+            assertTrue(
+                "storage released after the failed close: $attempts",
+                attempts.none { it.startsWith("host ") || it.startsWith("key ") || it.startsWith("preferences ") || it.startsWith("database ") || it.startsWith("cache ") },
+            )
+            assertTrue("the pairing not kept after the failed close", s.h1 in pairedHostNames())
+            assertTrue("the database not kept after the failed close", AppStores(target).databaseFiles().first().exists())
         }
+        assertTrue("the Store not closed by the later retry", owner.storeClosed)
         assertTrue("storage not released after the model ended: ${fixture.released}", fixture.released.any { it.startsWith("host ") })
-        assertGivenBack(owner, fixture, hooks, wrapBefore, listOf(s.h1), run, bridges = 1)
+        assertGivenBack(owner, fixture, hooks, listOf(s.h1), run, bridges = 1)
         val count = fixture.released.size
         fixture.release()
         assertEquals("a second release changed something: ${fixture.released}", count, fixture.released.size)
@@ -565,7 +656,6 @@ class ConnectedNeedsYouCaptureTest {
     fun a_persistent_bridge_cleanup_failure_keeps_its_dependencies_until_a_later_retry() {
         val run = Run.start(target, "bridge-held")
         val hooks = Hooks.now()
-        val wrapBefore = AppStores.keyStore().containsAlias(NOISE_WRAP_ALIAS)
         refuseOccupied(AppStores(target), run)
         val s = Synthetic(run.nonce)
         val fixture = ReplacementFixture(AppStores(target), modelAllowed = true)
@@ -588,14 +678,14 @@ class ConnectedNeedsYouCaptureTest {
             assertTrue("H1 not held: $held", "bridge ${s.h1}" in held && "host ${s.h1}" in held && "key ${ReplacementFixture.aliasOf(s.h1)}" in held)
             assertTrue("the stores not held: $held", "database conversations.db" in held && "preferences hosts" in held)
             assertFalse("H2 or the hook still held: $held", held.any { it.contains(s.h2) } || "platform" in held)
-            assertEquals("pairings left", listOf(s.h1), storedHostNames())
+            assertEquals("pairings left", listOf(s.h1), pairedHostNames())
             assertTrue("H1's key not kept", AppStores.keyStore().containsAlias(ReplacementFixture.aliasOf(s.h1)))
             assertFalse("H2's key kept", AppStores.keyStore().containsAlias(ReplacementFixture.aliasOf(s.h2)))
             assertTrue("H1's bridge not kept listening", owner.bridgesMade.first { it.name == s.h1 }.listening)
             assertSame("the hook not restored", hooks.platform, Platform.get())
             failing = false
         }
-        assertGivenBack(owner, fixture, hooks, wrapBefore, listOf(s.h1, s.h2), run, bridges = 2)
+        assertGivenBack(owner, fixture, hooks, listOf(s.h1, s.h2), run, bridges = 2)
         val count = fixture.released.size
         fixture.release()
         assertEquals("a second release changed something: ${fixture.released}", count, fixture.released.size)
@@ -615,10 +705,67 @@ class ConnectedNeedsYouCaptureTest {
         retried?.let { throw it }
     }
 
+    /**
+     * A sentinel at each store path of [stores], one at a time, each refused
+     * ([assertRefused]). A path, or the folder made for it, is this check's
+     * only once found absent, recorded before it is made; only those are
+     * removed, each checked, every removal attempted, the failures carried
+     * together. A path found present stops the check (`SETUP`), and is kept.
+     */
+    private fun refuseEachStore(stores: AppStores, run: Run) {
+        // Owned roots, in the order made: removed in reverse, a folder after what was made in it.
+        val owned = mutableListOf<File>()
+        fun remove(root: File) {
+            // A folder made for a sentinel is removed only when empty (never recursively); a sentinel cache folder holds only its own file.
+            if (root.isDirectory && root.parentFile != target.cacheDir) root.delete() else root.deleteRecursively()
+            setup(!root.exists()) { "${root.name}, the check's own, not removed" }
+            owned -= root
+        }
+        var primary: Throwable? = null
+        try {
+            stores.paths().forEach { path ->
+                setup(!path.exists()) { "${path.name} exists already: not this check's, kept" }
+                val folder = path.parentFile ?: setupFail("${path.name} has no folder")
+                if (!folder.exists()) {
+                    setup(folder.parentFile?.exists() == true) { "${folder.name}'s own folder is missing" }
+                    owned += folder
+                    setup(folder.mkdir()) { "${folder.name} not made" }
+                }
+                owned += path
+                if (folder == target.cacheDir) {
+                    setup(path.mkdir()) { "${path.name} not made" }
+                    File(path, "sentinel.bin").writeBytes(randomBytes())
+                } else {
+                    path.writeBytes(randomBytes())
+                }
+                assertRefused(stores, run, "store ${path.name}")
+                remove(path)
+            }
+        } catch (t: Throwable) {
+            primary = t
+            throw t
+        } finally {
+            attemptAll(primary, owned.reversed().map { root -> { remove(root) } })
+        }
+    }
+
+    /** Runs every one of [steps], each attempted; their failures are carried in [primary], or, with none, the first thrown, the others in it. */
+    private fun attemptAll(primary: Throwable?, steps: List<() -> Unit>) {
+        val failures = steps.mapNotNull { runCatching(it).exceptionOrNull() }
+        if (failures.isEmpty()) return
+        if (primary != null) {
+            failures.forEach(primary::addSuppressed)
+            return
+        }
+        failures.drop(1).forEach(failures.first()::addSuppressed)
+        throw failures.first()
+    }
+
     private fun assertRefused(stores: AppStores, run: Run, what: String) {
         val before = stores.bytes()
         val own = AppStores(target).bytes()
         val aliases = AppStores.deviceAliases()
+        val wrapCreated = AppStores.keyStore().run { if (containsAlias(NOISE_WRAP_ALIAS)) getCreationDate(NOISE_WRAP_ALIAS) else null }
         val hooks = Hooks.now()
         val fixture = ReplacementFixture(stores, modelAllowed = false)
         val refused = runCatching { fixture.acquire() }.exceptionOrNull()
@@ -630,15 +777,19 @@ class ConnectedNeedsYouCaptureTest {
         assertEquals("$what: the isolated bytes changed by the refusal", before, stores.bytes())
         assertEquals("$what: the app's own bytes changed by the refusal", own, AppStores(target).bytes())
         assertEquals("$what: the device keys changed by the refusal", aliases, AppStores.deviceAliases())
+        assertEquals(
+            "$what: the wrapping key changed by the refusal", wrapCreated,
+            AppStores.keyStore().run { if (containsAlias(NOISE_WRAP_ALIAS)) getCreationDate(NOISE_WRAP_ALIAS) else null },
+        )
         assertSame("$what: the platform hook changed by the refusal", hooks.platform, Platform.get())
         assertSame("$what: the push-token listener changed by the refusal", hooks.push, PushTokens.changed)
         run.note("refused, unchanged: $what (${before.size} paths)")
     }
 
-    /** After teardown: no MainActivity, its model cleared, the hooks the original ones, nothing held, bridges closed, keys gone, the target empty. */
-    private fun assertGivenBack(owner: ActivityOwner, fixture: ReplacementFixture, hooks: Hooks, wrapBefore: Boolean, hosts: List<String>, run: Run, bridges: Int) {
+    /** After teardown: no MainActivity, its model cleared and its Store closed, the hooks the original ones, nothing held, bridges closed, keys gone, the target empty. */
+    private fun assertGivenBack(owner: ActivityOwner, fixture: ReplacementFixture, hooks: Hooks, hosts: List<String>, run: Run, bridges: Int) {
         assertTrue("SETUP: a MainActivity outlived the run", owner.liveActivities().isEmpty())
-        assertTrue("SETUP: the Activity's model was not cleared", owner.model == null || owner.modelCleared)
+        assertTrue("SETUP: the Activity's model was not cleared, or its Store not closed", !owner.modelSeen || (owner.modelCleared && owner.storeClosed))
         assertSame("SETUP: OkHttp's platform hook not restored", hooks.platform, Platform.get())
         assertSame("SETUP: the push-token listener not restored", hooks.push, PushTokens.changed)
         assertTrue("SETUP: the fixture still holds ${fixture.held}", fixture.held.isEmpty())
@@ -652,7 +803,7 @@ class ConnectedNeedsYouCaptureTest {
         }
         val left = hosts.map(ReplacementFixture::aliasOf).filter { AppStores.keyStore().containsAlias(it) }
         assertTrue("SETUP: synthetic keys left: $left", left.isEmpty())
-        assertEquals("SETUP: the wrapping key's presence changed", wrapBefore, AppStores.keyStore().containsAlias(NOISE_WRAP_ALIAS))
+        assertFalse("SETUP: the run's wrapping key left", AppStores.keyStore().containsAlias(NOISE_WRAP_ALIAS))
         // Read twice, a second apart: a write the app queued after the fixture's deletion fails here, not as the next run's refusal.
         instrumentation.waitForIdleSync()
         val first = AppStores(target).occupancy()
@@ -666,6 +817,9 @@ class ConnectedNeedsYouCaptureTest {
 
     private class Injected(at: String) : RuntimeException("injected failure at $at")
 
+    /** What the refusing factory throws: the Activity's ViewModelStore holds no AppModel. */
+    private class NoModel : IllegalStateException("the Activity's ViewModelStore holds no AppModel")
+
     /** The process hooks a run sets, by identity. */
     private class Hooks(val platform: Platform, val push: Any?) {
         companion object {
@@ -676,20 +830,39 @@ class ConnectedNeedsYouCaptureTest {
     /**
      * Owns the Activity and the fixture: [around] runs a check, then gives
      * back everything whatever stopped it, the Activity first (finished,
-     * destroyed, its model cleared, its writers drained) through the
+     * destroyed, its model cleared, its writers drained, the model's Store
+     * closed) through the
      * fixture's model step, then the rest ([ReplacementFixture.release]). A
      * cleanup that failed is tried once more; what still fails stays held and
      * is thrown, carried in the check's own failure when there is one.
      */
     private inner class ActivityOwner(private val fixture: ReplacementFixture, private val run: Run) {
+        /** The Activity's model, read back, never made. */
         var model: AppModel? = null
             private set
+        /** The model's own Store, read back with it ([storeOf]): closed by the model step once its writers drained. */
+        private var store: Store? = null
         var activityId = "none"
             private set
         var modelId = "none"
             private set
         private var cleared: CountDownLatch? = null
+        /** Whether a model was read back from an Activity: its clear and its Store's close must then be proved. */
+        val modelSeen: Boolean get() = model != null
         val modelCleared: Boolean get() = cleared?.count == 0L
+        /** Whether the model step closed the model's Store, its connection to the database. */
+        var storeClosed = false
+            private set
+
+        /** Run just before the Store's close: a control injects a failed close here. */
+        var beforeStoreClose: () -> Unit = {}
+
+        /** From just before startActivitySync: an Activity, and a model, may exist from then on. */
+        private var launchAttempted = false
+        private var launchReturned = false
+
+        /** Why the model's end cannot be proved, once known: sticky, so the model step, and the storage behind it, stays held. */
+        private var unprovable: String? = null
 
         /** Every bridge the fixture made, kept for the checks after teardown (the fixture forgets those it closed). */
         var bridgesMade: List<FakeBridge> = emptyList()
@@ -736,25 +909,69 @@ class ConnectedNeedsYouCaptureTest {
         fun launch(instrumentation: android.app.Instrumentation): MainActivity {
             val intent = Intent(target, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             baseline = Thread.getAllStackTraces().keys
+            launchAttempted = true
             val activity = instrumentation.startActivitySync(intent) as MainActivity
+            launchReturned = true
             observePool()
             activityId = "${activity.javaClass.simpleName}@${Integer.toHexString(System.identityHashCode(activity))}"
-            val m = activityModel(activity)
-            model = m
-            modelId = "AppModel@${Integer.toHexString(System.identityHashCode(m))}"
-            val latch = CountDownLatch(1)
-            cleared = latch
-            onMain { m.addCloseable(AutoCloseable { latch.countDown() }) }
+            readBack(activity)
+            setup(model != null) { "the Activity had no AppModel; none is made by the test" }
             return activity
         }
 
-        /** The Activity's own AppModel, from its ViewModelStore; a factory that refuses proves none is made here. */
+        /** The Activity's own AppModel, from its ViewModelStore; a factory that refuses ([NoModel]) proves none is made here. */
         fun activityModel(activity: MainActivity): AppModel = onMain {
             val refuse = object : ViewModelProvider.Factory {
-                override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T =
-                    throw AssertionError("SETUP: the Activity had no AppModel; none is made by the test")
+                override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T = throw NoModel()
             }
             ViewModelProvider(activity.viewModelStore, refuse, activity.defaultViewModelCreationExtras)[AppModel::class.java]
+        }
+
+        /**
+         * Reads back [activity]'s model (never makes one), reads its Store
+         * ([storeOf]) and registers its clear latch, before it is kept: a
+         * read or a registration that fails leaves it to the next read, and
+         * the step stops before any finish. The one already kept is done; a
+         * second one beside it is ambiguous, and throws. None in a finishing
+         * Activity's store, with none kept, may be one cleared already,
+         * unseen: sticky, unprovable.
+         */
+        private fun readBack(activity: MainActivity) {
+            val m = try {
+                activityModel(activity)
+            } catch (_: NoModel) {
+                if (activity.isFinishing && model == null) {
+                    unprovable = "a finishing Activity's store held no AppModel, and none was read before: whether one was made, and is gone, is unknown"
+                }
+                return
+            }
+            if (model === m) return
+            check(model == null) { "a second AppModel ($m) beside the one read back: which one writes is ambiguous" }
+            val s = storeOf(m)
+            val latch = CountDownLatch(1)
+            onMain { m.addCloseable(AutoCloseable { latch.countDown() }) }
+            cleared = latch
+            store = s
+            model = m
+            modelId = "AppModel@${Integer.toHexString(System.identityHashCode(m))}"
+        }
+
+        /**
+         * [m]'s own Store: AppModel's private `store` field, read only (never
+         * set), test-only, the exact field of exactly [Store]'s type. Its
+         * field missing, of another type, unreadable or holding no Store, it
+         * throws: the model is not kept, and the step stays held.
+         */
+        private fun storeOf(m: AppModel): Store {
+            val held = try {
+                val field = AppModel::class.java.getDeclaredField("store")
+                check(field.type == Store::class.java) { "AppModel.store is a ${field.type.name}, not a Store" }
+                field.isAccessible = true
+                field.get(m)
+            } catch (e: Exception) {
+                throw IllegalStateException("the model's Store could not be read back: its close cannot be proved", e)
+            }
+            return held as? Store ?: throw IllegalStateException("AppModel.store holds no Store: its close cannot be proved")
         }
 
         fun resumed(): Activity? = onMain { ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).firstOrNull { it is MainActivity } }
@@ -764,23 +981,65 @@ class ConnectedNeedsYouCaptureTest {
             Stage.values().filter { it != Stage.DESTROYED }.flatMap { monitor.getActivitiesInStage(it) }.filter { it is MainActivity }
         }
 
-        /** The fixture's model step: every MainActivity finished and destroyed, its model cleared, its writers drained; throws when not, kept held. */
+        /**
+         * The fixture's model step: each live MainActivity's model read back
+         * and its clear latch registered before that Activity is finished;
+         * every one destroyed; the model cleared, no model's push-token
+         * listener left, the writers drained (whenever a launch was
+         * attempted, a model read back or not), then the model's Store
+         * closed ([closeStore]). Throws when any of it is not proved: the
+         * step, and the storage behind it, stays held.
+         */
         fun endActivity() {
-            val live = liveActivities()
-            run.note("ending activities $live")
-            observePool()
-            onMain { live.forEach(Activity::finish) }
+            unprovable?.let { throw IllegalStateException(it) }
+            if (launchAttempted && !launchReturned && model == null && liveActivities().isEmpty()) {
+                unprovable = "the launch threw before its Activity's model was read back, and no Activity is live: whether a model was made, and is gone, is unknown"
+            }
             val until = SystemClock.uptimeMillis() + 20_000
-            while (liveActivities().isNotEmpty() && SystemClock.uptimeMillis() < until) SystemClock.sleep(50)
-            val left = liveActivities()
-            if (left.isNotEmpty()) throw IllegalStateException("activities not destroyed within 20 s: $left")
+            while (true) {
+                val live = liveActivities()
+                if (live.isEmpty()) break
+                if (SystemClock.uptimeMillis() >= until) throw IllegalStateException("activities not destroyed within 20 s: $live")
+                run.note("ending activities $live")
+                // Read back before it is finished: a model is never let go unseen.
+                live.forEach { readBack(it as MainActivity) }
+                observePool()
+                onMain { live.filterNot(Activity::isFinishing).forEach(Activity::finish) }
+                SystemClock.sleep(50)
+            }
+            unprovable?.let { throw IllegalStateException(it) }
             cleared?.let { latch ->
                 if (!latch.await(20, TimeUnit.SECONDS)) throw IllegalStateException("the Activity's AppModel was not cleared within 20 s")
             }
+            // A model's init sets it, its onCleared resets it: one still set is a model still live, read back or not.
+            if (PushTokens.changed != null) throw IllegalStateException("an AppModel's push-token listener is still set: a model is live in this process")
             // Main idle: ViewModel.clear() ran onCleared, which shut the executors down, after the closeable's latch.
             instrumentation.waitForIdleSync()
-            if (model != null) awaitPoolThreads()
-            run.note("activity destroyed, model cleared=$modelCleared, new pool threads ended: ${poolSeen.map { it.name }}")
+            if (launchAttempted) awaitPoolThreads()
+            closeStore()
+            run.note("activity destroyed, model cleared=$modelCleared, store closed=$storeClosed, new pool threads ended: ${poolSeen.map { it.name }}")
+            poolSeen.clear()
+        }
+
+        /**
+         * Closes the model's Store (SQLiteOpenHelper's own close), only once
+         * the model is cleared and its writers drained: every use of the
+         * Store runs on the model's executors, shut down by onCleared, so
+         * nothing reopens it. The ReplacementFixture's database step comes
+         * after this step: never a database deleted under an open connection.
+         * A close that fails throws; the step, and the storage behind it,
+         * stays held. No model read back: no Store to close.
+         */
+        private fun closeStore() {
+            if (model == null || storeClosed) return
+            val s = store ?: throw IllegalStateException("the model's Store was not read back: its close cannot be proved")
+            try {
+                beforeStoreClose()
+                s.close()
+            } catch (t: Throwable) {
+                throw IllegalStateException("the model's Store not closed: its connection may still be open", t)
+            }
+            storeClosed = true
         }
 
         /** Live threads before [launch]: never waited on. */
@@ -1106,8 +1365,24 @@ class ConnectedNeedsYouCaptureTest {
         return result!!.getOrThrow()
     }
 
-    private fun storedHostNames(): List<String> =
-        decodeHosts(target.getSharedPreferences("hosts", Context.MODE_PRIVATE).getString("hosts", null) ?: "[]") { it }.first.map { it.name }
+    /**
+     * The hosts paired on disk, read from the `hosts` preferences' file as it
+     * is (its backup first, as SharedPreferences reads it), never through a
+     * SharedPreferences instance: a read makes no instance and writes nothing.
+     */
+    private fun pairedHostNames(): List<String> {
+        val file = AppStores(target).preferenceFiles("hosts").let { (main, backup) -> if (backup.exists()) backup else main }
+        if (!file.exists()) return emptyList()
+        val encoded = file.inputStream().use { input ->
+            val parser = Xml.newPullParser().apply { setInput(input, null) }
+            var found: String? = null
+            while (found == null && parser.next() != XmlPullParser.END_DOCUMENT) {
+                if (parser.eventType == XmlPullParser.START_TAG && parser.name == "string" && parser.getAttributeValue(null, "name") == "hosts") found = parser.nextText()
+            }
+            found
+        }
+        return decodeHosts(encoded ?: "[]") { it }.first.map { it.name }
+    }
 
     private fun randomBytes() = ByteArray(64).also(SecureRandom()::nextBytes)
 
