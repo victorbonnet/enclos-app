@@ -193,4 +193,38 @@ class HeldTaskAnswerPanelTest {
         compose.onNodeWithText("Send").assertDoesNotExist()
         compose.onNodeWithText("Recommended", useUnmergedTree = true).assertDoesNotExist()
     }
+
+    @Test
+    fun an_ask_that_says_nothing_is_blocked_shows_the_reason_once() {
+        val card = written.copy(ask = written.ask!!.copy(blocked = ""))
+        val client = client(card)
+        show(client, card)
+        compose.onNodeWithText("Details").performScrollTo().performClick()
+        assertEquals(1, compose.onAllNodesWithText(written.reason).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun a_kept_draft_keeps_the_field_open_when_choices_come() {
+        val bare = written.copy(ask = HeldTaskAsk("What should the notes say?", "The notes need your words."))
+        val client = client(bare)
+        show(client, bare)
+        compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("Say it fixes backups")
+        // The agent asks again, now with choices: the draft stays, in its open field.
+        compose.runOnIdle { client.merge(written.copy(revision = 2)) }
+        compose.onNodeWithText("Say it fixes backups").assertExists()
+        compose.onNodeWithText("Answer in your own words").assertDoesNotExist()
+        compose.onNodeWithText("Keep #346 paused").assertExists()
+    }
+
+    @Test
+    fun an_answered_card_no_agent_wrote_offers_no_answer_and_keeps_its_reason_in_details() {
+        val card = written.copy(ask = null, stateWire = "answered", answer = "Asked the agent to look into it.")
+        val client = client(card)
+        show(client, card)
+        compose.onNodeWithText("Asked the agent to look into it.").assertExists()
+        compose.onNodeWithText(ASK_FOR_CHOICES).assertDoesNotExist()
+        compose.onNodeWithText("Answer in your own words").assertDoesNotExist()
+        compose.onNodeWithText("Details").performScrollTo().performClick()
+        compose.onNodeWithText(written.reason).assertExists()
+    }
 }

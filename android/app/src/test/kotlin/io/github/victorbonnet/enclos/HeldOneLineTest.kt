@@ -40,9 +40,13 @@ class HeldOneLineTest {
         assertEquals("Asked the agent to look into it.", card.answer)
     }
 
-    @Test fun no_source_uses_a_regex_flag_android_refuses() {
-        val sources = File("src/main").walkTopDown().filter { it.extension == "kt" }.toList()
-        assertTrue("sources found", sources.isNotEmpty())
-        for (file in sources) assertFalse(file.path, "(?U)" in file.readText())
+    @Test fun no_app_source_uses_the_unicode_class_flag_android_refuses() {
+        // Inline in any flag group (`(?U)`, `(?iU)`, …) or as the Pattern constant.
+        val refused = Regex("""\(\?[a-zA-Z]*U[a-zA-Z]*[):]|UNICODE_CHARACTER_CLASS""")
+        val sources = File("src").walkTopDown()
+            .filter { it.extension in setOf("kt", "java") && "test" !in it.path.split(File.separatorChar) && "androidTest" !in it.path.split(File.separatorChar) }
+            .toList()
+        assertTrue("sources found", sources.any { it.path.endsWith("HeldTasks.kt") })
+        for (file in sources) assertFalse(file.path, refused.containsMatchIn(file.readText()))
     }
 }

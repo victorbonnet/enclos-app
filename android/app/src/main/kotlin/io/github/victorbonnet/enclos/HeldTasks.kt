@@ -142,9 +142,10 @@ internal fun heldAnswerText(typed: String): String? {
 }
 
 /**
- * [text] on one line, as enclos-protocol's `one_line`: each run of white space one space, hidden
- * characters dropped. No regex: Android's engine refuses the inline Unicode-class flag, which threw on every card with an
- * ask or an answer, so those cards were never shown.
+ * [text] on one line, as enclos-protocol's `held_task::one_line`: each run of white space one
+ * space, hidden characters dropped. No regex: Android's engine refuses the inline Unicode-class
+ * flag the JVM accepts, which threw on every card with an ask or an answer, so phones never
+ * showed those cards.
  */
 internal fun heldOneLine(text: String): String {
     val line = StringBuilder()
