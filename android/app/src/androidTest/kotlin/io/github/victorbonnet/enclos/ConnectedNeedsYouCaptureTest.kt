@@ -322,7 +322,7 @@ class ConnectedNeedsYouCaptureTest {
         assertEquals("C82 FAIL: the sheet opened another request", s.key(s.h1, s.task), onMain { model.focusedRequest?.key })
         assertFalse("C82 FAIL: the wrong-target task's sheet", native.nodes().any { it.visible && it.text == s.titleH2 })
         native.waitNode("the header") { it.window == sheet && it.text == s.label }
-        native.waitNode("Blocked") { it.window == sheet && it.text == "Blocked: ${s.blocked}" }
+        native.waitNode("what is blocked") { it.window == sheet && it.text == s.blocked }
         val now = native.waitNode("the recommended choice", match = choice(sheet, s.choiceNow, s.choiceWait))
         val wait = native.waitNode("the other choice", match = choice(sheet, s.choiceWait, s.choiceNow))
         assertTrue("C82 FAIL: the recommended choice not marked: ${now.texts}", "Recommended" in now.texts)
@@ -331,9 +331,9 @@ class ConnectedNeedsYouCaptureTest {
         assertTrue("C82 FAIL: the choices are not enabled while connected", now.enabled && wait.enabled)
         native.capture("sheet-initial")
 
-        // ---- 3. an answer typed in Something else…, never sent
-        native.scrollTo("Something else…", sheet, ::answerField)
-        native.setText("Something else…", s.draft) { it.window == sheet && it.editable && answerField(it) }
+        // ---- 3. an answer typed in Your answer, never sent
+        exposeAnswerField(native, run, "Your answer", sheet, "draft_disclosure_opened")
+        native.setText("Your answer", s.draft) { it.window == sheet && it.editable && answerField(it) }
         native.waitNode("the draft in the field") { it.window == sheet && answerField(it) && it.text == s.draft }
         run.observe("draft_send_enabled", native.nodes().firstOrNull { it.window == sheet && it.clickable && "Send" in it.texts }?.enabled)
         native.capture("draft-typed")
@@ -371,8 +371,8 @@ class ConnectedNeedsYouCaptureTest {
         if (!sheetAfterBack) native.clickUnique("H1's row, again") { row(s.h1, s.summary)(it) }
         val reopened = native.waitNode("the sheet's decision, again") { it.text == s.decision && it.visible }.window
         assertEquals("C82 FAIL: the sheet reopened another request", s.key(s.h1, s.task), onMain { model.focusedRequest?.key })
-        native.scrollTo("Something else…, again", reopened, ::answerField)
-        val field = native.waitNode("Something else…, again") { it.window == reopened && answerField(it) }
+        exposeAnswerField(native, run, "Your answer, again", reopened, "reopened_disclosure_opened")
+        val field = native.waitNode("Your answer, again") { it.window == reopened && answerField(it) }
         run.observe("reopened_draft_kept", field.text == s.draft)
         run.observe("reopened_draft_text", field.text ?: "")
         run.observe("reopened_details_open", native.nodes().any { it.window == reopened && it.text == "Hide details" })
@@ -384,7 +384,7 @@ class ConnectedNeedsYouCaptureTest {
         native.clickUnique("H1's no-ask row") { row(s.h1, s.summaryNoAsk)(it) }
         val noAsk = native.waitNode("the no-ask heading") { it.text == s.titleNoAsk && it.visible }.window
         assertEquals("C82 FAIL: the no-ask sheet is another request", s.key(s.h1, s.noAsk), onMain { model.focusedRequest?.key })
-        native.waitNode("Ask the agent") { it.window == noAsk && it.clickable && "Ask the agent" in it.texts }
+        native.waitNode("Ask the agent for choices") { it.window == noAsk && it.clickable && "Ask the agent for choices" in it.texts }
         assertFalse("C82 FAIL: a choice on a card no agent wrote", native.nodes().any { it.window == noAsk && s.choiceNow in it.texts })
         native.capture("no-ask")
         closeSheet(native, model, s.titleNoAsk)
@@ -424,8 +424,8 @@ class ConnectedNeedsYouCaptureTest {
         val nowOff = native.waitNode("the recommended choice, offline", match = choice(offline, s.choiceNow, s.choiceWait))
         val waitOff = native.waitNode("the other choice, offline", match = choice(offline, s.choiceWait, s.choiceNow))
         assertFalse("C82 FAIL: a choice enabled while ${s.h1} is offline", nowOff.enabled || waitOff.enabled)
-        native.scrollTo("Something else…, offline", offline, ::answerField)
-        val fieldOff = native.waitNode("Something else…, offline") { it.window == offline && answerField(it) }
+        exposeAnswerField(native, run, "Your answer, offline", offline, "offline_disclosure_opened")
+        val fieldOff = native.waitNode("Your answer, offline") { it.window == offline && answerField(it) }
         assertFalse("C82 FAIL: the answer field enabled while ${s.h1} is offline", fieldOff.enabled)
         run.observe("offline_draft_kept", fieldOff.text == s.draft)
         run.observe("offline_reason_shown", native.nodes().firstOrNull { it.window == offline && it.text?.startsWith("Connect to ${s.h1}") == true }?.text ?: "none")
@@ -451,7 +451,29 @@ class ConnectedNeedsYouCaptureTest {
         { it.window == window && it.clickable && label in it.texts && other !in it.texts }
 
     /** The typed answer's field: its description is the field's label (FormField); disabled, it may not report itself editable. */
-    private fun answerField(n: Node) = n.desc == "Something else…"
+    private fun answerField(n: Node) = n.desc == "Your answer"
+
+    /** The fold before the typed answer (HeldTaskAnswerPanel): the control naming exactly Answer in your own words. */
+    private fun answerDisclosure(n: Node) = n.clickable && "Answer in your own words" in n.texts
+
+    /**
+     * The answer field of the sheet in [window], on the screen. The sheet folds it behind
+     * Answer in your own words until it is written in or a draft is kept: either is found by
+     * scrolling, and the fold is opened (in [window], the one control) only when the field is
+     * absent from the window, not merely off the screen. Whether it was opened is [observed],
+     * never decided; nothing is typed, sent or set in the model here. Required after: a field
+     * not there is a failure, never skipped.
+     */
+    private fun exposeAnswerField(native: Native, run: Run, what: String, window: Int, observed: String) {
+        native.scrollTo("$what or Answer in your own words", window) { answerField(it) || answerDisclosure(it) }
+        val absent = native.nodes().none { it.window == window && answerField(it) }
+        run.observe(observed, absent)
+        if (absent) {
+            native.clickUnique("Answer in your own words, for $what") { it.window == window && answerDisclosure(it) }
+            native.waitNode("$what, opened") { it.window == window && answerField(it) }
+        }
+        native.scrollTo(what, window, ::answerField)
+    }
 
     /** Closes a sheet with the system Back, a second Back only when the first did not (a keyboard over it), said in the transcript. */
     private fun closeSheet(native: Native, model: AppModel, anchor: String) {
