@@ -507,4 +507,228 @@ class HeldTaskClientTest {
         assertFalse(f.client.received("mac", JSONObject().put("type", "question")))
         assertFalse(f.client.received("mac", f.error("not-ours", "conflict")))
     }
+
+    // #82: the text typed in Your answer, kept in memory for the same request and connection.
+
+    /** A fixture whose host takes answers, with [held] synced. */
+    private fun answering(): Fixture = Fixture().apply {
+        client.authenticated("mac", answers = true)
+        client.merge(held)
+        client.synced("mac")
+    }
+
+    /** The text kept for [held]'s task, in the field or apart. */
+    private fun Fixture.kept(card: HeldTask = held): String? = client.draftFor(card).ifEmpty { client.earlier(card)?.text }
+
+    @Test fun the_same_request_keeps_its_text_and_typing_sends_nothing() {
+        val f = answering()
+        f.client.edit(held, "Wait for Monday")
+        assertEquals("Wait for Monday", f.client.draftFor(held))
+        assertFalse(f.client.draftAttempted(held))
+        assertNull(f.client.earlier(held))
+        // A card that is not the current one is not typed into.
+        f.client.edit(held.copy(revision = 2), "Stale")
+        assertEquals("Wait for Monday", f.client.draftFor(held))
+        assertEquals("", f.client.draftFor(held.copy(revision = 2)))
+        // Emptying the field removes the text.
+        f.client.edit(held, "")
+        assertEquals("", f.client.draftFor(held))
+        assertNull(f.client.earlier(held))
+        assertTrue(f.sent.isEmpty())
+    }
+
+    @Test fun another_host_of_the_same_agent_and_task_or_another_task_never_gets_the_text() {
+        val sent = mutableListOf<HeldTaskRequest>()
+        val client = HeldTaskClient(send = { sent += it; true }, connected = { true }, accepts = { true }, changed = {}, later = { _, _ -> })
+        val mini = held.copy(host = "mini")
+        val other = held.copy(task = "t_2")
+        listOf("mac", "mini").forEach { client.authenticated(it, answers = true) }
+        listOf(held, mini, other).forEach { client.merge(it) }
+        listOf("mac", "mini").forEach { client.synced(it) }
+        client.edit(held, "For mac only")
+        assertEquals("", client.draftFor(mini)); assertNull(client.earlier(mini))
+        assertEquals("", client.draftFor(other)); assertNull(client.earlier(other))
+        // Forgetting the other host keeps this one's text.
+        client.forget("mini")
+        assertEquals("For mac only", client.draftFor(held))
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test fun a_new_revision_keeps_the_text_apart_and_send_does_not_use_it() {
+        val f = answering()
+        f.client.edit(held, "Wait for Monday")
+        val newer = held.copy(revision = 4, reason = "Asked again")
+        f.client.merge(newer)
+        assertEquals("", f.client.draftFor(newer))
+        assertEquals(HeldTaskEarlier("Wait for Monday", HeldTaskEarlierReason.RequestChanged), f.client.earlier(newer))
+        // The old card is not answered, and the current field is empty.
+        assertNull(f.client.answer(held, HeldTaskAnswer.Text("Wait for Monday")))
+        assertTrue(f.sent.isEmpty())
+        // Typing into the current field keeps both texts; Use waits for an empty field.
+        f.client.edit(newer, "New words")
+        assertEquals("New words", f.client.draftFor(newer))
+        assertEquals("Wait for Monday", f.client.earlier(newer)?.text)
+        assertFalse(f.client.useEarlier(newer))
+        f.client.answer(newer, HeldTaskAnswer.Text(f.client.draftFor(newer)))
+        assertEquals(HeldTaskAnswer.Text("New words"), f.sent.single().answer)
+        assertEquals("Wait for Monday", f.client.earlier(newer)?.text)
+    }
+
+    @Test fun offline_keeps_the_text_in_place_and_a_new_connection_asks_for_review_before_reuse() {
+        val f = answering()
+        f.client.edit(held, "Wait for Monday")
+        f.connected = false
+        f.client.ended("mac")
+        assertEquals("Wait for Monday", f.client.draftFor(held))
+        assertNull(f.client.earlier(held))
+        f.connected = true
+        f.client.authenticated("mac", answers = true)
+        assertEquals("", f.client.draftFor(held))
+        assertEquals(HeldTaskEarlier("Wait for Monday", HeldTaskEarlierReason.ConnectionChanged), f.client.earlier(held))
+        // Not before the sync, nor offline.
+        assertFalse(f.client.useEarlier(held))
+        f.client.synced("mac")
+        f.connected = false
+        assertFalse(f.client.useEarlier(held))
+        f.connected = true
+        assertTrue(f.client.useEarlier(held))
+        assertEquals("Wait for Monday", f.client.draftFor(held))
+        assertNull(f.client.earlier(held))
+        assertFalse(f.client.draftAttempted(held))
+        assertTrue(f.sent.isEmpty())
+    }
+
+    @Test fun discarding_earlier_text_sends_nothing() {
+        val f = answering()
+        f.client.edit(held, "Wait for Monday")
+        f.client.authenticated("mac", answers = true); f.client.synced("mac")
+        f.client.discardEarlier(held)
+        assertNull(f.client.earlier(held))
+        assertEquals("", f.client.draftFor(held))
+        assertTrue(f.sent.isEmpty())
+    }
+
+    @Test fun no_outcome_but_a_taken_answer_drops_the_text() {
+        fun sent(): Fixture = answering().apply {
+            client.edit(held, "Wait for Monday")
+            assertNotNull(client.answer(held, HeldTaskAnswer.Text("Wait for Monday")))
+        }
+        // Waiting: kept, and no longer "not sent".
+        sent().let { f ->
+            assertEquals("Wait for Monday", f.client.draftFor(held))
+            assertTrue(f.client.draftAttempted(held))
+        }
+        // Not sent at all: kept, still not sent.
+        answering().let { f ->
+            f.sending = false
+            f.client.edit(held, "Wait for Monday")
+            assertNull(f.client.answer(held, HeldTaskAnswer.Text("Wait for Monday")))
+            assertEquals("Wait for Monday", f.client.draftFor(held))
+            assertFalse(f.client.draftAttempted(held))
+        }
+        for (code in listOf("not_allowed", "bad_message", "unsupported", "unknown_type", "conflict", "internal", "not_found", "something_new")) {
+            val f = sent()
+            f.client.received("mac", f.error(f.sent.single().id, code))
+            assertEquals(code, "Wait for Monday", f.kept())
+        }
+        // No answer in time, a connection that ended, an answer that cannot be read.
+        sent().let { f ->
+            f.timers.single().second()
+            assertEquals("Wait for Monday", f.kept())
+        }
+        sent().let { f ->
+            f.connected = false
+            f.client.ended("mac")
+            assertEquals("Wait for Monday", f.client.draftFor(held))
+        }
+        sent().let { f ->
+            val unreadable = frame("held_task.result", held.copy(stateWire = "answered", revision = 4), f.sent.single().id)
+            unreadable.getJSONObject("held_task").put("resumable", "false")
+            f.client.received("mac", unreadable)
+            assertEquals(true, f.client.uncertain[held.key])
+            assertEquals("Wait for Monday", f.kept())
+        }
+        // An answered card before the result, then held again: kept, apart.
+        sent().let { f ->
+            f.client.received("mac", frame("held_task", held.copy(stateWire = "answered", revision = 4, answer = "Wait for Monday")))
+            assertEquals("Wait for Monday", f.kept())
+            val again = held.copy(revision = 5)
+            f.client.merge(again)
+            assertEquals(HeldTaskEarlier("Wait for Monday", HeldTaskEarlierReason.RequestChanged), f.client.earlier(again))
+        }
+    }
+
+    @Test fun the_matching_result_drops_only_the_text_it_sent() {
+        val f = answering()
+        f.client.edit(held, " Wait for Monday ")
+        val id = f.client.answer(held, HeldTaskAnswer.Text(" Wait for Monday "))!!
+        val answered = held.copy(stateWire = "answered", revision = 4, answer = "Wait for Monday")
+        // The bridge sends the answered card before the result.
+        f.client.received("mac", frame("held_task", answered))
+        f.client.received("mac", frame("held_task.result", answered, id))
+        assertNull(f.kept(answered))
+        // Another answer's result leaves the text.
+        val g = answering()
+        g.client.edit(held, "Wait for Monday")
+        val agent = g.client.answer(held, HeldTaskAnswer.Agent)!!
+        g.client.received("mac", frame("held_task.result", answered.copy(answer = "Asked the agent to look into it."), agent))
+        assertEquals("Wait for Monday", g.kept(answered))
+    }
+
+    @Test fun a_result_after_a_newer_edit_keeps_the_newer_text() {
+        val f = answering()
+        f.client.edit(held, "Wait for Monday")
+        val id = f.client.answer(held, HeldTaskAnswer.Text("Wait for Monday"))!!
+        f.client.edit(held, "Wait for Tuesday")
+        f.client.received("mac", frame("held_task.result", held.copy(stateWire = "answered", revision = 4, answer = "Wait for Monday"), id))
+        assertEquals("Wait for Tuesday", f.kept())
+    }
+
+    @Test fun a_late_result_after_a_timeout_and_a_newer_edit_keeps_the_newer_text() {
+        val f = answering()
+        f.client.edit(held, "Wait for Monday")
+        val id = f.client.answer(held, HeldTaskAnswer.Text("Wait for Monday"))!!
+        f.timers.single().second()
+        // The sync still lists it as held: the person edits again.
+        f.client.synced("mac")
+        assertTrue(f.client.canAnswer(held))
+        f.client.edit(held, "Wait for Tuesday")
+        assertFalse(f.client.draftAttempted(held))
+        f.client.received("mac", frame("held_task.result", held.copy(stateWire = "answered", revision = 4, answer = "Wait for Monday"), id))
+        assertEquals("Wait for Tuesday", f.kept())
+    }
+
+    @Test fun forgetting_the_home_or_the_host_drops_the_text_and_a_new_client_has_none() {
+        val newer = held.copy(revision = 4)
+        fun typed(): Fixture = answering().apply {
+            client.edit(held, "Earlier words")
+            client.merge(newer)
+            client.edit(newer, "Current words")
+        }
+        typed().let { f ->
+            f.client.forgetConversation("mac", "home.lab.main")
+            f.ready(newer)
+            assertNull(f.kept(newer))
+        }
+        typed().let { f ->
+            // Forgetting the host, clearing the cache, or pairing it again.
+            f.client.forget("mac")
+            f.client.authenticated("mac", answers = true); f.client.merge(newer); f.client.synced("mac")
+            assertNull(f.kept(newer))
+        }
+        // The app's model ended: nothing is kept elsewhere.
+        assertNull(answering().kept())
+    }
+
+    @Test fun the_log_never_carries_the_text() {
+        val f = answering()
+        f.client.edit(held, "SECRET words")
+        val id = f.client.answer(held, HeldTaskAnswer.Text("SECRET words"))!!
+        val unreadable = frame("held_task.result", held.copy(revision = 4), id)
+        unreadable.getJSONObject("held_task").put("resumable", "false")
+        f.client.received("mac", unreadable)
+        f.client.merge(held.copy(host = "elsewhere"))
+        assertTrue(f.dropped.isNotEmpty())
+        assertTrue(f.dropped.none { "SECRET" in it })
+    }
 }

@@ -21,6 +21,19 @@ data class HeldTaskRequest(val id: String, val card: HeldTask, val answer: HeldT
 }
 
 /**
+ * A typed answer this app keeps, in memory only, for the Needs you sheet (docs/spec.md, Held
+ * tasks): its [text], the [card] it was typed for, the host's connection [generation] then, its
+ * [version], and the version a send was tried with ([attempted]), if any.
+ */
+data class HeldTaskDraft(val text: String, val card: HeldTask, val generation: Long, val version: Long, val attempted: Long? = null)
+
+/** Why kept text no longer belongs to the current request. */
+enum class HeldTaskEarlierReason { RequestChanged, ConnectionChanged }
+
+/** Kept text that is not in **Your answer**, and why: the person reviews it before reusing it. */
+data class HeldTaskEarlier(val text: String, val why: HeldTaskEarlierReason)
+
+/**
  * Held tasks' cards and their actions: Resume and, where the bridge takes it, the person's answer
  * (docs/spec.md, Held tasks). Keeps the newest revision of each card, sends a request only on the
  * person's tap, tracks it by its id, and never queues or sends one again on its own. An outcome
@@ -80,6 +93,97 @@ class HeldTaskClient(
     private val requests = mutableMapOf<String, HeldTaskRequest>()
     /** By host: whether a sync ended since the connection authenticated, or since this client asked for one. */
     private val fresh = mutableStateMapOf<String, Boolean>()
+
+    /**
+     * By card: the text in **Your answer**, kept for the card and connection it was typed for.
+     * Plain memory, never saved: it ends with this client (the app's model), and is never logged.
+     */
+    private val drafts = mutableStateMapOf<HeldTaskKey, HeldTaskDraft>()
+    /**
+     * By card: kept text whose request or connection changed since it was typed, oldest first;
+     * shown one at a time, the newest, until the person uses or discards it.
+     */
+    private val earlierTexts = mutableStateMapOf<HeldTaskKey, List<HeldTaskDraft>>()
+    /** By host: its connection's generation, advanced at each `authenticated`. */
+    private val generations = mutableStateMapOf<String, Long>()
+    private var lastGeneration = 0L
+    private var lastVersion = 0L
+    /** By request id: the version of the kept text that request sent. */
+    private val sentDrafts = mutableMapOf<String, Long>()
+
+    /**
+     * The text in **Your answer** for [card]: kept only for this exact card (every field, as
+     * [answer] compares it) on the host's current connection; else empty.
+     */
+    fun draftFor(card: HeldTask): String = drafts[card.key]?.takeIf { attached(it, card) }?.text.orEmpty()
+
+    /** Whether a send was tried with the text in **Your answer** for [card], as it reads now. */
+    fun draftAttempted(card: HeldTask): Boolean =
+        drafts[card.key]?.takeIf { attached(it, card) }?.let { it.attempted == it.version } == true
+
+    /**
+     * The person typed [text] into **Your answer** for [card], the current card: kept for this
+     * card and connection; empty text removes it. Earlier text stays apart. Sends nothing.
+     */
+    fun edit(card: HeldTask, text: String) {
+        if (cards[card.key] != card) return
+        drafts[card.key]?.takeIf { !attached(it, card) }?.let { keepEarlier(card.key, it) }
+        if (text.isEmpty()) drafts.remove(card.key)
+        else drafts[card.key] = HeldTaskDraft(text, card, generationOf(card.host), ++lastVersion)
+    }
+
+    /** The kept text of [card]'s task that is not in **Your answer**, and why; null when none. */
+    fun earlier(card: HeldTask): HeldTaskEarlier? {
+        val kept = earlierTexts[card.key]?.lastOrNull() ?: return null
+        val why = if (kept.card != card) HeldTaskEarlierReason.RequestChanged else HeldTaskEarlierReason.ConnectionChanged
+        return HeldTaskEarlier(kept.text, why)
+    }
+
+    /**
+     * Puts the earlier text of [card] into its empty **Your answer**, only while [card] is the
+     * current card and can be answered now; sends nothing. Whether it did.
+     */
+    fun useEarlier(card: HeldTask): Boolean {
+        if (cards[card.key] != card || !canAnswer(card) || draftFor(card).isNotEmpty()) return false
+        val list = earlierTexts[card.key] ?: return false
+        val used = list.lastOrNull() ?: return false
+        setEarlier(card.key, list.dropLast(1))
+        drafts[card.key] = HeldTaskDraft(used.text, card, generationOf(card.host), ++lastVersion)
+        return true
+    }
+
+    /** Drops the earlier text of [card] shown now. */
+    fun discardEarlier(card: HeldTask) {
+        earlierTexts[card.key]?.let { setEarlier(card.key, it.dropLast(1)) }
+    }
+
+    private fun generationOf(host: String): Long = generations[host] ?: 0L
+
+    private fun attached(draft: HeldTaskDraft, card: HeldTask): Boolean =
+        draft.card == card && cards[card.key] == card && draft.generation == generationOf(card.host)
+
+    /** Moves [draft] apart, as earlier text; the same text kept twice is kept once. */
+    private fun keepEarlier(key: HeldTaskKey, draft: HeldTaskDraft) {
+        if (drafts[key] == draft) drafts.remove(key)
+        setEarlier(key, earlierTexts[key].orEmpty().filter { it.text != draft.text } + draft)
+    }
+
+    private fun setEarlier(key: HeldTaskKey, list: List<HeldTaskDraft>) {
+        if (list.isEmpty()) earlierTexts.remove(key) else earlierTexts[key] = list
+    }
+
+    /** The text in **Your answer** of [key], when it no longer belongs to the current card or connection: apart, as earlier text. */
+    private fun detach(key: HeldTaskKey) {
+        val draft = drafts[key] ?: return
+        val card = cards[key]
+        if (card == null || !attached(draft, card)) keepEarlier(key, draft)
+    }
+
+    /** Drops the kept text, in the field or earlier, of [key] that [version] sent. */
+    private fun clearSent(key: HeldTaskKey, version: Long) {
+        if (drafts[key]?.version == version) drafts.remove(key)
+        earlierTexts[key]?.let { list -> setEarlier(key, list.filter { it.version != version }) }
+    }
 
     /** The card of [task] in [conversation], when it is that agent's Home. */
     fun current(conversation: Conversation, task: String?): HeldTask? =
@@ -168,6 +272,8 @@ class HeldTaskClient(
         if (selected != current) {
             if (unsupported.remove(incoming.key) != null) notes.remove(incoming.key)
             cards[incoming.key] = selected
+            // Text typed for the card before is not this card's answer: kept apart, as earlier text.
+            detach(selected.key)
             // A newer card from the bridge replaces what `not_found` said.
             gone.remove(selected.key)
             // A card that changed state elsewhere: what the last attempt said no longer applies.
@@ -208,7 +314,15 @@ class HeldTaskClient(
             is HeldTaskAnswer.Text -> heldAnswerText(answer.text)?.let { HeldTaskAnswer.Text(it) }
             HeldTaskAnswer.Agent -> answer
         } ?: return null
-        return dispatch(current, checked)
+        val id = dispatch(current, checked) ?: return null
+        // The kept text this sends: a matching result clears that version only, never a newer one.
+        if (checked is HeldTaskAnswer.Text) {
+            drafts[current.key]?.takeIf { attached(it, current) && heldAnswerText(it.text) == checked.text }?.let {
+                drafts[current.key] = it.copy(attempted = it.version)
+                sentDrafts[id] = it.version
+            }
+        }
+        return id
     }
 
     private fun dispatch(current: HeldTask, answer: HeldTaskAnswer?): String? {
@@ -240,6 +354,7 @@ class HeldTaskClient(
     fun result(host: String, of: String, incoming: HeldTask): Boolean {
         val request = requests[of] ?: return false
         if (!request.matches(host, incoming)) return false
+        val sentVersion = sentDrafts[request.id]
         finish(request)
         merge(incoming)
         uncertain.remove(incoming.key)
@@ -247,6 +362,10 @@ class HeldTaskClient(
         notes.remove(incoming.key)
         if (request.answer == null && incoming.state == HeldTaskState.Resumed) receipts[incoming.key] = request.id
         if (request.answer != null && incoming.state == HeldTaskState.Answered) answered[incoming.key] = request.id
+        // The host took the typed text: that text, unless edited since, is no longer kept.
+        if (request.answer is HeldTaskAnswer.Text && incoming.state == HeldTaskState.Answered && sentVersion != null) {
+            clearSent(incoming.key, sentVersion)
+        }
         return true
     }
 
@@ -364,6 +483,9 @@ class HeldTaskClient(
     fun authenticated(host: String, answers: Boolean = false) {
         fresh[host] = false
         answerHosts[host] = answers
+        // A new connection: text typed over the last one is reviewed before it is reused.
+        generations[host] = ++lastGeneration
+        drafts.keys.filter { it.host == host }.forEach(::detach)
     }
 
     /**
@@ -411,13 +533,20 @@ class HeldTaskClient(
 
     fun forgetConversation(host: String, conversation: String) {
         cards.values.filter { it.host == host && it.conversation == conversation }.map { it.key }.forEach(::forgetCard)
+        val of = { draft: HeldTaskDraft -> draft.card.host == host && draft.card.conversation == conversation }
+        drafts.filterValues(of).keys.forEach { drafts.remove(it) }
+        earlierTexts.filterValues { it.any(of) }.keys.forEach { earlierTexts.remove(it) }
     }
 
+    /** Forgets all of [host]: its forgetting, its cache cleared, or its pairing replaced. */
     fun forget(host: String) {
         requests.values.filter { it.card.host == host }.toList().forEach(::finish)
         cards.keys.filter { it.host == host }.forEach(::forgetCard)
+        drafts.keys.filter { it.host == host }.forEach { drafts.remove(it) }
+        earlierTexts.keys.filter { it.host == host }.forEach { earlierTexts.remove(it) }
         fresh.remove(host)
         answerHosts.remove(host)
+        generations.remove(host)
     }
 
     private fun forgetCard(key: HeldTaskKey) {
@@ -425,6 +554,7 @@ class HeldTaskClient(
         unsupported.remove(key)
         cards.remove(key); notes.remove(key); uncertain.remove(key); receipts.remove(key); gone.remove(key); unreadable.remove(key)
         answered.remove(key); lastAnswer.remove(key)
+        drafts.remove(key); earlierTexts.remove(key)
     }
 
     /** What a doubt says may have happened: the request's own action. */
@@ -446,6 +576,7 @@ class HeldTaskClient(
 
     private fun finish(request: HeldTaskRequest) {
         requests.remove(request.id)
+        sentDrafts.remove(request.id)
         if (pending[request.card.key] == request) pending.remove(request.card.key)
     }
 

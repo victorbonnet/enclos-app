@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -93,14 +94,135 @@ class HeldTaskAnswerPanelTest {
         compose.onNodeWithText("Connect to mac to answer.").assertExists()
         compose.onNodeWithText("Send").performScrollTo().assertIsNotEnabled()
         compose.onNodeWithText("Keep #346 paused").performScrollTo().assertIsNotEnabled()
-        // Back online, after the sync, the same draft goes.
+        // Back online, after the sync: a new connection, so the draft is earlier text, reviewed
+        // before it is reused (#82); used, it goes with Send.
         compose.runOnIdle {
             online = true
             client.authenticated("mac", answers = true)
             client.synced("mac")
         }
+        compose.onNodeWithText("The connection changed. Review this request before reusing your earlier text.").assertExists()
+        compose.onNodeWithText("Use text in Your answer").performScrollTo().assertIsEnabled().performClick()
+        assertTrue(sent.isEmpty())
         compose.onNodeWithText("Send").performScrollTo().assertIsEnabled().performClick()
         assertEquals(HeldTaskAnswer.Text("Wait for Monday"), sent.single().answer)
+    }
+
+    @Test
+    fun a_configuration_change_keeps_the_text_from_the_model_and_a_new_model_has_none() {
+        var current by mutableStateOf(client(written))
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                HeldTaskAnswerPanel(current, current.cards[written.key] ?: written) {}
+            }
+        }
+        compose.onNodeWithText("Answer in your own words").performScrollTo().performClick()
+        compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("Kept in memory")
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("Kept in memory").assertExists()
+        compose.onNodeWithText("Not sent. Kept temporarily in this app.").assertExists()
+        compose.onNodeWithText("It may be lost if Android closes the app.").assertExists()
+        // The model ended (Android closed the app) while the saved state stayed: the text is gone.
+        compose.runOnIdle { current = client(written) }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("Kept in memory").assertDoesNotExist()
+        compose.onNodeWithText("Not sent. Kept temporarily in this app.").assertDoesNotExist()
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun text_that_may_have_reached_the_agent_is_never_called_not_sent() {
+        val client = client(written)
+        show(client, written)
+        compose.onNodeWithText("Answer in your own words").performScrollTo().performClick()
+        compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("Wait for Monday")
+        compose.onNodeWithText("Not sent. Kept temporarily in this app.").assertExists()
+        compose.onNodeWithText("Send").performScrollTo().performClick()
+        compose.runOnIdle {
+            online = false
+            client.ended("mac")
+        }
+        compose.onNodeWithText("Wait for Monday").assertExists()
+        compose.onNodeWithText("Kept temporarily in this app.").assertExists()
+        compose.onNodeWithText("Not sent. Kept temporarily in this app.").assertDoesNotExist()
+        assertEquals(1, sent.size)
+    }
+
+    @Test
+    fun a_changed_request_shows_earlier_text_read_only_and_use_fills_the_field_without_sending() {
+        val client = client(written)
+        show(client, written)
+        compose.onNodeWithText("Answer in your own words").performScrollTo().performClick()
+        compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("Wait for Monday")
+        compose.runOnIdle { client.merge(written.copy(revision = 2, ask = written.ask!!.copy(decision = "Allow two more hours?"))) }
+        compose.onNodeWithText("Allow two more hours?").assertExists()
+        compose.onNodeWithText("This request changed. Your earlier text has not been added to it.").assertExists()
+        compose.onNodeWithText("Earlier text · read-only").assertExists()
+        compose.onNodeWithText(
+            "Review the current decision, blocker and choices first. Using earlier text fills Your answer; it does not send it.",
+        ).assertExists()
+        compose.onNodeWithText("Wait for Monday").assertExists()
+        compose.onNodeWithText("Discard earlier text").assertExists()
+        compose.onNodeWithText("Send").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText("Use text in Your answer").performScrollTo().assertIsEnabled().performClick()
+        assertTrue("using earlier text sends nothing", sent.isEmpty())
+        compose.onNodeWithText("Earlier text · read-only").assertDoesNotExist()
+        compose.onNodeWithText("Not sent. Kept temporarily in this app.").assertExists()
+        compose.onNodeWithText("Send").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(HeldTaskAnswer.Text("Wait for Monday"), sent.single().answer)
+        assertEquals(2L, sent.single().card.revision)
+    }
+
+    @Test
+    fun offline_or_unsynced_disables_send_and_use_and_discard_drops_the_earlier_text() {
+        val client = client(written)
+        show(client, written)
+        compose.onNodeWithText("Answer in your own words").performScrollTo().performClick()
+        compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("Wait for Monday")
+        compose.runOnIdle {
+            client.ended("mac")
+            client.authenticated("mac", answers = true)
+        }
+        compose.onNodeWithText("The connection changed. Review this request before reusing your earlier text.").assertExists()
+        compose.onNodeWithText("Use text in Your answer").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText("Send").performScrollTo().assertIsNotEnabled()
+        compose.runOnIdle {
+            online = false
+            client.synced("mac")
+        }
+        compose.onNodeWithText("Use text in Your answer").performScrollTo().assertIsNotEnabled()
+        compose.runOnIdle { online = true }
+        compose.onNodeWithText("Use text in Your answer").performScrollTo().assertIsEnabled()
+        compose.onNodeWithText("Discard earlier text").performScrollTo().performClick()
+        compose.onNodeWithText("Earlier text · read-only").assertDoesNotExist()
+        compose.onNodeWithText("Wait for Monday").assertDoesNotExist()
+        assertTrue(sent.isEmpty())
+    }
+
+    /**
+     * #82: type an answer, open the exact conversation (the sheet leaves composition), go back to
+     * Inbox and reopen the same unchanged request: the same unsent text is back in Your answer,
+     * and nothing was sent on the way.
+     */
+    @Test
+    fun the_same_request_keeps_its_unsent_answer_across_a_conversation_round_trip() {
+        val client = client(written)
+        var sheet by mutableStateOf(true)
+        compose.setContent {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (sheet) HeldTaskAnswerPanel(client, client.cards[written.key] ?: written) {}
+                else Text("Inbox")
+            }
+        }
+        compose.onNodeWithText("Answer in your own words").performScrollTo().performClick()
+        compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("UNSENT something else, never sent")
+        compose.runOnIdle { sheet = false }
+        compose.onNodeWithText("Inbox").assertExists()
+        compose.runOnIdle { sheet = true }
+        compose.onNodeWithText("UNSENT something else, never sent").assertExists()
+        compose.onNodeWithText("Send").performScrollTo().assertIsEnabled()
+        assertTrue("nothing sent by typing or navigation", sent.isEmpty())
     }
 
     private fun top(text: String) = compose.onNodeWithText(text).fetchSemanticsNode().positionInRoot.y
@@ -137,7 +259,7 @@ class HeldTaskAnswerPanelTest {
         compose.onNodeWithText("Answer in your own words").performScrollTo().performClick()
         compose.onNodeWithText("Send").performScrollTo().assertIsNotEnabled()
         compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("  Wait for Monday ")
-        compose.onNodeWithText("Send").assertIsEnabled().performClick()
+        compose.onNodeWithText("Send").performScrollTo().assertIsEnabled().performClick()
         assertEquals(HeldTaskAnswer.Text("Wait for Monday"), sent.single().answer)
     }
 
