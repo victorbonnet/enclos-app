@@ -409,7 +409,16 @@ internal fun prepareSendFiles(context: Context, picks: List<Uri>, source: FileSo
 internal fun validatePickUri(context: Context, uri: Uri, source: FileSource) {
     val valid = if (source == FileSource.Camera) {
         uri.scheme == "file" && ownedCapture(context, uri.path)?.let { Uri.fromFile(it) == uri } == true
-    } else uri.scheme == "content" && !uri.authority.isNullOrEmpty() && uri.authority != "${context.packageName}.files"
+    } else {
+        val authority = uri.authority
+        // Accept only literal provider authorities, without encoded aliases, user ids or ports.
+        uri.scheme == "content" && !authority.isNullOrEmpty() &&
+            uri.encodedAuthority == authority &&
+            authority.split('.').all { part ->
+                part.isNotEmpty() && part.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '_' || it == '-' }
+            } &&
+            !authority.equals("${context.packageName}.files", ignoreCase = true)
+    }
     if (!valid) throw PrepareRefused("choose it again from the picker")
 }
 

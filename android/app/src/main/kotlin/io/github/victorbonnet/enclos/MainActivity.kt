@@ -330,7 +330,7 @@ private fun Screens(model: AppModel, ask: Ask) {
         }
     }
     // A conversation the phone does not hold, once what it kept is read: a
-    // draft lost when the system stopped the app, or one forgotten or
+    // draft whose saved owner was lost, or one forgotten or
     // cleared while open. Back to where it was opened from (the tabs, or its
     // policy request) rather than a blank screen.
     val showing = routes.targetState

@@ -71,16 +71,6 @@ class PacedSettlementTest {
             val job = sending.job!!
             // The job resumes on the main looper between parts: run it until the worker polls a full queue.
             settle(5_000) { polledHigh.count == 0L }
-            val framesBefore = frames.size
-            // The bridge's definitive refusal of this operation, on the main thread.
-            refusedAt.set(System.nanoTime())
-            model.receive(c.host, if (ack) JSONObject().put("type", "ack").put("of", op.id) else JSONObject().put("type", "error").put("of", op.id).put("code", "not_allowed").put("message", "probe refusal"))
-            val phase = files.phase(key)
-            val usedAfterRefusal = PreparedBudget.process.used()
-            assertEquals("worker still holds original bytes", before + size, usedAfterRefusal)
-            assertFalse(job.isCompleted)
-            retire.countDown()
-            settle(2000) { job.isCompleted }
             val otherBridge = FakeBridge()
             val otherAgent = agent.copy(host = "other-host")
             model.agents.add(otherAgent)
@@ -92,6 +82,26 @@ class PacedSettlementTest {
             settle(2000) { otherBridge.ofType("message.part").isNotEmpty() }
             val otherOp = files.phase(FileKey(other.host, other.id)).send()!!
             model.receive(other.host, JSONObject().put("type", "ack").put("of", otherOp.id))
+            settle(2000) { PreparedBudget.process.used() == before + size }
+            assertFalse("A is still blocked while B progresses", job.isCompleted)
+            assertEquals(1L, retire.count)
+            // Each connection carries only its own operation's frames.
+            synchronized(frames) {
+                assertEquals(listOf(op.id), frames.filter { it.getString("type") == "message.begin" }.map { it.getString("id") })
+                frames.filter { it.getString("type") == "message.part" }.forEach { assertEquals(op.id, it.getString("message")) }
+            }
+            assertEquals(listOf(otherOp.id), otherBridge.ofType("message.begin").map { it.getString("id") })
+            otherBridge.ofType("message.part").forEach { assertEquals(otherOp.id, it.getString("message")) }
+            val framesBefore = frames.size
+            // The bridge's definitive refusal of this operation, on the main thread.
+            refusedAt.set(System.nanoTime())
+            model.receive(c.host, if (ack) JSONObject().put("type", "ack").put("of", op.id) else JSONObject().put("type", "error").put("of", op.id).put("code", "not_allowed").put("message", "probe refusal"))
+            val phase = files.phase(key)
+            val usedAfterRefusal = PreparedBudget.process.used()
+            assertEquals("worker still holds original bytes", before + size, usedAfterRefusal)
+            assertFalse(job.isCompleted)
+            retire.countDown()
+            settle(2000) { job.isCompleted }
             assertEquals(0L, closes.get())
             val pollsAtRefusal = polls.get()
             Thread.sleep(300)

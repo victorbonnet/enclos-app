@@ -2004,8 +2004,6 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         prepareFiles(target, picks, source, capture)
     }
 
-    /** One upload at a time, off the main thread; each part is built just before it goes. */
-    private val fileUpload = Dispatchers.IO.limitedParallelism(1)
 
     /** How long a message with files waits for its receipt before its delivery is unknown. */
     internal var fileReceiptMs = 60_000L
@@ -2046,10 +2044,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             val parts = fileParts(send.id, send.files).iterator()
             // A receipt, a refusal or the connection's end settles it and cancels this job:
             // withContext then throws on return, so no further part or progress goes.
-            var ok = withContext(fileUpload) { connection.sendPaced(begin) { ensureActive() } }
+            var ok = withContext(connection.fileUpload) { connection.sendPaced(begin) { ensureActive() } }
             var n = 0
             while (ok && state.uploading(key, send.id)) {
-                val went = withContext(fileUpload) { ensureActive(); if (parts.hasNext()) connection.sendPaced(parts.next()) { ensureActive() } else null } ?: break
+                val went = withContext(connection.fileUpload) { ensureActive(); if (parts.hasNext()) connection.sendPaced(parts.next()) { ensureActive() } else null } ?: break
                 ok = went
                 if (ok) state.progress(key, send.id, ++n * 100 / total)
             }

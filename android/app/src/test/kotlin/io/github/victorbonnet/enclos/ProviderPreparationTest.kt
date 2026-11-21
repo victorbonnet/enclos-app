@@ -39,9 +39,14 @@ class PreparationProvider : ContentProvider() {
         val one = served.getValue(uri.lastPathSegment!!)
         return MatrixCursor(arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)).apply { addRow(arrayOf<Any?>(one.name, one.file.length())) }
     }
-    override fun getType(uri: Uri) = served[uri.lastPathSegment]?.type
-    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor =
-        ParcelFileDescriptor.open(served.getValue(uri.lastPathSegment!!).file, ParcelFileDescriptor.MODE_READ_ONLY)
+    override fun getType(uri: Uri): String? {
+        accesses++
+        return served[uri.lastPathSegment]?.type
+    }
+    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
+        accesses++
+        return ParcelFileDescriptor.open(served.getValue(uri.lastPathSegment!!).file, ParcelFileDescriptor.MODE_READ_ONLY)
+    }
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null
     override fun delete(uri: Uri, selection: String?, args: Array<out String>?) = 0
     override fun update(uri: Uri, values: ContentValues?, selection: String?, args: Array<out String>?) = 0
@@ -203,6 +208,34 @@ class ProviderPreparationTest {
             assertEquals(2, result.refused.size)
             assertEquals(0, PreparationProvider.accesses)
             assertTrue(result.refused.none { it.contains("private") || it.contains(dir.path) })
+        }
+    }
+
+    @Test fun noncanonical_picker_authorities_are_refused_before_metadata_for_files_and_photos() {
+        val own = "${context.packageName}.files"
+        val external = PreparationProvider.AUTHORITY
+        val authorities = listOf(
+            "0@$own", "10@$own", "0%40$own",
+            own.uppercase(java.util.Locale.ROOT), "$own:1",
+            own.replaceFirst(".", "%2E"), own.replaceFirst("i", "%69"),
+            "0@$external", "0%40$external", "$external:1",
+            external.replaceFirst(".", "%2e"), "$own.", "$own%3A1",
+        )
+        for (source in listOf(FileSource.Files, FileSource.Photos)) {
+            for (authority in authorities) {
+                val uri = Uri.parse("content://$authority/document/secret")
+                PreparationProvider.accesses = 0
+                // Direct validation must refuse even when Robolectric cannot route the alias.
+                val refusal = assertThrows("$source: $authority", PrepareRefused::class.java) {
+                    validatePickUri(context, uri, source)
+                }
+                assertEquals("choose it again from the picker", refusal.safe)
+                val result = prepare(listOf(uri), source)
+                assertTrue("$source: $authority", result.files.isEmpty())
+                val shown = if (source == FileSource.Files) "a selected file" else "photo.jpg"
+                assertEquals(listOf("$shown (choose it again from the picker)"), result.refused)
+                assertEquals("no query, type or open: $source: $authority", 0, PreparationProvider.accesses)
+            }
         }
     }
 

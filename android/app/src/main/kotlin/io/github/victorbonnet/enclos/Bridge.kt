@@ -61,6 +61,9 @@ class BridgeConnection(
     private val onUnreadable: (Unreadable) -> Unit,
     private val onClosed: (String) -> Unit,
 ) {
+    /** Serial upload lane for this connection; backpressure cannot occupy another host's lane. */
+    internal val fileUpload = kotlinx.coroutines.Dispatchers.IO.limitedParallelism(1)
+
     @Volatile private var socket: WebSocket? = null
     private var handshake: DeviceHandshake? = null
     /** Set once [first] is sealed and queued: only then may [send] seal anything. */

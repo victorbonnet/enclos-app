@@ -27,22 +27,8 @@ import java.util.UUID
 @RunWith(AndroidJUnit4::class)
 class FileSendJourneyTest {
     private val runner get() = InstrumentationRegistry.getInstrumentation()
-    private val selectedUris = mutableListOf<Uri>()
-    private fun providerPick(file: File): Uri {
-        val resolver = runner.targetContext.contentResolver
-        val values = android.content.ContentValues().apply {
-            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, file.name)
-            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, sendFileType(file.name))
-        }
-        val uri = checkNotNull(resolver.insert(android.provider.MediaStore.Files.getContentUri("external"), values))
-        selectedUris.add(uri)
-        resolver.openOutputStream(uri)!!.use { it.write(file.readBytes()) }
-        return uri
-    }
-    @org.junit.After fun removeSelectedProviderFiles() {
-        selectedUris.forEach { runner.targetContext.contentResolver.delete(it, null, null) }
-        selectedUris.clear()
-    }
+    private fun providerPick(file: File): Uri = NativeFixtureProvider.serve(file.name, file.readBytes())
+    @org.junit.After fun removeSelectedProviderFiles() { NativeFixtureProvider.clear() }
     @Suppress("UNCHECKED_CAST")
     private fun <T> field(model: AppModel, name: String): T = AppModel::class.java.getDeclaredField(name).apply { isAccessible = true }.get(model) as T
     private fun until(why: String, condition: () -> Boolean) {

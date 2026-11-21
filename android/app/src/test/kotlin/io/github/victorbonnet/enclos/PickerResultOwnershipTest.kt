@@ -36,7 +36,6 @@ import java.util.UUID
  * process's recreation; not a real process kill or a system camera).
  */
 @RunWith(RobolectricTestRunner::class)
-@org.robolectric.annotation.Config(shadows = [ObservedFileProvider::class, ObservedCameraPermission::class], instrumentedPackages = ["androidx.core.content"])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class PickerResultOwnershipTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
@@ -320,29 +319,60 @@ class PickerResultOwnershipTest {
         } finally { original.endFixture(); fresh.endFixture() }
     }
 
-    @Test fun ungranted_camera_requests_permission_and_denial_does_not_launch() {
+    @Test fun ungranted_camera_requests_permission_and_denial_does_not_launch() = permissionResult(false)
+    @Test fun granted_permission_result_launches_capture() = permissionResult(true)
+
+    private fun permissionResult(granted: Boolean) {
         shadowOf(context as android.app.Application).denyPermissions(android.Manifest.permission.CAMERA)
-        println("PERMISSION application=${context.checkSelfPermission(android.Manifest.permission.CAMERA)} activity=${compose.activity.checkSelfPermission(android.Manifest.permission.CAMERA)}")
+        val registry = object : androidx.activity.result.ActivityResultRegistry() {
+            val launches = mutableListOf<Pair<Int, Any?>>()
+            override fun <I, O> onLaunch(requestCode: Int,
+                contract: androidx.activity.result.contract.ActivityResultContract<I, O>,
+                input: I, options: androidx.core.app.ActivityOptionsCompat?) {
+                launches.add(requestCode to input)
+            }
+        }
+        val owner = object : androidx.activity.result.ActivityResultRegistryOwner {
+            override val activityResultRegistry = registry
+        }
         withModel { model, one, _ ->
-            compose.setContent { EnclosTheme(dark = false) {
-                FileComposer(model, one) { attach, ready -> Composer("", {}, "Message", canSend = ready, attachment = attach, onSend = {}) }
-            } }
+            val before = cameraDir(context).listFiles()?.toSet().orEmpty()
+            compose.setContent {
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.activity.compose.LocalActivityResultRegistryOwner provides owner) {
+                    EnclosTheme(dark = false) {
+                        FileComposer(model, one) { attach, ready -> Composer("", {}, "Message", canSend = ready, attachment = attach, onSend = {}) }
+                    }
+                }
+            }
             compose.onNodeWithContentDescription("Attach files").performClick()
-            println("AFTER_SETUP compat=${androidx.core.content.ContextCompat.checkSelfPermission(compose.activity, android.Manifest.permission.CAMERA)} platform=${compose.activity.checkSelfPermission(android.Manifest.permission.CAMERA)}")
             compose.onNodeWithText("Camera").performClick()
             compose.waitForIdle()
-            val queued = shadowOf(compose.activity).nextStartedActivityForResult
-            println("ACTION_QUEUED action=${queued?.intent?.action} request=${shadowOf(compose.activity).lastRequestedPermission?.requestedPermissions?.toList()}")
-            assertNull("ungranted camera must not start capture", queued)
-            val request = shadowOf(compose.activity).lastRequestedPermission
-            assertArrayEquals(arrayOf(android.Manifest.permission.CAMERA), request.requestedPermissions)
-            compose.runOnIdle {
-                compose.activity.onRequestPermissionsResult(request.requestCode, request.requestedPermissions,
-                    intArrayOf(android.content.pm.PackageManager.PERMISSION_DENIED))
-            }
+            assertEquals(1, registry.launches.size)
+            assertEquals(android.Manifest.permission.CAMERA, registry.launches.single().second)
+            assertNull("no capture before permission answer", model.outgoing.files[FileKey(host, one.id)].capture)
+            assertEquals(before, cameraDir(context).listFiles()?.toSet().orEmpty())
+            compose.runOnIdle { registry.dispatchResult(registry.launches.single().first, granted) }
             compose.waitForIdle()
+            val capture = model.outgoing.files[FileKey(host, one.id)].capture
+            if (granted) {
+                assertEquals(2, registry.launches.size)
+                assertNotNull(capture)
+                assertEquals(ownedCapture(context, capture!!.path), capture)
+                assertEquals("capture launched with the owned file's URI",
+                    androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", capture),
+                    registry.launches.last().second)
+                capture.writeBytes(byteArrayOf(1))
+                compose.runOnIdle { registry.dispatchResult(registry.launches.last().first, false) }
+                compose.waitForIdle()
+                assertFalse(capture.exists())
+            } else {
+                assertEquals(1, registry.launches.size)
+                assertNull(capture)
+                assertEquals("Camera permission was not granted.", model.outgoing.files[FileKey(host, one.id)].error)
+                assertEquals(before, cameraDir(context).listFiles()?.toSet().orEmpty())
+            }
             assertNull(shadowOf(compose.activity).nextStartedActivityForResult)
-            assertNull(model.outgoing.files[FileKey(host, one.id)].capture)
         }
     }
 
@@ -383,41 +413,6 @@ class PickerResultOwnershipTest {
             assertFalse("a cancelled capture is deleted", cancelled.exists())
             assertEquals(1, model.outgoing.files.draft(key).size)
             assertNull(model.outgoing.files[key].error)
-        }
-    }
-}
-
-/** Test-only observation of exceptions otherwise intentionally hidden from the UI. */
-@org.robolectric.annotation.Implements(androidx.core.content.FileProvider::class)
-class ObservedFileProvider {
-    companion object {
-        @JvmStatic
-        @org.robolectric.annotation.Implementation
-        fun getUriForFile(context: Context, authority: String, file: File): Uri = try {
-            org.robolectric.shadow.api.Shadow.directlyOn(
-                androidx.core.content.FileProvider::class.java, "getUriForFile",
-                org.robolectric.util.ReflectionHelpers.ClassParameter.from(Context::class.java, context),
-                org.robolectric.util.ReflectionHelpers.ClassParameter.from(String::class.java, authority),
-                org.robolectric.util.ReflectionHelpers.ClassParameter.from(File::class.java, file))
-        } catch (failure: Throwable) {
-            failure.printStackTrace()
-            throw failure
-        }
-    }
-}
-
-/** Delegates the actual production permission check, recording its inputs at action time. */
-@org.robolectric.annotation.Implements(androidx.core.content.ContextCompat::class)
-class ObservedCameraPermission {
-    companion object {
-        @JvmStatic @org.robolectric.annotation.Implementation
-        fun checkSelfPermission(context: Context, permission: String): Int {
-            val result: Int = org.robolectric.shadow.api.Shadow.directlyOn(
-                androidx.core.content.ContextCompat::class.java, "checkSelfPermission",
-                org.robolectric.util.ReflectionHelpers.ClassParameter.from(Context::class.java, context),
-                org.robolectric.util.ReflectionHelpers.ClassParameter.from(String::class.java, permission))
-            println("ACTION_PERMISSION context=${context.javaClass.name}@${System.identityHashCode(context)} compat=$result platform=${context.checkSelfPermission(permission)} pidUid=${context.checkPermission(permission, android.os.Process.myPid(), android.os.Process.myUid())}")
-            return result
         }
     }
 }

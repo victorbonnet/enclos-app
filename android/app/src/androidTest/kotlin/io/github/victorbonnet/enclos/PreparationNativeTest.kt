@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
-import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
@@ -12,28 +11,20 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.ByteArrayOutputStream
-import java.io.File
-import java.util.UUID
 import java.util.zip.CRC32
 
 /**
  * Preparation on a real Android runtime: the platform's ImageDecoder, Bitmap
- * encoders and ContentResolver, through the app's own FileProvider (real
+ * encoders and ContentResolver, through the test APK's external fixture provider (real
  * `content://` URIs, the type the provider gives by extension). The files
  * are synthetic; this is not the system Photos or Files picker, nor a camera.
  */
 @RunWith(AndroidJUnit4::class)
 class PreparationNativeTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
-    // Under the provider's camera path, in a folder of this test's own, removed after.
-    private val dir = File(cameraDir(context), "native-test-${UUID.randomUUID()}").apply { mkdirs() }
+    @After fun clean() { NativeFixtureProvider.clear() }
 
-    @After fun clean() { dir.deleteRecursively() }
-
-    private fun serve(name: String, bytes: ByteArray): Uri {
-        val file = File(dir, name).apply { writeBytes(bytes) }
-        return FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-    }
+    private fun serve(name: String, bytes: ByteArray): Uri = NativeFixtureProvider.serve(name, bytes)
 
     @Test fun photos_drop_metadata_keep_png_transparency_whatever_the_type_and_refuse_a_gif() {
         val marker = "GPS-48.8584N-2.2945E-Pixel"
@@ -47,9 +38,9 @@ class PreparationNativeTest {
         assertEquals("application/octet-stream", context.contentResolver.getType(picks[1]))
         val result = prepareSendFiles(context, picks, FileSource.Photos, budget)
 
-        assertEquals(listOf("IMG_1.jpg", "sticker.png"), result.files.map { it.name })
+        assertEquals(listOf("photo.jpg", "photo.png"), result.files.map { it.name })
         assertEquals(listOf("image/jpeg", "image/png"), result.files.map { it.mime })
-        assertEquals(listOf("moving.gif ($GIF_FROM_PHOTOS)"), result.refused)
+        assertEquals(listOf("photo.jpg ($GIF_FROM_PHOTOS)"), result.refused)
         for (f in result.files) {
             val text = String(f.bytes, Charsets.ISO_8859_1)
             assertFalse("${f.name}: no source metadata", text.contains(marker))
@@ -69,9 +60,7 @@ class PreparationNativeTest {
         val gif = animatedGif()
         val budget = PreparedBudget(80_000_000)
         val first = prepareSendFiles(context, listOf(serve("clear.png", png), serve("moving.gif", gif)), FileSource.Files, budget)
-        val other = File(dir, "again").apply { mkdirs() }
-        val again = File(other, "clear.png").apply { writeBytes(png) }
-        val later = prepareSendFiles(context, listOf(FileProvider.getUriForFile(context, "${context.packageName}.files", again)),
+        val later = prepareSendFiles(context, listOf(serve("clear.png", png)),
             FileSource.Files, budget, taken = first.files.map { it.name })
         val all = first.files + later.files
         assertEquals(listOf("clear.png", "moving.gif", "clear-2.png"), all.map { it.name })
