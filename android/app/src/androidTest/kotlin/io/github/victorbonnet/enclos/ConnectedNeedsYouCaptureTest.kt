@@ -333,7 +333,7 @@ class ConnectedNeedsYouCaptureTest {
 
         // ---- 3. an answer typed in Your answer, never sent
         exposeAnswerField(native, run, "Your answer", sheet, "draft_disclosure_opened")
-        native.setText("Your answer", s.draft) { it.window == sheet && it.editable && answerField(it) }
+        native.setText("Your answer", s.draft) { it.window == sheet && answerField(it) }
         native.waitNode("the draft in the field") { it.window == sheet && answerField(it) && it.text == s.draft }
         run.observe("draft_send_enabled", native.nodes().firstOrNull { it.window == sheet && it.clickable && "Send" in it.texts }?.enabled)
         native.capture("draft-typed")
@@ -450,8 +450,8 @@ class ConnectedNeedsYouCaptureTest {
     private fun choice(window: Int, label: String, other: String): (Node) -> Boolean =
         { it.window == window && it.clickable && label in it.texts && other !in it.texts }
 
-    /** The typed answer's field: its description is the field's label (FormField); disabled, it may not report itself editable. */
-    private fun answerField(n: Node) = n.desc == "Your answer"
+    /** The actual labelled EditText, including disabled readback; identity is resolved before any consumer sees it. */
+    private fun answerField(n: Node) = n.answerField
 
     /** The fold before the typed answer (HeldTaskAnswerPanel): the control naming exactly Answer in your own words. */
     private fun answerDisclosure(n: Node) = n.clickable && "Answer in your own words" in n.texts
@@ -1336,7 +1336,7 @@ class ConnectedNeedsYouCaptureTest {
     data class Node(
         val text: String?, val desc: String?, val state: String?, val className: String?,
         val checkable: Boolean, val checked: Boolean, val clickable: Boolean, val enabled: Boolean, val heading: Boolean, val editable: Boolean,
-        val visible: Boolean, val clickLabel: String?, val bounds: Rect, val depth: Int, val window: Int, val texts: List<String>,
+        val answerField: Boolean, val visible: Boolean, val clickLabel: String?, val bounds: Rect, val depth: Int, val window: Int, val texts: List<String>,
     )
 
     /**
@@ -1404,26 +1404,42 @@ class ConnectedNeedsYouCaptureTest {
         private fun roots(): List<Pair<Int, AccessibilityNodeInfo>> {
             freshen()
             val fromWindows = ui.windows.mapNotNull { w -> w.root?.let(::current)?.takeIf { it.packageName?.toString() == pkg }?.let { w.id to it } }
-            return fromWindows.ifEmpty { listOfNotNull(ui.rootInActiveWindow?.let(::current)?.takeIf { it.packageName?.toString() == pkg }?.let { -1 to it }) }
+            return fromWindows.ifEmpty { listOfNotNull(ui.rootInActiveWindow?.let(::current)?.takeIf { it.packageName?.toString() == pkg }?.let { it.windowId to it }) }
         }
 
         private fun walk(visit: (AccessibilityNodeInfo, Node) -> Unit) {
+            val found = mutableListOf<Pair<AccessibilityNodeInfo, Node>>()
             roots().forEach { (window, root) ->
                 fun go(n: AccessibilityNodeInfo, depth: Int): List<String> {
                     val own = listOfNotNull(n.text?.toString(), n.contentDescription?.toString())
                     val below = (0 until n.childCount).mapNotNull { n.getChild(it)?.let(::current) }.flatMap { go(it, depth + 1) }
-                    visit(n, read(n, depth, window, own + below))
+                    found += n to read(n, depth, window, own + below)
                     return own + below
                 }
                 go(root, 0)
             }
+            found.groupBy { it.second.window }.values.forEach { nodes ->
+                AnswerFieldSelector.unique(nodes.filter { it.second.answerField })
+            }
+            found.forEach { (info, node) -> visit(info, node) }
         }
+
+        private fun answerShape(n: AccessibilityNodeInfo): AnswerFieldSelector.Shape =
+            AnswerFieldSelector.Shape(
+                n.className?.toString(), n.packageName?.toString(), n.windowId,
+                n.contentDescription?.toString(), n.isEditable,
+                (0 until n.childCount).mapNotNull { n.getChild(it)?.let(::current) }.map {
+                    AnswerFieldSelector.Shape(it.className?.toString(), it.packageName?.toString(),
+                        it.windowId, it.contentDescription?.toString(), it.isEditable)
+                },
+            )
 
         private val order = compareBy<Node>({ it.bounds.top }, { it.depth })
 
         // isChecked: deprecated from API 36 for a tri-state; the boolean is still set, and is all API 28 has.
         @Suppress("DEPRECATION")
         private fun read(n: AccessibilityNodeInfo, depth: Int, window: Int, texts: List<String>): Node = Node(
+            answerField = AnswerFieldSelector.matches(answerShape(n), pkg, window),
             text = n.text?.toString(),
             desc = n.contentDescription?.toString(),
             state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) n.stateDescription?.toString() else null,
@@ -1474,7 +1490,11 @@ class ConnectedNeedsYouCaptureTest {
 
         fun setText(what: String, value: String, match: (Node) -> Boolean) {
             val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) }
-            poll("$what to take the text", 20) { liveAll(match).firstOrNull()?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)?.takeIf { it } }
+            poll("$what to take the text", 20) {
+                val field = AnswerFieldSelector.unique(liveAll(match))
+                field?.takeIf { it.isEnabled && it.isEditable }
+                    ?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)?.takeIf { it }
+            }
             run.note("typed into $what: $value")
         }
 
