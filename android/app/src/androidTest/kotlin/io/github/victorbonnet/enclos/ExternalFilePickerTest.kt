@@ -54,6 +54,8 @@ class ExternalFilePickerTest {
         val source = args.getString("source") ?: "Files"
         check(source in listOf("Files", "Photos", "Camera"))
         val awaitReturn = args.getString("awaitReturn") == "true"
+        val detachAfterOpen = args.getString("detachAfterOpen") == "true"
+        check(!detachAfterOpen || !awaitReturn) { "detachAfterOpen and awaitReturn are mutually exclusive" }
         val expectedName = args.getString("expectedName")
         check(!awaitReturn || !expectedName.isNullOrBlank()) { "awaitReturn requires expectedName (prepared filename)" }
         val fresh = args.getString("newConversation") == "true"
@@ -118,6 +120,14 @@ class ExternalFilePickerTest {
             report("EXTERNAL_CAMERA_LANDSCAPE_OBSERVED $identity\n${shell("dumpsys activity top")}\n${shell("dumpsys window displays")}")
         }
         report("EXTERNAL_PICKER_READY $identity holdSeconds=120 awaitReturn=$awaitReturn")
+        if (detachAfterOpen) {
+            // Finish instrumentation normally before the driver kills the ordinary app
+            // process. Leave MainActivity and its pending external result untouched here.
+            // The driver must verify detachment and the pending Activity, then prove a
+            // changed PID on return. Platform teardown is a barrier, never a lifecycle pass.
+            report("EXTERNAL_PICKER_DRIVER_DETACHED_SUPPORT_ONLY $identity")
+            return
+        }
         if (awaitReturn) {
             var files = emptyList<SendFile>()
             until("System return did not prepare a draft for $identity", 120_000) {
@@ -128,9 +138,11 @@ class ExternalFilePickerTest {
                 foreground && files.isNotEmpty()
             }
             assertEquals(listOf(expectedName), files.map { it.name })
-            runner.runOnMainSync {
-                assertEquals(ConversationKey(host, conversation.id), model.openedConversation.value)
-            }
+            // openedConversation is a consumed navigation event, not the current route.
+            // Require the owning draft above and the actual conversation header instead.
+            assertTrue("Returned to a different conversation", tree().any {
+                it.text?.toString() == "$host/${conversation.agent}"
+            })
             files.forEach { file ->
                 assertTrue("Empty returned bytes", file.bytes.isNotEmpty())
                 val hash = MessageDigest.getInstance("SHA-256").digest(file.bytes)
