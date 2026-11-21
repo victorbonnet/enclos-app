@@ -2080,8 +2080,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         if (state.phase(key) != FilePhase.Draft) { temporary?.delete(); state.error(key, "Wait for the current message."); return }
         if (state.draft(key).size + picks.size > MAX_SEND_FILES) { temporary?.delete(); state.error(key, "Choose at most four files."); return }
         val context = getApplication<Application>()
-        // Images only for an agent that takes them; each one refused by name otherwise.
-        val images = offersImages(c)
+        // A restored picker can return before reconnect supplies host capabilities.
+        // Unknown transport may prepare bytes; send/retry still require known support.
+        val images = fileSendAvailable(c.group,
+            hostCapabilities[c.host]?.contains("message.begin") != false,
+            agents.any { it.host == c.host && it.name == c.agent && "incoming_files" in it.capabilities }) &&
+            agents.any { it.host == c.host && it.name == c.agent && "incoming_images" in it.capabilities }
         // The draft cannot change while it prepares: new names stay distinct from its own.
         val taken = state.draft(key).map { it.name }
         temporary?.let { CameraOriginals.retain(it) }

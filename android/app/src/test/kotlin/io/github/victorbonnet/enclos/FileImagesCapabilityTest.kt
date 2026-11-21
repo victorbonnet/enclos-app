@@ -123,6 +123,14 @@ class FileImagesCapabilityTest {
             model.outgoing.ended(c.host, "lost")
             assertTrue(model.outgoing.files.phase(key) is FilePhase.Unknown)
             val sent = bridge.frames.size
+            // A live socket alone cannot authorize retry before fresh transport capabilities.
+            model.field<MutableMap<String, Set<String>>>("hostCapabilities").remove(c.host)
+            assertNotNull(model.retryFiles(c))
+            assertEquals(sent, bridge.frames.size)
+            model.field<MutableMap<String, Set<String>>>("hostCapabilities")[c.host] = emptySet()
+            assertNotNull(model.retryFiles(c))
+            assertEquals(sent, bridge.frames.size)
+            model.field<MutableMap<String, Set<String>>>("hostCapabilities")[c.host] = setOf("message.begin")
             model.capabilities(c, "incoming_files")
             val why = model.retryFiles(c)
             assertTrue(why.orEmpty(), why.orEmpty().contains("pic.png"))

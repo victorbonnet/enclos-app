@@ -263,12 +263,12 @@ class PickerResultOwnershipTest {
         val next = fixtureModel()
         try {
             next.agents.add(agent)
-            FakeBridge().attach(next, host)
             next.receive(host, message("conversation", "conversation" to c.id, "agent" to agent.name))
             assertNull(next.outgoing.files[FileKey(host, c.id)].capture)
             val restored = ownedCapture(context, savedPath)!!
             next.pickedFiles(savedOwner, c, listOf(Uri.fromFile(restored)), FileSource.Camera, restored)
-            settle { next.outgoing.files.draft(FileKey(host, c.id)).isNotEmpty() }
+            settle { next.outgoing.files.phase(FileKey(host, c.id)) !is FilePhase.Preparing }
+            assertNull(next.outgoing.files[FileKey(host, c.id)].error)
             assertEquals("photo.jpg", next.outgoing.files.draft(FileKey(host, c.id)).single().name)
             settle { !file.exists() }
         } finally { next.endFixture(); file.delete() }
@@ -277,7 +277,7 @@ class PickerResultOwnershipTest {
     @Test fun new_unsent_files_returns_in_fresh_model_without_canonical_seed() = newUnsentReturn("Files")
     @Test fun new_unsent_photos_returns_in_fresh_model_without_canonical_seed() = newUnsentReturn("Photos")
     @Test fun new_unsent_camera_returns_in_fresh_model_without_canonical_seed() = newUnsentReturn("Camera")
-    private fun newUnsentReturn(source: String) {
+    private fun newUnsentReturn(source: String, existing: Boolean = false) {
         shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.CAMERA)
         val original = fixtureModel()
         val fresh = fixtureModel()
@@ -288,8 +288,11 @@ class PickerResultOwnershipTest {
             original.agents.add(agent)
             fresh.agents.add(agent)
             FakeBridge().attach(original, host)
-            FakeBridge().attach(fresh, host)
-            val id = original.newConversation(agent)
+            val id = if (existing) {
+                original.receive(host, message("conversation", "conversation" to "existing", "agent" to agent.name))
+                fresh.receive(host, message("conversation", "conversation" to "existing", "agent" to agent.name))
+                "existing"
+            } else original.newConversation(agent)
             val owner = original.conversations.single { it.id == id }
             val tester = StateRestorationTester(compose)
             tester.setContent { EnclosTheme(dark = false) { ConversationScreen(current, id, {}) } }
@@ -301,12 +304,14 @@ class PickerResultOwnershipTest {
             assertNotNull("source=$source error=${original.outgoing.files[FileKey(host, id)].error} permission=${androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA)}", started)
             val launched = started!!.intent
             if (source == "Files") assertEquals(Intent.ACTION_OPEN_DOCUMENT, launched.action)
-            assertTrue(fresh.conversations.none { it.id == id })
+            assertEquals(existing, fresh.conversations.any { it.id == id })
             current = fresh
             tester.emulateSavedInstanceStateRestore()
             compose.waitForIdle()
             assertEquals(owner, fresh.conversations.single { it.id == id })
             assertEquals(1, fresh.conversations.size)
+            val other = owner.copy(id = "another")
+            compose.runOnIdle { fresh.conversations.add(other) }
             val picked = if (source == "Camera") {
                 @Suppress("DEPRECATION") val output = launched.getParcelableExtra<Uri>(MediaStore.EXTRA_OUTPUT)!!
                 File(cameraDir(context), output.lastPathSegment!!).also { jpeg(it) }
@@ -314,9 +319,91 @@ class PickerResultOwnershipTest {
             else document("returned.txt")
             compose.runOnIdle { shadowOf(compose.activity).receiveResult(launched, Activity.RESULT_OK,
                 if (source == "Camera") null else Intent().setData(providerPick(picked))) }
-            settle { fresh.outgoing.files.draft(FileKey(host, id)).isNotEmpty() }
-            assertEquals(if (source == "Files") "returned.txt" else "photo.jpg", fresh.outgoing.files.draft(FileKey(host, id)).single().name)
+            settle { fresh.outgoing.files.phase(FileKey(host, id)) !is FilePhase.Preparing }
+            assertNull(fresh.outgoing.files[FileKey(host, id)].error)
+            val draft = fresh.outgoing.files.draft(FileKey(host, id)).single()
+            assertEquals(if (source == "Files") "returned.txt" else "photo.jpg", draft.name)
+            if (source == "Files") assertArrayEquals(picked.readBytes(), draft.bytes)
+            else {
+                assertTrue(draft.bytes.isNotEmpty())
+                val decoded = android.graphics.BitmapFactory.decodeByteArray(draft.bytes, 0, draft.bytes.size)
+                assertNotNull(decoded)
+                assertEquals(8, decoded.width)
+                decoded.recycle()
+            }
+            assertTrue(fresh.outgoing.files.draft(FileKey(host, other.id)).isEmpty())
+            assertNull(fresh.outgoing.files[FileKey(host, other.id)].error)
         } finally { original.endFixture(); fresh.endFixture() }
+    }
+
+
+    @Test fun existing_photos_return_in_restored_composer_before_reconnect() = newUnsentReturn("Photos", existing = true)
+    @Test fun existing_camera_return_in_restored_composer_before_reconnect() = newUnsentReturn("Camera", existing = true)
+    @Test fun existing_documents_return_in_restored_composer_before_reconnect() = newUnsentReturn("Files", existing = true)
+
+    @Test fun fresh_images_wait_for_current_transport_and_agent_before_send() {
+        for (source in listOf(FileSource.Camera, FileSource.Photos)) {
+            val model = fixtureModel()
+            val c = Conversation(host, agent.name, "fresh")
+            val other = c.copy(id = "other")
+            try {
+                model.agents.add(agent)
+                model.conversations.addAll(listOf(c, other))
+                val file = capture("${UUID.randomUUID()}.jpg").apply { jpeg(this) }
+                model.pickedFiles(pickOwner(c), other,
+                    listOf(if (source == FileSource.Camera) Uri.fromFile(file) else providerPick(file)),
+                    source, if (source == FileSource.Camera) file else null)
+                val key = FileKey(host, c.id)
+                settle { model.outgoing.files.phase(key) !is FilePhase.Preparing }
+                assertNull(model.outgoing.files[key].error)
+                val prepared = model.outgoing.files.draft(key).single()
+                assertTrue(prepared.bytes.isNotEmpty())
+                assertEquals("image/jpeg", prepared.mime)
+                assertTrue(model.outgoing.files.draft(FileKey(host, other.id)).isEmpty())
+                assertNotNull(model.send(c, "offline"))
+                val bridge = FakeBridge()
+                bridge.attach(model, host, files = false)
+                assertNotNull(model.send(c, "unknown transport"))
+                assertTrue(bridge.frames.isEmpty())
+                bridge.attach(model, host)
+                model.agents.clear()
+                model.agents.add(agent.copy(capabilities = listOf("incoming_files")))
+                assertNotNull(model.send(c, "downgraded"))
+                assertTrue(bridge.frames.isEmpty())
+                model.agents.clear()
+                model.agents.add(agent)
+                assertNull(model.send(c, "ready"))
+                settle { bridge.ofType("message.begin").isNotEmpty() }
+                val send = model.outgoing.files[key].phase
+                assertTrue(send != FilePhase.Draft)
+            } finally { model.endFixture() }
+        }
+    }
+
+    @Test fun known_host_or_agent_refusal_still_refuses_images_but_keeps_documents() {
+        for (control in listOf("host", "agent", "missing-files")) {
+            val model = fixtureModel()
+            val c = Conversation(host, agent.name, "control")
+            try {
+                model.agents.add(when (control) {
+                    "agent" -> agent.copy(capabilities = listOf("incoming_files"))
+                    "missing-files" -> agent.copy(capabilities = listOf("incoming_images"))
+                    else -> agent
+                })
+                model.conversations.add(c)
+                if (control == "host") model.field<MutableMap<String, Set<String>>>("hostCapabilities")[host] = emptySet()
+                val image = document("test.jpg").apply { jpeg(this) }
+                val key = FileKey(host, c.id)
+                model.pickedFiles(pickOwner(c), c, listOf(providerPick(image)), FileSource.Photos)
+                settle { model.outgoing.files.phase(key) !is FilePhase.Preparing }
+                assertTrue(model.outgoing.files.draft(key).isEmpty())
+                assertTrue(model.outgoing.files[key].error.orEmpty().contains(NO_IMAGES))
+                val doc = document("control.pdf")
+                model.pickedFiles(pickOwner(c), c, listOf(providerPick(doc)), FileSource.Files)
+                settle { model.outgoing.files.phase(key) !is FilePhase.Preparing }
+                assertArrayEquals(doc.readBytes(), model.outgoing.files.draft(key).single().bytes)
+            } finally { model.endFixture() }
+        }
     }
 
     @Test fun ungranted_camera_requests_permission_and_denial_does_not_launch() = permissionResult(false)
