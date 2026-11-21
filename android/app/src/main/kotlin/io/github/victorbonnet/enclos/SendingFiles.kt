@@ -6,7 +6,6 @@ import org.json.JSONObject
 import java.io.File
 import java.util.Base64
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicBoolean
 
 internal fun fileSendAvailable(group: Boolean, bridge: Boolean, agent: Boolean) = !group && bridge && agent
 
@@ -42,12 +41,24 @@ internal fun validSendFile(name: String, mime: String, size: Int): Boolean =
 
 /**
  * A prepared file. Its bytes are reserved in [PreparedBudget] until released
- * by their one owner, once: a second release (a late callback, a discard
+ * once both their operation and any upload worker retire. A second release (a late callback, a discard
  * after a removal) does nothing, so it never frees another owner's bytes.
  */
 internal class SendFile(val name: String, val mime: String, val bytes: ByteArray) {
-    private val released = AtomicBoolean(false)
-    fun releaseFrom(budget: PreparedBudget) { if (released.compareAndSet(false, true)) budget.release(bytes.size) }
+    private var released = false
+    private var workers = 0
+    private var pendingBudget: PreparedBudget? = null
+    @Synchronized fun retainWorker() { check(!released); workers++ }
+    @Synchronized fun retireWorker() {
+        check(workers > 0)
+        workers--
+        if (workers == 0) pendingBudget?.let { it.release(bytes.size); pendingBudget = null }
+    }
+    @Synchronized fun releaseFrom(budget: PreparedBudget) {
+        if (released) return
+        released = true
+        if (workers == 0) budget.release(bytes.size) else pendingBudget = budget
+    }
     fun declaration() = JSONObject().put("name", name).put("mime", mime).put("size", bytes.size)
 }
 
@@ -79,7 +90,7 @@ internal sealed interface FilePhase {
     data class AwaitingAck(val send: FileSend, val job: Job? = null) : FilePhase
     /**
      * The bridge refused send [id], saying [reason]: final, nothing to retry.
-     * Its bytes were released when it was refused; its words and names stay to say what was not sent.
+     * Its bytes are released after its upload worker retires; its words and names stay to say what was not sent.
      */
     data class Failed(val id: String, val text: String, val names: List<String>, val reason: String) : FilePhase
     /** Delivery unknown: retry the same original, or discard it. */
@@ -118,13 +129,18 @@ internal class SendingFiles(val budget: PreparedBudget = PreparedBudget.process)
     fun capturing(key: FileKey, file: File) = update(key) { now ->
         // Saved camera paths are validated and returned in canonical form.
         val capture = file.canonicalFile
-        now.capture?.takeIf { it != capture }?.delete()
+        if (now.capture != capture) {
+            now.capture?.let { CameraOriginals.release(it); it.delete() }
+            CameraOriginals.retain(capture)
+        }
         now.copy(capture = capture)
     }
+    fun captureOwnedElsewhere(key: FileKey, file: File) = all.any { (owner, value) -> owner != key && value.capture == file.canonicalFile }
     /** [file]'s result came: whoever takes it now deletes it. Whether a conversation owned it. */
     fun captured(file: File): Boolean {
         val capture = file.canonicalFile
         val key = all.entries.firstOrNull { it.value.capture == capture }?.key ?: return false
+        CameraOriginals.release(capture)
         update(key) { it.copy(capture = null) }
         return true
     }
@@ -272,7 +288,7 @@ internal class SendingFiles(val budget: PreparedBudget = PreparedBudget.process)
     /**
      * The bridge's `error` correlated to [id] by its `of`, before or after
      * the receipt. A [definitive] refusal is final ([FilePhase.Failed], no
-     * retry) and releases its bytes at once; any other leaves delivery
+     * retry) and releases its bytes once its worker retires; any other leaves delivery
      * unknown ([FilePhase.Unknown]), the original kept for an explicit retry.
      * After the receipt only names were kept: it is told once in the
      * original conversation, whichever is open; a repeat is consumed there,
@@ -348,7 +364,7 @@ internal class SendingFiles(val budget: PreparedBudget = PreparedBudget.process)
     private fun drop(key: FileKey, deleteCapture: Boolean) {
         confirmed.values.removeAll { it.key == key }
         val now = all.remove(key) ?: return
-        if (deleteCapture) now.capture?.delete()
+        now.capture?.let { CameraOriginals.release(it); if (deleteCapture) it.delete() }
         cancel(now.phase)
         release(now.draft)
         now.phase.send()?.let { release(it.files) }

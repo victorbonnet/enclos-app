@@ -18,6 +18,37 @@ class LiteralReceivedOwnershipTest {
     @Test fun ordinary_restored_text_is_retired_by_received_positive() = exercise("", true, false, true)
     @Test fun late_literal_preserves_newer_ordinary_notice() = exercise("Yes", true, false, false, "ordinary")
     @Test fun late_literal_preserves_newer_file_outcome() = exercise("Yes", true, false, false, "file")
+    @Test fun offered_reply_does_not_revoke_unchanged_ordinary_restoration() = restoredSuggested(false)
+    @Test fun offered_reply_preserves_equal_user_rewrite_of_ordinary_restoration() = restoredSuggested(true)
+    private fun restoredSuggested(equalUserEdit: Boolean) {
+        val model = fixtureModel()
+        try {
+            val c = Conversation("fixture-host", "box/agent", "restored-owner")
+            model.conversations.add(c)
+            model.agents.add(Agent(c.host, c.agent, "hermes", listOf("incoming_files")))
+            val bridge = FakeBridge()
+            bridge.attach(model, c.host, files = false)
+            assertNull(model.send(c, "A"))
+            model.outgoing.ended(c.host, "lost")
+            assertEquals("A", model.outgoing.unsent[c.id])
+            if (equalUserEdit) model.outgoing.write(c.id, "A")
+            val key = FileKey(c.host, c.id)
+            val file = SendFile("newer.txt", "text/plain", byteArrayOf(1))
+            model.outgoing.files.drafted(key, file)
+            val line = Line(1, "agent", "Choose", "reply", 1, suggestedReplies = listOf("B"))
+            model.lines[c.id] = listOf(line)
+            assertNull(model.sendSuggested(c, line, "B"))
+            assertEquals("A", model.outgoing.unsent[c.id])
+            model.receive(c.host, message("message", "conversation" to c.id, "agent" to c.agent,
+                "seq" to 2, "from" to "person", "text" to "A", "kind" to "message"))
+            assertEquals(if (equalUserEdit) "A" else null, model.outgoing.unsent[c.id])
+            assertEquals(listOf(file), model.outgoing.files.draft(key))
+            assertTrue(model.outgoing.waiting(c.id))
+            model.outgoing.ended(c.host, "literal loss")
+            assertEquals(if (equalUserEdit) "B\n\nA" else "B", model.outgoing.unsent[c.id])
+            assertEquals(listOf(file), model.outgoing.files.draft(key))
+        } finally { model.endFixture() }
+    }
     private fun exercise(draft: String, loss: Boolean, newer: Boolean, ordinary: Boolean, newerOperation: String? = null) {
         val model = fixtureModel()
         try {

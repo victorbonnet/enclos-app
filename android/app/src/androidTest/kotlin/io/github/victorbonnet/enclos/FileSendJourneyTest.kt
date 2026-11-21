@@ -27,6 +27,22 @@ import java.util.UUID
 @RunWith(AndroidJUnit4::class)
 class FileSendJourneyTest {
     private val runner get() = InstrumentationRegistry.getInstrumentation()
+    private val selectedUris = mutableListOf<Uri>()
+    private fun providerPick(file: File): Uri {
+        val resolver = runner.targetContext.contentResolver
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, sendFileType(file.name))
+        }
+        val uri = checkNotNull(resolver.insert(android.provider.MediaStore.Files.getContentUri("external"), values))
+        selectedUris.add(uri)
+        resolver.openOutputStream(uri)!!.use { it.write(file.readBytes()) }
+        return uri
+    }
+    @org.junit.After fun removeSelectedProviderFiles() {
+        selectedUris.forEach { runner.targetContext.contentResolver.delete(it, null, null) }
+        selectedUris.clear()
+    }
     @Suppress("UNCHECKED_CAST")
     private fun <T> field(model: AppModel, name: String): T = AppModel::class.java.getDeclaredField(name).apply { isAccessible = true }.get(model) as T
     private fun until(why: String, condition: () -> Boolean) {
@@ -118,7 +134,7 @@ class FileSendJourneyTest {
             val priorFiles = mutableListOf<SendFile>()
             if (!newCamera) {
                 for ((file, source) in listOf(photo to FileSource.Photos, pdf to FileSource.Files, python to FileSource.Files)) {
-                    runner.runOnMainSync { m.prepareFiles(c, listOf(Uri.fromFile(file)), source) }
+                    runner.runOnMainSync { m.prepareFiles(c, listOf(providerPick(file)), source) }
                     until("file preparation failed: ${file.name}") { m.outgoing.files.draft(key).isNotEmpty() }
                     noFailure()
                     tap("Send")
@@ -126,7 +142,7 @@ class FileSendJourneyTest {
                     noFailure()
                     val op = m.outgoing.files.phase(key).send()!!
                     priorFiles.addAll(op.files)
-                    assertEquals(file.name, op.files.single().name)
+                    assertEquals(if (source == FileSource.Photos) "photo.jpg" else file.name, op.files.single().name)
                     val begin = synchronized(frames) { frames.first { it.optString("id") == op.id } }
                     assertEquals("message.begin", begin.getString("type"))
                     runner.runOnMainSync { m.outgoing.files.acknowledged(c.host, op.id) }
@@ -134,7 +150,7 @@ class FileSendJourneyTest {
                     noFailure()
                     SystemClock.sleep(650)
                 }
-                runner.runOnMainSync { m.prepareFiles(c, listOf(Uri.fromFile(python)), FileSource.Files) }
+                runner.runOnMainSync { m.prepareFiles(c, listOf(providerPick(python)), FileSource.Files) }
                 until("refused-file preparation failed") { m.outgoing.files.draft(key).isNotEmpty() }
                 tap("Send")
                 until("refusal upload did not await receipt") { m.outgoing.files.phase(key) is FilePhase.AwaitingAck }

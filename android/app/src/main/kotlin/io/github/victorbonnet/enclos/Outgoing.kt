@@ -67,9 +67,15 @@ class Outgoing {
     fun sendSuggested(conversation: String, line: Line, reply: String, history: List<Line>, send: (String) -> String?): String? {
         if (waiting(conversation) || reply !in offeredReplies(line, history)) return "This reply is no longer available."
         val draft = unsent[conversation]
+        val restored = sent[conversation].orEmpty().filter { it.ownsRestored }.map { it.id }.toSet()
         val error = send(reply)
         if (error == null) {
-            if (draft != null) write(conversation, draft)
+            if (draft != null) unsent[conversation] = draft
+            // Sending the literal temporarily removes the field. Putting that same
+            // draft back is not a user edit of an older restored ordinary send.
+            put(conversation, sent[conversation].orEmpty().map {
+                if (it.id in restored) it.copy(ownsRestored = true) else it
+            })
         } else if (unsent[conversation] != reply) {
             restore(conversation, listOf(reply), error)
         } else notSent[conversation] = error

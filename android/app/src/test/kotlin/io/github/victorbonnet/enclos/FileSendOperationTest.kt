@@ -190,7 +190,7 @@ class FileSendOperationTest {
     @Test fun `a cancelled preparation stops reading and releases every reservation`() {
         val budget = PreparedBudget(1_000_000)
         val dir = createTempDir()
-        val picks = (1..3).map { n -> File(dir, "n$n.py").apply { writeBytes(ByteArray(100_000)) } }.map(Uri::fromFile)
+        val picks = (1..3).map { n -> File(dir, "n$n.py").apply { writeBytes(ByteArray(100_000)) } }.map(::providerPick)
         var reads = 0
         val stop = runCatching {
             prepareSendFiles(ApplicationProvider.getApplicationContext(), picks, FileSource.Files, budget) {
@@ -206,7 +206,7 @@ class FileSendOperationTest {
         val budget = PreparedBudget(250_000)
         val dir = createTempDir()
         val picks = listOf(File(dir, "a.pdf").apply { writeBytes(ByteArray(200_000) { 1 }) }, File(dir, "b.pdf").apply { writeBytes(ByteArray(100_000)) })
-        val result = prepareSendFiles(ApplicationProvider.getApplicationContext(), picks.map(Uri::fromFile), FileSource.Files, budget)
+        val result = prepareSendFiles(ApplicationProvider.getApplicationContext(), picks.map(::providerPick), FileSource.Files, budget)
         assertEquals(listOf("a.pdf"), result.files.map { it.name })
         assertEquals(1, result.refused.size)
         assertTrue(result.refused.single().startsWith("b.pdf ("))
@@ -220,7 +220,7 @@ class FileSendOperationTest {
         val gif = "GIF89a".toByteArray() + ByteArray(40) { (it * 3).toByte() }
         val picks = listOf(File(dir, "clear.png").apply { writeBytes(png) }, File(dir, "moving.gif").apply { writeBytes(gif) },
             File(dir, "tool.py").apply { writeText("print(1)\n") })
-        val result = prepareSendFiles(ApplicationProvider.getApplicationContext(), picks.map(Uri::fromFile), FileSource.Files, budget)
+        val result = prepareSendFiles(ApplicationProvider.getApplicationContext(), picks.map(::providerPick), FileSource.Files, budget)
         assertEquals(listOf("clear.png", "moving.gif", "tool.py"), result.files.map { it.name })
         assertEquals(listOf("image/png", "image/gif", "text/plain"), result.files.map { it.mime })
         assertTrue(png.contentEquals(result.files[0].bytes))
@@ -231,9 +231,9 @@ class FileSendOperationTest {
         val budget = PreparedBudget(1_000_000)
         val dir = createTempDir()
         val gif = File(dir, "IMG_1.jpg").apply { writeBytes("GIF89a".toByteArray() + ByteArray(40)) }
-        val result = prepareSendFiles(ApplicationProvider.getApplicationContext(), listOf(Uri.fromFile(gif)), FileSource.Photos, budget)
+        val result = prepareSendFiles(ApplicationProvider.getApplicationContext(), listOf(providerPick(gif)), FileSource.Photos, budget)
         assertTrue(result.files.isEmpty())
-        assertEquals("IMG_1.jpg ($GIF_FROM_PHOTOS)", result.refused.single())
+        assertEquals("photo.jpg ($GIF_FROM_PHOTOS)", result.refused.single())
         assertEquals(0L, budget.used())
     }
 

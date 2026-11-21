@@ -335,7 +335,9 @@ private fun Screens(model: AppModel, ask: Ask) {
     // policy request) rather than a blank screen.
     val showing = routes.targetState
     val missing = showing is Route.Chat && model.ready && model.conversations.none { it.id == showing.id }
-    LaunchedEffect(missing) { if (missing) go(showing.up) }
+    LaunchedEffect(missing) {
+        if (missing && model.conversations.none { it.id == showing.id }) go(showing.up)
+    }
 
     // A pairing link opened the app: to the pairing screen, which asks.
     val opened = model.openedLink.value

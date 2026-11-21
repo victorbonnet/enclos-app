@@ -17,7 +17,7 @@ class DuplicateFileNamesTest {
         val budget = PreparedBudget(100)
         try {
             val picks = (1..2).map { index ->
-                Uri.fromFile(File(File(dir, "$index").apply { mkdirs() }, name).apply { writeText("x") })
+                providerPick(File(File(dir, "$index").apply { mkdirs() }, name).apply { writeText("x") })
             }
             val result = prepareSendFiles(ApplicationProvider.getApplicationContext<Context>(), picks, FileSource.Files, budget)
             assertEquals("duplicate chips must never share an identity", listOf(name), result.files.map { it.name })

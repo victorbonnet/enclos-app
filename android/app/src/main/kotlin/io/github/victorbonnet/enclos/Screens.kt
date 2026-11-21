@@ -1474,6 +1474,9 @@ internal fun TaskLineItem(
 /** One conversation with one agent: messages both ways, and what the agent sent on its own. */
 @Composable
 fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
+    val savedOwner = rememberSaveable(id) { ArrayList(model.draftOwner(id).orEmpty()) }
+    // Restore once on entry to this model, before mounting the result launchers.
+    if (model.ready) remember(model, id) { model.restoreDraftOwner(savedOwner); true }
     val p = palette
     val conversation = model.conversations.firstOrNull { it.id == id }
     if (conversation == null) {

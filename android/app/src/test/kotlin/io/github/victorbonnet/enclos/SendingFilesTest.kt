@@ -197,7 +197,7 @@ class SendingFilesTest {
             try { file.outputStream().use { source.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
             finally { source.recycle() }
             val budget = PreparedBudget(80_000_000)
-            val prepared = prepareSendFile(context, android.net.Uri.fromFile(file), FileSource.Photos, null, 0, 1, budget)
+            val prepared = prepareSendFile(context, providerPick(file), FileSource.Photos, null, 0, 1, budget)
             // A new ARGB bitmap is transparent: a PNG source with transparency stays PNG, written again.
             assertEquals("image/png", prepared.mime)
             assertEquals("photo.png", prepared.name)

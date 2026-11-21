@@ -69,7 +69,7 @@ class FileImagesCapabilityTest {
             val pdf = File(dir, "notes.pdf").apply { writeText("%PDF-1.4\n%%EOF") }
             val gif = File(dir, "moving.gif").apply { writeBytes("GIF89a".toByteArray() + ByteArray(20)) }
             val before = PreparedBudget.process.used()
-            model.prepareFiles(c, listOf(png("pic.png"), pdf, gif).map(Uri::fromFile), FileSource.Files)
+            model.prepareFiles(c, listOf(png("pic.png"), pdf, gif).map(::providerPick), FileSource.Files)
             settle { model.outgoing.files.phase(key) == FilePhase.Draft }
             assertEquals(listOf("notes.pdf"), model.outgoing.files.draft(key).map { it.name })
             val error = model.outgoing.files[key].error.orEmpty()
@@ -84,7 +84,7 @@ class FileImagesCapabilityTest {
         withAgent(listOf("incoming_files")) { model, c, _ ->
             val key = FileKey(c.host, c.id)
             val before = PreparedBudget.process.used()
-            model.prepareFiles(c, listOf(Uri.fromFile(png("IMG_1.png"))), FileSource.Photos)
+            model.prepareFiles(c, listOf(providerPick(png("IMG_1.png"))), FileSource.Photos)
             settle { model.outgoing.files.phase(key) == FilePhase.Draft }
             assertTrue(model.outgoing.files.draft(key).isEmpty())
             assertTrue(model.outgoing.files[key].error.orEmpty().contains(NO_IMAGES))

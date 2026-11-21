@@ -1629,10 +1629,26 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * opened and left leaves nothing behind.
      */
     private val drafts = mutableSetOf<String>()
+    private val enteredDrafts = mutableSetOf<String>()
+
+    internal fun draftOwner(id: String): List<String>? = conversations.firstOrNull { it.id == id && id in drafts }
+        ?.let { listOf(it.host, it.agent, it.id) }
+
+    /** Saved screen owner only, never message bytes or picker grants. */
+    internal fun restoreDraftOwner(owner: List<String>?) {
+        if (!ready || owner == null || owner.size != 3) return
+        val (host, agent, id) = owner
+        val key = ConversationKey(host, id)
+        if (paired.none { it.name == host } || id in enteredDrafts || key in deletion.deleted || key in deletion.pending || conversations.any { it.id == id }) return
+        enteredDrafts += id
+        conversations.add(Conversation(host, agent, id))
+        drafts += id
+    }
 
     /** Starts a conversation with [agent], a draft until its first message; returns its id. */
     fun newConversation(agent: Agent): String {
         val id = UUID.randomUUID().toString()
+        enteredDrafts += id
         conversations.add(Conversation(agent.host, agent.name, id))
         drafts += id
         return id
@@ -1969,6 +1985,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         // The screen's captured Conversation may have been forgotten while a picker was open.
         // Saved ownership never authorizes recreating that stale destination.
         val target = owner?.let { saved -> conversations.firstOrNull { pickOwner(it) == saved } }
+        if (source == FileSource.Camera && picks.isNotEmpty()) {
+            val valid = capture != null && ownedCapture(getApplication(), capture.path) == capture &&
+                picks == listOf(android.net.Uri.fromFile(capture)) &&
+                !outgoing.files.captureOwnedElsewhere(FileKey((target ?: current).host, (target ?: current).id), capture)
+            if (!valid) {
+                outgoing.files.error(FileKey(current.host, current.id), PICK_UNMATCHED_PHOTO)
+                return
+            }
+        }
         capture?.let { outgoing.files.captured(it) }
         if (picks.isEmpty()) { capture?.delete(); return }
         if (target == null) {
@@ -2021,10 +2046,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             val parts = fileParts(send.id, send.files).iterator()
             // A receipt, a refusal or the connection's end settles it and cancels this job:
             // withContext then throws on return, so no further part or progress goes.
-            var ok = withContext(fileUpload) { connection.sendPaced(begin) }
+            var ok = withContext(fileUpload) { connection.sendPaced(begin) { ensureActive() } }
             var n = 0
             while (ok && state.uploading(key, send.id)) {
-                val went = withContext(fileUpload) { if (parts.hasNext()) connection.sendPaced(parts.next()) else null } ?: break
+                val went = withContext(fileUpload) { ensureActive(); if (parts.hasNext()) connection.sendPaced(parts.next()) { ensureActive() } else null } ?: break
                 ok = went
                 if (ok) state.progress(key, send.id, ++n * 100 / total)
             }
@@ -2035,6 +2060,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             // This operation only: the connection and other messages on it are not touched.
             state.timedOut(key, send.id)
         }
+        // Completion waits for withContext's worker to return, even after cancellation.
+        send.files.forEach { it.retainWorker() }
+        job.invokeOnCompletion { send.files.forEach { it.retireWorker() } }
         state.started(key, send.id, job)
         job.start()
         return null
@@ -2058,6 +2086,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val images = offersImages(c)
         // The draft cannot change while it prepares: new names stay distinct from its own.
         val taken = state.draft(key).map { it.name }
+        temporary?.let { CameraOriginals.retain(it) }
         val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             val self = coroutineContext[Job]!!
             // What was prepared and not handed to the draft yet. withContext may finish its
@@ -2079,11 +2108,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 state.preparationFailed(key, self, "These files could not be prepared.")
             } finally {
                 held?.let { state.discard(it.files) }
-                temporary?.delete()
                 state.preparationEnded(key, self)
             }
         }
-        if (!state.preparing(key, job)) { temporary?.delete(); return }
+        job.invokeOnCompletion { temporary?.let { it.delete(); CameraOriginals.release(it) } }
+        if (!state.preparing(key, job)) { job.cancel(); return }
         job.start()
     }
 
@@ -2346,6 +2375,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         saving.execute { taskCache.edit { clear() } }
         conversations.clear()
         // What was written goes too: its conversations are gone, and drafts do not come back.
+        CameraOriginals.sweep(getApplication<Application>())
         outgoing.clear()
         drafts.clear()
         groups.clear()

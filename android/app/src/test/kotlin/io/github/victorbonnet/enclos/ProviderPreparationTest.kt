@@ -29,11 +29,13 @@ class PreparationProvider : ContentProvider() {
     class Served(val file: File, val name: String?, val type: String?)
     companion object {
         const val AUTHORITY = "io.github.victorbonnet.enclos.test.documents"
+        var accesses = 0
         val served = mutableMapOf<String, Served>()
         fun uri(key: String): Uri = Uri.parse("content://$AUTHORITY/document/$key")
     }
     override fun onCreate() = true
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, args: Array<out String>?, sort: String?): Cursor {
+        accesses++
         val one = served.getValue(uri.lastPathSegment!!)
         return MatrixCursor(arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)).apply { addRow(arrayOf<Any?>(one.name, one.file.length())) }
     }
@@ -133,9 +135,9 @@ class ProviderPreparationTest {
 
     @Test fun later_selections_never_repeat_a_draft_name_and_each_file_has_one_owner() {
         val budget = PreparedBudget(80_000_000)
-        // Two camera photos, each taken alone, then a document named like them.
-        val first = prepare(listOf(serve("c1", jpeg(), null, "image/jpeg")), FileSource.Camera, budget)
-        val second = prepareSendFiles(context, listOf(serve("c2", jpeg(), null, "image/jpeg")), FileSource.Camera, budget,
+        // Two photos, each selected alone, then a document named like them.
+        val first = prepare(listOf(serve("c1", jpeg(), null, "image/jpeg")), FileSource.Photos, budget)
+        val second = prepareSendFiles(context, listOf(serve("c2", jpeg(), null, "image/jpeg")), FileSource.Photos, budget,
             taken = first.files.map { it.name })
         val third = prepareSendFiles(context, listOf(serve("d", jpeg(), "Photo.jpg", "image/jpeg")), FileSource.Files, budget,
             taken = (first.files + second.files).map { it.name })
@@ -161,7 +163,7 @@ class ProviderPreparationTest {
         val budget = PreparedBudget(80_000_000)
         val result = prepare(listOf(serve("photo", pngWithAlpha(), "sticker.bin", "application/octet-stream")), FileSource.Photos, budget)
         val photo = result.files.single()
-        assertEquals("sticker.png", photo.name)
+        assertEquals("photo.png", photo.name)
         assertEquals("image/png", photo.mime)
         val decoded = BitmapFactory.decodeByteArray(photo.bytes, 0, photo.bytes.size)
         try {
@@ -178,7 +180,7 @@ class ProviderPreparationTest {
         assertTrue("the sources carry the marker", String(jpeg, Charsets.ISO_8859_1).contains(marker))
         assertTrue(String(png, Charsets.ISO_8859_1).contains(marker))
         val result = prepare(listOf(serve("jpeg", jpeg, "IMG_1.jpg", "image/jpeg"), serve("png", png, "IMG_2.png", "image/png")), FileSource.Photos)
-        assertEquals(listOf("IMG_1.jpg", "IMG_2.png"), result.files.map { it.name })
+        assertEquals(listOf("photo.jpg", "photo.png"), result.files.map { it.name })
         for (f in result.files) {
             val text = String(f.bytes, Charsets.ISO_8859_1)
             assertFalse("${f.name}: no source metadata", text.contains(marker))
@@ -188,6 +190,22 @@ class ProviderPreparationTest {
     }
 
     // A 4x4 PNG whose first pixel is transparent.
+    @Test fun external_results_reject_private_files_and_own_authority_before_provider_access() {
+        val privateFile = File(dir, "private.txt").apply { writeText("private") }
+        val own = "${context.packageName}.files"
+        Robolectric.buildContentProvider(PreparationProvider::class.java).create(own)
+        PreparationProvider.served["secret"] = PreparationProvider.Served(privateFile, "private.txt", "text/plain")
+        val picks = listOf(Uri.fromFile(privateFile), Uri.parse("content://$own/document/secret"))
+        PreparationProvider.accesses = 0
+        for (source in listOf(FileSource.Files, FileSource.Photos)) {
+            val result = prepare(picks, source)
+            assertTrue(result.files.isEmpty())
+            assertEquals(2, result.refused.size)
+            assertEquals(0, PreparationProvider.accesses)
+            assertTrue(result.refused.none { it.contains("private") || it.contains(dir.path) })
+        }
+    }
+
     private fun pngWithAlpha(): ByteArray {
         val b = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888)
         b.eraseColor(Color.BLUE)
@@ -228,4 +246,11 @@ class ProviderPreparationTest {
         fun frame(index: Byte) = byteArrayOf(0x21, -7, 4, 0, 10, 0, 0, 0) + byteArrayOf(0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0) + byteArrayOf(2, 2, 0x44, index, 0)
         return header + loop + frame(1) + frame(1) + byteArrayOf(0x3B)
     }
+}
+
+internal fun providerPick(file: File): Uri {
+    org.robolectric.Robolectric.buildContentProvider(PreparationProvider::class.java).create(PreparationProvider.AUTHORITY)
+    val key = java.util.UUID.randomUUID().toString()
+    PreparationProvider.served[key] = PreparationProvider.Served(file, file.name, null)
+    return PreparationProvider.uri(key)
 }

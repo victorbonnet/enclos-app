@@ -73,6 +73,28 @@ internal fun ownedCapture(context: Context, path: String?): File? {
     return real.takeIf { it.parentFile == dir && real.name.endsWith(".jpg") && runCatching { UUID.fromString(name) }.isSuccess }
 }
 
+/** Camera originals being captured or read in this process, across live models. */
+internal object CameraOriginals {
+    private val users = mutableMapOf<File, Int>()
+    @Synchronized fun retain(file: File) { val path = file.canonicalFile; users[path] = (users[path] ?: 0) + 1 }
+    @Synchronized fun release(file: File) {
+        val path = file.canonicalFile
+        val count = users[path] ?: return
+        if (count == 1) users.remove(path) else users[path] = count - 1
+    }
+    @Synchronized fun sweep(context: Context) {
+        val dir = cameraDir(context)
+        if (java.nio.file.Files.isSymbolicLink(dir.toPath())) return
+        if (dir.canonicalFile.parentFile != context.cacheDir.canonicalFile) return
+        dir.listFiles()?.forEach { file ->
+            val name = file.name.removeSuffix(".jpg")
+            val uuid = runCatching { UUID.fromString(name).toString() }.getOrNull()
+            if (file.name == "$uuid.jpg" && file.isFile && !java.nio.file.Files.isSymbolicLink(file.toPath()) &&
+                file.canonicalFile.parentFile == dir.canonicalFile && file.canonicalFile !in users) file.delete()
+        }
+    }
+}
+
 /** Who asked for a picker's result, as saved state: host and conversation. */
 internal fun pickOwner(c: Conversation) = "${c.host}\n${c.id}"
 
@@ -94,6 +116,13 @@ internal fun FileComposer(model: AppModel, c: Conversation, composer: @Composabl
     var asked by rememberSaveable { mutableStateOf<String?>(null) }
     var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
     fun taken(): String? = asked.also { asked = null }
+    SideEffect {
+        val owner = model.conversations.firstOrNull { pickOwner(it) == asked }
+        if (owner != null) ownedCapture(context, cameraPath)?.let { file ->
+            val destination = FileKey(owner.host, owner.id)
+            if (state[destination].capture != file) state.capturing(destination, file)
+        }
+    }
     val remaining = (MAX_SEND_FILES - now.draft.size).coerceAtLeast(1)
 
     val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(maxOf(2, remaining))) {
@@ -120,6 +149,24 @@ internal fun FileComposer(model: AppModel, c: Conversation, composer: @Composabl
             }
         }
     }
+    fun launchCamera(owner: Conversation) {
+        val dir = cameraDir(context).apply { mkdirs() }
+        val file = File(dir, "${UUID.randomUUID()}.jpg")
+        // A capture of this composer whose result never came: its own, so it goes.
+        ownedCapture(context, cameraPath)?.let { state.captured(it); it.delete() }
+        cameraPath = file.path
+        state.capturing(FileKey(owner.host, owner.id), file)
+        runCatching { take.launch(FileProvider.getUriForFile(context, "${context.packageName}.files", file)) }
+            .onFailure { state.captured(file); file.delete(); cameraPath = null; asked = null; state.error(FileKey(owner.host, owner.id), "Camera unavailable.") }
+    }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val owner = model.conversations.firstOrNull { pickOwner(it) == asked }
+        if (granted && owner != null) launchCamera(owner)
+        else {
+            asked = null
+            owner?.let { state.error(FileKey(it.host, it.id), "Camera permission was not granted.") }
+        }
+    }
     val phase = now.phase
     // Keyed by each file itself: a removal or a new file never shows another's preview, even for a frame.
     val thumbnails = now.draft.map { file -> androidx.compose.runtime.key(file) { rememberThumbnail(file) } }
@@ -141,15 +188,11 @@ internal fun FileComposer(model: AppModel, c: Conversation, composer: @Composabl
             blocked = phase !is FilePhase.Draft,
             error = now.error, onRemove = { state.remove(key, it) },
             onCamera = {
-                val dir = cameraDir(context).apply { mkdirs() }
-                val file = File(dir, "${UUID.randomUUID()}.jpg")
-                // A capture of this composer whose result never came: its own, so it goes.
-                ownedCapture(context, cameraPath)?.let { state.captured(it); it.delete() }
                 asked = pickOwner(c)
-                cameraPath = file.path
-                state.capturing(key, file)
-                runCatching { take.launch(FileProvider.getUriForFile(context, "${context.packageName}.files", file)) }
-                    .onFailure { state.captured(file); file.delete(); cameraPath = null; asked = null; state.error(key, "Camera unavailable.") }
+                if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    launchCamera(c)
+                } else runCatching { permission.launch(android.Manifest.permission.CAMERA) }
+                    .onFailure { asked = null; state.error(key, "Camera unavailable.") }
             },
             onPhotos = {
                 asked = pickOwner(c)
@@ -343,8 +386,10 @@ internal fun prepareSendFiles(context: Context, picks: List<Uri>, source: FileSo
         picks.forEachIndexed { index, uri ->
             alive()
             // The camera's file is named by the app; it goes as a photo.
-            val shown = if (source == FileSource.Camera) "photo.jpg" else displayName(context, uri)
+            var shown: String? = if (source != FileSource.Files) "photo.jpg" else "a selected file"
             try {
+                validatePickUri(context, uri, source)
+                if (source == FileSource.Files) shown = displayName(context, uri)
                 files += prepareSendFile(context, uri, source, shown, index, picks.size, budget, alive, images) { distinct(it, seen) }
             } catch (e: java.util.concurrent.CancellationException) {
                 throw e
@@ -359,6 +404,13 @@ internal fun prepareSendFiles(context: Context, picks: List<Uri>, source: FileSo
         throw e
     }
     return PreparedFiles(files, refused)
+}
+
+internal fun validatePickUri(context: Context, uri: Uri, source: FileSource) {
+    val valid = if (source == FileSource.Camera) {
+        uri.scheme == "file" && ownedCapture(context, uri.path)?.let { Uri.fromFile(it) == uri } == true
+    } else uri.scheme == "content" && !uri.authority.isNullOrEmpty() && uri.authority != "${context.packageName}.files"
+    if (!valid) throw PrepareRefused("choose it again from the picker")
 }
 
 private fun displayName(context: Context, uri: Uri): String? =
@@ -399,6 +451,7 @@ private fun imageHead(input: InputStream): ImageHead {
 
 /** One pick prepared; [named] gives its final name once its bytes are read, just before its one [SendFile] is made. */
 internal fun prepareSendFile(context: Context, uri: Uri, source: FileSource, shown: String?, index: Int, count: Int, budget: PreparedBudget, alive: () -> Unit = {}, images: Boolean = true, named: (String) -> String = { it }): SendFile {
+    validatePickUri(context, uri, source)
     val resolver = context.contentResolver
     fun open(): InputStream = (if (uri.scheme == "file") File(requireNotNull(uri.path)).inputStream() else resolver.openInputStream(uri))
         ?: throw PrepareRefused("could not be opened")
@@ -420,8 +473,7 @@ internal fun prepareSendFile(context: Context, uri: Uri, source: FileSource, sho
     // A GIF's frames cannot be written again here without losing its animation, and its own
     // bytes may carry source details: refused rather than sent as it is.
     if (head == ImageHead.Gif) throw PrepareRefused(GIF_FROM_PHOTOS)
-    val base = shown?.substringBeforeLast('.')?.takeIf { validSendFileName("$it.jpg") }
-        ?: if (count == 1) "photo" else "photo-${index + 1}"
+    val base = "photo"
     alive()
     val decoder = when {
         uri.scheme == "file" -> ImageDecoder.createSource(File(requireNotNull(uri.path)))
