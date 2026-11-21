@@ -698,6 +698,106 @@ class HeldTaskClientTest {
         assertEquals("Wait for Tuesday", f.kept())
     }
 
+    @Test fun text_a_send_was_tried_with_stays_tried_when_used_again_after_a_reconnect() {
+        val f = answering()
+        f.client.edit(held, "Wait for Monday")
+        assertNotNull(f.client.answer(held, HeldTaskAnswer.Text("Wait for Monday")))
+        // The connection ends before the host confirms; the next one still lists it as held.
+        f.connected = false
+        f.client.ended("mac")
+        f.connected = true
+        f.client.authenticated("mac", answers = true)
+        f.client.merge(held)
+        f.client.synced("mac")
+        assertEquals("Checked: mac still lists it as waiting for you.", f.client.notes[held.key])
+        assertTrue(f.client.useEarlier(held))
+        assertEquals("Wait for Monday", f.client.draftFor(held))
+        // It may have reached the agent: not labelled as never sent.
+        assertTrue(f.client.draftAttempted(held))
+        assertEquals(1, f.sent.size)
+        // An edit is a new text, not sent yet.
+        f.client.edit(held, "Wait for Tuesday")
+        assertFalse(f.client.draftAttempted(held))
+        assertEquals(1, f.sent.size)
+    }
+
+    @Test fun text_a_send_was_tried_with_stays_tried_when_used_again_after_the_request_changed() {
+        val f = answering()
+        f.client.edit(held, "Wait for Monday")
+        val id = f.client.answer(held, HeldTaskAnswer.Text("Wait for Monday"))!!
+        f.client.received("mac", f.error(id, "conflict"))
+        val newer = held.copy(revision = 4, reason = "Asked again")
+        f.client.merge(newer)
+        f.client.synced("mac")
+        assertEquals(HeldTaskEarlier("Wait for Monday", HeldTaskEarlierReason.RequestChanged), f.client.earlier(newer))
+        assertTrue(f.client.useEarlier(newer))
+        assertEquals("Wait for Monday", f.client.draftFor(newer))
+        assertTrue(f.client.draftAttempted(newer))
+        assertEquals(1, f.sent.size)
+    }
+
+    @Test fun the_same_text_kept_once_stays_tried_if_a_send_was_tried_with_it() {
+        val f = answering()
+        f.client.edit(held, "Wait for Monday")
+        assertNotNull(f.client.answer(held, HeldTaskAnswer.Text("Wait for Monday")))
+        f.connected = false; f.client.ended("mac")
+        f.connected = true; f.client.authenticated("mac", answers = true); f.client.synced("mac")
+        // The person types the same words again, and the connection changes again before Send.
+        f.client.edit(held, "Wait for Monday")
+        assertFalse(f.client.draftAttempted(held))
+        f.client.authenticated("mac", answers = true); f.client.synced("mac")
+        assertTrue(f.client.useEarlier(held))
+        assertNull(f.client.earlier(held))
+        assertTrue(f.client.draftAttempted(held))
+        assertEquals(1, f.sent.size)
+    }
+
+    @Test fun a_late_result_after_the_connection_ended_clears_no_text() {
+        val f = answering()
+        f.client.edit(held, "Wait for Monday")
+        val id = f.client.answer(held, HeldTaskAnswer.Text("Wait for Monday"))!!
+        f.connected = false; f.client.ended("mac")
+        f.client.received("mac", frame("held_task.result", held.copy(stateWire = "answered", revision = 4, answer = "Wait for Monday"), id))
+        assertEquals("Wait for Monday", f.kept(held.copy(stateWire = "answered", revision = 4, answer = "Wait for Monday")))
+        assertEquals(1, f.sent.size)
+    }
+
+    @Test fun another_agent_with_the_same_host_and_task_never_gets_the_text() {
+        val sent = mutableListOf<HeldTaskRequest>()
+        val client = HeldTaskClient(send = { sent += it; true }, connected = { true }, accepts = { true }, changed = {}, later = { _, _ -> })
+        val other = held.copy(agent = "lab/other", conversation = "home.lab.other")
+        client.authenticated("mac", answers = true)
+        listOf(held, other).forEach { client.merge(it) }
+        client.synced("mac")
+        client.edit(held, "For main only")
+        assertEquals("", client.draftFor(other)); assertNull(client.earlier(other))
+        assertFalse(client.useEarlier(other))
+        assertEquals("For main only", client.draftFor(held))
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test fun a_newer_card_of_the_task_in_another_conversation_keeps_the_text_apart() {
+        val sent = mutableListOf<HeldTaskRequest>()
+        val client = HeldTaskClient(send = { sent += it; true }, connected = { true }, accepts = { true }, changed = {}, later = { _, _ -> })
+        client.authenticated("mac", answers = true); client.merge(held); client.synced("mac")
+        client.edit(held, "For home only")
+        val moved = held.copy(conversation = "other.conv", revision = 4)
+        client.merge(moved)
+        assertEquals(moved, client.cards[held.key])
+        // Not in Your answer: shown apart, for the person to review.
+        assertEquals("", client.draftFor(moved))
+        assertEquals(HeldTaskEarlier("For home only", HeldTaskEarlierReason.RequestChanged), client.earlier(moved))
+        // The card shown before is neither typed into nor answered.
+        client.edit(held, "x")
+        assertEquals("", client.draftFor(moved))
+        assertNull(client.answer(held, HeldTaskAnswer.Text("For home only")))
+        assertTrue(sent.isEmpty())
+        // Only the person's Use puts it in Your answer; it sends nothing.
+        assertTrue(client.useEarlier(moved))
+        assertEquals("For home only", client.draftFor(moved))
+        assertTrue(sent.isEmpty())
+    }
+
     @Test fun forgetting_the_home_or_the_host_drops_the_text_and_a_new_client_has_none() {
         val newer = held.copy(revision = 4)
         fun typed(): Fixture = answering().apply {

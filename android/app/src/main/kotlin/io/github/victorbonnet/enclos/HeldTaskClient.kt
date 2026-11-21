@@ -23,9 +23,13 @@ data class HeldTaskRequest(val id: String, val card: HeldTask, val answer: HeldT
 /**
  * A typed answer this app keeps, in memory only, for the Needs you sheet (docs/spec.md, Held
  * tasks): its [text], the [card] it was typed for, the host's connection [generation] then, its
- * [version], and the version a send was tried with ([attempted]), if any.
+ * [version], and the version a send was tried with ([attempted]), if any. [tried] when a send
+ * was tried with this very text: set by the send, kept when the text moves apart as earlier text
+ * and is used again, and gone with the person's next edit, a new version.
  */
-data class HeldTaskDraft(val text: String, val card: HeldTask, val generation: Long, val version: Long, val attempted: Long? = null)
+data class HeldTaskDraft(val text: String, val card: HeldTask, val generation: Long, val version: Long, val attempted: Long? = null) {
+    val tried: Boolean get() = attempted == version
+}
 
 /** Why kept text no longer belongs to the current request. */
 enum class HeldTaskEarlierReason { RequestChanged, ConnectionChanged }
@@ -117,9 +121,13 @@ class HeldTaskClient(
      */
     fun draftFor(card: HeldTask): String = drafts[card.key]?.takeIf { attached(it, card) }?.text.orEmpty()
 
-    /** Whether a send was tried with the text in **Your answer** for [card], as it reads now. */
+    /**
+     * Whether a send was tried with the text in **Your answer** for [card], as it reads now: by
+     * this field, or before the text was used again from earlier text. Its outcome may not be
+     * known, so it is never "not sent" until the person edits it.
+     */
     fun draftAttempted(card: HeldTask): Boolean =
-        drafts[card.key]?.takeIf { attached(it, card) }?.let { it.attempted == it.version } == true
+        drafts[card.key]?.takeIf { attached(it, card) }?.tried == true
 
     /**
      * The person typed [text] into **Your answer** for [card], the current card: kept for this
@@ -141,14 +149,17 @@ class HeldTaskClient(
 
     /**
      * Puts the earlier text of [card] into its empty **Your answer**, only while [card] is the
-     * current card and can be answered now; sends nothing. Whether it did.
+     * current card and can be answered now; sends nothing. Whether it did. Text a send was tried
+     * with stays [HeldTaskDraft.tried], under a new version: a late result of that send never
+     * clears it.
      */
     fun useEarlier(card: HeldTask): Boolean {
         if (cards[card.key] != card || !canAnswer(card) || draftFor(card).isNotEmpty()) return false
         val list = earlierTexts[card.key] ?: return false
         val used = list.lastOrNull() ?: return false
         setEarlier(card.key, list.dropLast(1))
-        drafts[card.key] = HeldTaskDraft(used.text, card, generationOf(card.host), ++lastVersion)
+        val version = ++lastVersion
+        drafts[card.key] = HeldTaskDraft(used.text, card, generationOf(card.host), version, attempted = version.takeIf { used.tried })
         return true
     }
 
@@ -162,10 +173,15 @@ class HeldTaskClient(
     private fun attached(draft: HeldTaskDraft, card: HeldTask): Boolean =
         draft.card == card && cards[card.key] == card && draft.generation == generationOf(card.host)
 
-    /** Moves [draft] apart, as earlier text; the same text kept twice is kept once. */
+    /**
+     * Moves [draft] apart, as earlier text; the same text kept twice is kept once, still
+     * [HeldTaskDraft.tried] if a send was tried with either.
+     */
     private fun keepEarlier(key: HeldTaskKey, draft: HeldTaskDraft) {
         if (drafts[key] == draft) drafts.remove(key)
-        setEarlier(key, earlierTexts[key].orEmpty().filter { it.text != draft.text } + draft)
+        val (same, others) = earlierTexts[key].orEmpty().partition { it.text == draft.text }
+        val kept = if (!draft.tried && same.any { it.tried }) draft.copy(attempted = draft.version) else draft
+        setEarlier(key, others + kept)
     }
 
     private fun setEarlier(key: HeldTaskKey, list: List<HeldTaskDraft>) {
