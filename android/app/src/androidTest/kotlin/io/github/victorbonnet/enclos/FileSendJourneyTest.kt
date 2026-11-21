@@ -31,8 +31,8 @@ class FileSendJourneyTest {
     @org.junit.After fun removeSelectedProviderFiles() { NativeFixtureProvider.clear() }
     @Suppress("UNCHECKED_CAST")
     private fun <T> field(model: AppModel, name: String): T = AppModel::class.java.getDeclaredField(name).apply { isAccessible = true }.get(model) as T
-    private fun until(why: String, condition: () -> Boolean) {
-        val end = SystemClock.uptimeMillis() + 10_000
+    private fun until(why: String, deadlineMs: Long = 10_000, condition: () -> Boolean) {
+        val end = SystemClock.uptimeMillis() + deadlineMs
         while (SystemClock.uptimeMillis() < end) { if (condition()) return; SystemClock.sleep(50) }
         fail(why)
     }
@@ -189,8 +189,8 @@ class FileSendJourneyTest {
                 runner.runOnMainSync { activity!!.recreate() }
                 SystemClock.sleep(1200)
             }
-            fun cameraControl(vararg labels: String) {
-                until("Missing real camera control: ${labels.toList()}") {
+            fun cameraControl(vararg labels: String, deadlineMs: Long = 10_000) {
+                until("Missing real camera control: ${labels.toList()}", deadlineMs) {
                     tree().firstOrNull { node ->
                         val words = listOf(node.contentDescription?.toString(), node.text?.toString(), node.viewIdResourceName?.substringAfterLast('/'))
                         words.any { word -> labels.any { it.equals(word, ignoreCase = true) } }
@@ -198,7 +198,8 @@ class FileSendJourneyTest {
                 }
             }
             cameraControl("Shutter", "Take picture", "shutter_button")
-            cameraControl("Done", "OK", "Accept", "Review done", "done_button", "review_done")
+            // The external emulator camera can take over 10 s between Shutter and its review screen.
+            cameraControl("Done", "OK", "Accept", "Review done", "done_button", "review_done", deadlineMs = 30_000)
             until("accepted camera result did not complete in original conversation") {
                 var complete = false
                 runner.runOnMainSync {
