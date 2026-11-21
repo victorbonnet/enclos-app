@@ -3,4 +3,5 @@
      messages it fetched into its cache, and nothing else of its data. -->
 <paths>
     <cache-path name="attachments" path="attachments/" />
+    <cache-path name="camera" path="outgoing-camera/" />
 </paths>

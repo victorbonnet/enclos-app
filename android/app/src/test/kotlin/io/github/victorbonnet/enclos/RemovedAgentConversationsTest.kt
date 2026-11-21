@@ -6,6 +6,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RemovedAgentConversationsTest {
+    @Test fun retained_original_does_not_override_confirmed_removal() {
+        val c = Conversation("h", "box/agent", "c")
+        assertFalse(listedWith(c, emptyList(), emptyList(), confirmedRemoved = true, retainedOriginal = true))
+        assertTrue(listedWith(c, emptyList(), emptyList(), retainedOriginal = true))
+        assertFalse(listedWith(c, emptyList(), emptyList()))
+    }
+
     private val main = Agent("mac", "lab/main", "hermes", emptyList())
     private val coder = Agent("mac", "lab/coder", "hermes", emptyList())
     private val director = Agent("mac", "lab/director", "hermes", emptyList())

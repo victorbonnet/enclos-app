@@ -1474,6 +1474,9 @@ internal fun TaskLineItem(
 /** One conversation with one agent: messages both ways, and what the agent sent on its own. */
 @Composable
 fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
+    val savedOwner = rememberSaveable(id) { ArrayList(model.draftOwner(id).orEmpty()) }
+    // Restore once on entry to this model, before mounting the result launchers.
+    if (model.ready) remember(model, id) { model.restoreDraftOwner(savedOwner); true }
     val p = palette
     val conversation = model.conversations.firstOrNull { it.id == id }
     if (conversation == null) {
@@ -1730,6 +1733,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         // that could not go (too long) stays, saying why.
         val notSent = model.outgoing.notSent[id]?.let { "Not sent: $it." }
         val away = if (live) null else "Not connected to ${conversation.host}: send once it's back."
+        FileComposer(model, conversation) { attach, filesReady ->
         Composer(
             draft,
             {
@@ -1737,13 +1741,16 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                 model.outgoing.write(id, it)
             },
             if (conversation.group) "Message the group, @ to address" else "Message $agent",
-            canSend = live,
+            canSend = live && filesReady,
+            hasFiles = model.outgoing.files.draft(FileKey(conversation.host, id)).isNotEmpty(),
+            attachment = attach,
             notice = listOfNotNull(unsent, notSent, model.outgoing.notes[id], away).joinToString(" ").ifEmpty { null },
         ) {
             // Cleared once handed to the connection; else it stays, to send again.
             unsent = model.send(conversation, draft.trim())
             // What the person just sent shows, wherever they had scrolled.
             if (unsent == null) atNewest = true
+        }
         }
     }
 }

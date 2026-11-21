@@ -14,6 +14,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import io.github.victorbonnet.enclos.core.authSignatureMessage
 import io.github.victorbonnet.enclos.core.decodeBytes
 import io.github.victorbonnet.enclos.core.encodeBytes
@@ -253,9 +262,9 @@ internal fun previewOf(lines: List<Line>): Line? = lines.lastOrNull { !it.quiet 
 internal fun lastSpoke(lines: List<Line>): Long? = lines.lastOrNull { it.from == "agent" && !it.quiet }?.time?.takeIf { it > 0 }
 
 /** Missing channels keep their history visible; only a host-confirmed removal can hide it. */
-internal fun listedWith(conversation: Conversation, lines: List<Line>, agents: List<Agent>, confirmedRemoved: Boolean = false): Boolean {
+internal fun listedWith(conversation: Conversation, lines: List<Line>, agents: List<Agent>, confirmedRemoved: Boolean = false, retainedOriginal: Boolean = false): Boolean {
     if (conversation.group) return true
-    return (conversation.home || lines.isNotEmpty()) &&
+    return (conversation.home || lines.isNotEmpty() || retainedOriginal) &&
         (!confirmedRemoved || agents.any { it.host == conversation.host && it.name == conversation.agent })
 }
 
@@ -1450,7 +1459,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     save { conversation(started) }
                 }
                 // The person's own, as the bridge stored it: sent.
-                if (line.from != "agent") outgoing.shown(id, line.text)
+                if (line.from != "agent") {
+                    outgoing.shown(id, line.text, host.name, hasAttachments = line.attachments.isNotEmpty())
+                }
                 if (line.from == "agent") {
                     val agent = m.getString("agent")
                     // Only a reply answers the person; any other kind (notify,
@@ -1527,6 +1538,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             }
             "ack" -> {
                 val request = m.optString("of")
+                outgoing.files.acknowledged(host.name, request)
                 val archive = archiveRequests[request]?.takeIf { it.host == host.name }
                 if (archive != null) {
                     // The bridge sends canonical metadata directly before this ack.
@@ -1564,6 +1576,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                     return
                 }
                 if (agentImages.failure(m.optString("of"), m.optString("message"))) return
+                // A message with files, by its id, before or after its receipt: final for a
+                // refusal the bridge names, else of unknown delivery.
+                if (outgoing.files.refused(host.name, m.optString("of"), m.optString("code"), bridgeReason(m.optString("message")))) return
                 val policyAddress = policyRequests.remove(m.optString("of"))
                 if (policyAddress != null) {
                     policyBusy.remove(policyAddress)
@@ -1614,10 +1629,26 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * opened and left leaves nothing behind.
      */
     private val drafts = mutableSetOf<String>()
+    private val enteredDrafts = mutableSetOf<String>()
+
+    internal fun draftOwner(id: String): List<String>? = conversations.firstOrNull { it.id == id && id in drafts }
+        ?.let { listOf(it.host, it.agent, it.id) }
+
+    /** Saved screen owner only, never message bytes or picker grants. */
+    internal fun restoreDraftOwner(owner: List<String>?) {
+        if (!ready || owner == null || owner.size != 3) return
+        val (host, agent, id) = owner
+        val key = ConversationKey(host, id)
+        if (paired.none { it.name == host } || id in enteredDrafts || key in deletion.deleted || key in deletion.pending || conversations.any { it.id == id }) return
+        enteredDrafts += id
+        conversations.add(Conversation(host, agent, id))
+        drafts += id
+    }
 
     /** Starts a conversation with [agent], a draft until its first message; returns its id. */
     fun newConversation(agent: Agent): String {
         val id = UUID.randomUUID().toString()
+        enteredDrafts += id
         conversations.add(Conversation(agent.host, agent.name, id))
         drafts += id
         return id
@@ -1627,13 +1658,18 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun left(conversation: String) {
         outgoing.leave(conversation)
         if (conversation !in drafts || !lines[conversation].isNullOrEmpty()) return
+        // An initiated file send owns this conversation even before its first echo,
+        // including an unknown outcome awaiting an explicit retry or discard.
+        if (outgoing.files.owns(conversation)) return
+        outgoing.forget(setOf(conversation))
         drafts -= conversation
         conversations.removeAll { it.id == conversation }
     }
 
     /** Whether the inbox lists [conversation] with its host's current removal confirmation. */
     fun listed(conversation: Conversation) = listedWith(conversation, lines[conversation.id].orEmpty(), agents,
-        forgetting.isRemoved(AgentKey(conversation.host, conversation.agent)))
+        forgetting.isRemoved(AgentKey(conversation.host, conversation.agent)),
+        outgoing.files.owns(conversation.id))
 
     /** Who a status line of [conversation] is from: its agent's runtime, else the agent. */
     fun statusSource(conversation: Conversation): String =
@@ -1681,6 +1717,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Drops [id] if it is still a draft (no message sent): a new conversation's screen left, or its agent changed. */
     fun dropDraft(id: String) {
         if (!drafts.remove(id)) return
+        outgoing.forget(listOf(id))
         conversations.removeAll { it.id == id }
     }
 
@@ -1921,7 +1958,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Buttons send exactly their label and keep any text already in the composer's draft. */
     fun sendSuggested(conversation: Conversation, line: Line, reply: String): String? {
-        return outgoing.sendSuggested(conversation.id, line, reply, lines[conversation.id].orEmpty()) { send(conversation, it) }
+        return outgoing.sendSuggested(conversation.id, line, reply, lines[conversation.id].orEmpty()) { send(conversation, it, includeFiles = false) }
     }
 
     /**
@@ -1931,9 +1968,158 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * bridge refuse it, before the bridge shows it back, it comes back to the
      * field ([Outgoing]).
      */
-    fun send(conversation: Conversation, text: String): String? {
+    internal fun offersFiles(c: Conversation) = fileSendAvailable(c.group, hostSupports(c.host, "message.begin"),
+        agents.any { it.host == c.host && it.name == c.agent && "incoming_files" in it.capabilities })
+
+    /** Whether [c]'s agent takes images too (`incoming_images`, which needs `incoming_files`); without it, documents only. */
+    internal fun offersImages(c: Conversation) = offersFiles(c) &&
+        agents.any { it.host == c.host && it.name == c.agent && "incoming_images" in it.capabilities }
+
+    /**
+     * A picker's result, for the conversation that asked ([owner], saved
+     * state: [pickOwner]), whichever is shown now ([current]). One whose
+     * owner was lost, or is gone, is not put in another: [current] says so,
+     * to choose again, and a camera [capture] is deleted.
+     */
+    internal fun pickedFiles(owner: String?, current: Conversation, picks: List<android.net.Uri>, source: FileSource, capture: java.io.File? = null) {
+        // The screen's captured Conversation may have been forgotten while a picker was open.
+        // Saved ownership never authorizes recreating that stale destination.
+        val target = owner?.let { saved -> conversations.firstOrNull { pickOwner(it) == saved } }
+        if (source == FileSource.Camera && picks.isNotEmpty()) {
+            val valid = capture != null && ownedCapture(getApplication(), capture.path) == capture &&
+                picks == listOf(android.net.Uri.fromFile(capture)) &&
+                !outgoing.files.captureOwnedElsewhere(FileKey((target ?: current).host, (target ?: current).id), capture)
+            if (!valid) {
+                outgoing.files.error(FileKey(current.host, current.id), PICK_UNMATCHED_PHOTO)
+                return
+            }
+        }
+        capture?.let { outgoing.files.captured(it) }
+        if (picks.isEmpty()) { capture?.delete(); return }
+        if (target == null) {
+            capture?.delete()
+            outgoing.files.error(FileKey(current.host, current.id), if (source == FileSource.Camera) PICK_UNMATCHED_PHOTO else PICK_UNMATCHED)
+            return
+        }
+        prepareFiles(target, picks, source, capture)
+    }
+
+
+    /** How long a message with files waits for its receipt before its delivery is unknown. */
+    internal var fileReceiptMs = 60_000L
+
+    /**
+     * Sends [c]'s draft files with [text] as one operation, or its unknown
+     * original again ([retry]), same id, from byte zero. Its job lives in
+     * the ViewModel's scope: leaving the screen or rotating keeps it.
+     */
+    private fun sendFiles(c: Conversation, text: String, retry: Boolean = false): String? {
+        val state = outgoing.files
+        val key = FileKey(c.host, c.id)
+        if (!offersFiles(c) || !connected(c.host)) return "Files are unavailable for this agent."
+        if (state.busy(c.host)) return "Wait for the current message."
+        val send = (if (retry) state.retry(key) else state.begin(key, text))
+            ?: return if (retry) "No original message to retry." else "Retry or discard the original file message first."
+        fun notBegun(why: String): String { state.notBegun(key, send, why, retry); return why }
+        // Checked again as it goes, a retry included: the agent may have stopped taking images since.
+        val images = send.files.filter { it.mime.startsWith("image/") }.map { safeFileName(it.name) }
+        if (images.isNotEmpty() && !offersImages(c)) return notBegun(
+            if (retry) "This agent does not take images now (${images.joinToString()}): discard the original, or retry once it does."
+            else "This agent does not take images now: remove ${images.joinToString()} to send the rest.")
+        if (send.files.size !in 1..MAX_SEND_FILES || send.files.any { !validSendFile(it.name, it.mime, it.bytes.size) }) return notBegun("Invalid files.")
+        val begin = message("message.begin", "conversation" to c.id, "text" to send.text,
+            "files" to send.files.map { it.declaration() }).put("id", send.id)
+        if (!fits(begin)) return notBegun("Message is too long.")
+        val connection = connections[c.host] ?: return notBegun("Not connected.")
+        if (c.id in drafts) {
+            for (frame in firstSent(c, true, send.text).dropLast(1)) {
+                if (!connection.send(message(frame.type, *frame.fields.toTypedArray()))) return notBegun("Not connected.")
+            }
+        }
+        // The words now belong to the operation, shown with it until it settles.
+        if (!retry) outgoing.write(c.id, "")
+        said.remove(c.host)
+        val total = partCount(send.files)
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            val parts = fileParts(send.id, send.files).iterator()
+            // A receipt, a refusal or the connection's end settles it and cancels this job:
+            // withContext then throws on return, so no further part or progress goes.
+            var ok = withContext(connection.fileUpload) { connection.sendPaced(begin) { ensureActive() } }
+            var n = 0
+            while (ok && state.uploading(key, send.id)) {
+                val went = withContext(connection.fileUpload) { ensureActive(); if (parts.hasNext()) connection.sendPaced(parts.next()) { ensureActive() } else null } ?: break
+                ok = went
+                if (ok) state.progress(key, send.id, ++n * 100 / total)
+            }
+            if (!state.uploading(key, send.id)) return@launch
+            if (!ok) { state.interrupted(key, send.id); return@launch }
+            state.transmitted(key, send.id)
+            delay(fileReceiptMs)
+            // This operation only: the connection and other messages on it are not touched.
+            state.timedOut(key, send.id)
+        }
+        // Completion waits for withContext's worker to return, even after cancellation.
+        send.files.forEach { it.retainWorker() }
+        job.invokeOnCompletion { send.files.forEach { it.retireWorker() } }
+        state.started(key, send.id, job)
+        job.start()
+        return null
+    }
+
+    internal fun retryFiles(c: Conversation): String? = sendFiles(c, "", retry = true)
+
+    /**
+     * Prepares [picks] from [source] for [c]'s draft, off the main thread,
+     * reserving their bytes in the process-wide budget as they are read.
+     * Each one refused is named; the others join the draft.
+     */
+    internal fun prepareFiles(c: Conversation, picks: List<android.net.Uri>, source: FileSource, temporary: java.io.File? = null) {
+        val state = outgoing.files
+        val key = FileKey(c.host, c.id)
+        if (picks.isEmpty()) { temporary?.delete(); return }
+        if (state.phase(key) != FilePhase.Draft) { temporary?.delete(); state.error(key, "Wait for the current message."); return }
+        if (state.draft(key).size + picks.size > MAX_SEND_FILES) { temporary?.delete(); state.error(key, "Choose at most four files."); return }
+        val context = getApplication<Application>()
+        // Images only for an agent that takes them; each one refused by name otherwise.
+        val images = offersImages(c)
+        // The draft cannot change while it prepares: new names stay distinct from its own.
+        val taken = state.draft(key).map { it.name }
+        temporary?.let { CameraOriginals.retain(it) }
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            val self = coroutineContext[Job]!!
+            // What was prepared and not handed to the draft yet. withContext may finish its
+            // block and still throw on return when this job was cancelled meanwhile, so the
+            // result is held outside it and released in finally unless the draft took it.
+            var held: PreparedFiles? = null
+            try {
+                withContext(Dispatchers.IO) {
+                    // Each read checks for cancellation: a cancelled preparation stops at once
+                    // and releases what it had reserved (prepareSendFiles).
+                    held = prepareSendFiles(context, picks, source, images = images, taken = taken, alive = { ensureActive() })
+                }
+                val result = held ?: return@launch
+                held = null
+                state.prepared(key, self, result.files, result.refused)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                state.preparationFailed(key, self, "These files could not be prepared.")
+            } finally {
+                held?.let { state.discard(it.files) }
+                state.preparationEnded(key, self)
+            }
+        }
+        job.invokeOnCompletion { temporary?.let { it.delete(); CameraOriginals.release(it) } }
+        if (!state.preparing(key, job)) { job.cancel(); return }
+        job.start()
+    }
+
+    fun send(conversation: Conversation, text: String, includeFiles: Boolean = true): String? {
+        val fileKey = FileKey(conversation.host, conversation.id)
+        if (includeFiles && outgoing.files.phase(fileKey) is FilePhase.Preparing) return "Wait for file preparation."
         if (ConversationKey(conversation.host, conversation.id) in deletion.pending) return "This conversation is being deleted."
         if (ConversationKey(conversation.host, conversation.id) in deletion.deleted) return "This conversation was deleted."
+        if (includeFiles && outgoing.files.draft(fileKey).isNotEmpty()) return sendFiles(conversation, text)
         said.remove(conversation.host)
         // A draft becomes a conversation on the bridge with its first message
         // ([firstSent]); it stays a draft until the bridge sends it back, so a
@@ -2122,6 +2308,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val ids = conversations.filter { it.host == name }.map { it.id }.toSet()
         val attached = ids.flatMap { lines[it].orEmpty() }.flatMap { it.attachments }
         unreadable.remove(name)
+        outgoing.files.forgetHost(name)
         outgoing.forget(ids)
         drafts -= ids
         ids.forEach {
@@ -2186,6 +2373,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         saving.execute { taskCache.edit { clear() } }
         conversations.clear()
         // What was written goes too: its conversations are gone, and drafts do not come back.
+        CameraOriginals.sweep(getApplication<Application>())
         outgoing.clear()
         drafts.clear()
         groups.clear()
@@ -2254,6 +2442,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         taskDetails.forget(host)
         saving.execute { taskCache.edit { taskCache.all.keys.filter { it.startsWith("$host/") }.forEach { remove(it) } } }
         val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
+        outgoing.files.forgetHost(host)
+        outgoing.forget(ids)
         conversations.removeAll { it.host == host }
         ids.forEach { lines.remove(it) }
         ids.forEach { usage.remove(it); turnUsage.remove(it) }
@@ -2270,6 +2460,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        outgoing.clear(closing = true)
+        main.removeCallbacksAndMessages(null)
         PushTokens.changed = null
         agentImages.close()
         connections.values.forEach { it.close() }
