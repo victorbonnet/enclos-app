@@ -330,12 +330,14 @@ private fun Screens(model: AppModel, ask: Ask) {
         }
     }
     // A conversation the phone does not hold, once what it kept is read: a
-    // draft lost when the system stopped the app, or one forgotten or
+    // draft whose saved owner was lost, or one forgotten or
     // cleared while open. Back to where it was opened from (the tabs, or its
     // policy request) rather than a blank screen.
     val showing = routes.targetState
     val missing = showing is Route.Chat && model.ready && model.conversations.none { it.id == showing.id }
-    LaunchedEffect(missing) { if (missing) go(showing.up) }
+    LaunchedEffect(missing) {
+        if (missing && model.conversations.none { it.id == showing.id }) go(showing.up)
+    }
 
     // A pairing link opened the app: to the pairing screen, which asks.
     val opened = model.openedLink.value

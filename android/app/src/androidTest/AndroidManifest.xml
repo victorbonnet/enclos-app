@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Exported only from the test APK so the target can read synthetic fixtures. -->
+        <provider android:name="io.github.victorbonnet.enclos.NativeFixtureProvider"
+            android:authorities="io.github.victorbonnet.enclos.test.nativefixtures"
+            android:exported="true" />
+    </application>
+</manifest>
