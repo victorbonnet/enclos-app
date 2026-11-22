@@ -150,14 +150,40 @@ private const val ON_ITS_OWN = "on its own"
  * then its rows, each ending with a hairline of its own.
  */
 @Composable
-internal fun Section(title: String, content: @Composable () -> Unit) {
+internal fun Section(title: String, count: String? = null, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
-        Text(
-            title.uppercase(),
-            style = Type.meta.copy(letterSpacing = 0.08.em),
-            color = palette.textFaint,
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 8.dp).semantics { heading() },
-        )
+        if (count == null) {
+            Text(
+                title.uppercase(),
+                style = Type.meta.copy(letterSpacing = 0.08.em),
+                color = palette.textFaint,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 8.dp).semantics { heading() },
+            )
+        } else {
+            Row(
+                Modifier.fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 8.dp)
+                    .semantics(mergeDescendants = true) { heading() },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    title.uppercase(),
+                    style = Type.meta.copy(letterSpacing = 0.08.em),
+                    color = palette.textFaint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    count,
+                    style = Type.meta,
+                    color = palette.textFaint,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+        }
         Hairline()
         content()
     }
@@ -884,9 +910,9 @@ private fun ColumnScope.Empty(title: String, text: String, action: String? = nul
     }
 }
 
-/** The inbox's search: agents, names and what was said. */
+/** A search field: icon, single-line input, and clear control while there is text. */
 @Composable
-private fun SearchField(query: String, onQuery: (String) -> Unit) {
+internal fun SearchField(query: String, onQuery: (String) -> Unit, label: String = "Search conversations", modifier: Modifier = Modifier) {
     val p = palette
     BasicTextField(
         value = query,
@@ -894,8 +920,8 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
         singleLine = true,
         textStyle = Type.message.copy(color = p.text),
         cursorBrush = SolidColor(p.accent),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp)
-            .semantics { contentDescription = "Search conversations" },
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp)
+            .semantics { contentDescription = label },
         decorationBox = { field ->
             Row(
                 Modifier.fillMaxWidth().height(44.dp).clip(Shapes.control).background(p.surface).padding(start = 12.dp),
@@ -904,7 +930,7 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
             ) {
                 Glyph(Glyphs.search, p.textFaint, size = 20.dp)
                 Box(Modifier.weight(1f)) {
-                    if (query.isEmpty()) Text("Search conversations", style = Type.message, color = p.textFaint)
+                    if (query.isEmpty()) Text(label, style = Type.message, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     field()
                 }
                 AnimatedVisibility(query.isNotEmpty(), enter = fadeIn(Motion.enter(Motion.SHORT)), exit = fadeOut(Motion.exit())) {
