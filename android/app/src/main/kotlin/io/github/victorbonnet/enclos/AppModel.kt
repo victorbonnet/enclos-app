@@ -168,13 +168,20 @@ fun acceptsConversationMetadata(current: Conversation?, incoming: Conversation):
     incoming.revision >= 0 && (current == null || (current.host == incoming.host && current.id == incoming.id && incoming.revision >= current.revision))
 
 /**
+ * The row the phone keeps for [id] when [host]'s conversation with that id is left out:
+ * another host's conversation. `null` when no other host has it.
+ */
+fun heldByAnotherHostRow(conversations: List<Conversation>, host: String, id: String): Conversation? =
+    conversations.firstOrNull { it.id == id && it.host != host }
+
+/**
  * Whether conversation [id] is kept for a host other than [host]. The phone keys conversations,
  * their messages and its cache by id alone, and a Home's id (`home.<sandbox>.<agent>`) is the
  * same on two hosts with the same sandbox and agent names: the second host's is refused rather
  * than mixed into the first's.
  */
 fun heldByAnotherHost(conversations: List<Conversation>, host: String, id: String): Boolean =
-    conversations.any { it.id == id && it.host != host }
+    heldByAnotherHostRow(conversations, host, id) != null
 
 /** The messages whose `conversation` names what this phone keeps by that id: the conversation, its lines, typing, steps, usage, a group's state. */
 val conversationScoped = setOf("conversation", "message", "group.state", "typing", "tool", "usage")
@@ -186,6 +193,56 @@ val conversationScoped = setOf("conversation", "message", "group.state", "typing
  */
 fun leftOutForClash(conversations: List<Conversation>, host: String, type: String, id: String?): Boolean =
     type in conversationScoped && id != null && heldByAnotherHost(conversations, host, id)
+
+/**
+ * One other host and what of this host it holds: how many of this host's conversations are left
+ * out because it has them, and the agents (`sandbox/agent`) those conversations belong to, in the
+ * order the phone learned them. [agents] is empty when the phone cannot name any.
+ */
+data class ClashHolder(val host: String, val conversations: Int, val agents: List<String>)
+
+private fun joinAgents(agents: List<String>): String = when (agents.size) {
+    0 -> ""
+    1 -> agents[0]
+    else -> "${agents.dropLast(1).joinToString(", ")} and ${agents.last()}"
+}
+
+/**
+ * The names clause of a clash notice: `{host} also has {agent}` per other host, joined with
+ * `, and `; the other hosts holding the most of this host's conversations first, then by host
+ * name; at most two hosts named, then `, and {n} more hosts`. Empty when no host can be named.
+ */
+fun clashHoldersClause(holders: List<ClashHolder>): String {
+    val nameable = holders
+        .map { it.copy(agents = it.agents.filter(String::isNotBlank).distinct()) }
+        .filter { it.host.isNotBlank() && it.agents.isNotEmpty() }
+        .sortedWith(compareByDescending<ClashHolder> { it.conversations }.thenBy { it.host })
+    if (nameable.isEmpty()) return ""
+    val shown = nameable.take(2).joinToString(", and ") { "${it.host} also has ${joinAgents(it.agents)}" }
+    val extra = nameable.size - 2
+    return if (extra > 0) "$shown, and $extra more ${if (extra == 1) "host" else "hosts"}" else shown
+}
+
+/** The notice under a host's heading when conversations of it are left out (issue #94). */
+fun clashNoticeText(count: Int, holders: List<ClashHolder>): String {
+    val prefix = "$count ${if (count == 1) "conversation" else "conversations"} of this host not shown"
+    val clause = clashHoldersClause(holders)
+    return if (clause.isEmpty()) {
+        "$prefix: another paired host has an agent with the same sandbox and name, whose conversations use the same ids."
+    } else {
+        "$prefix: $clause, with the same sandbox and name."
+    }
+}
+
+/** The note on an agent's page when its Home is left out (issue #94), [address] = `sandbox/agent`. */
+fun clashHomeNoteText(address: String, holders: List<ClashHolder>): String {
+    val clause = clashHoldersClause(holders)
+    return if (clause.isEmpty()) {
+        "This agent's Home is not shown here: another paired host has an agent named $address too, and this phone keeps the first one's."
+    } else {
+        "This agent's Home is not shown here: $clause, with the same sandbox and name."
+    }
+}
 
 /** A dialog may hold an older row: naming changes only the current row's title fields. */
 internal fun renameConversationLocally(conversations: MutableList<Conversation>, id: String, title: String) {
@@ -2245,13 +2302,60 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** By host: the agents (`sandbox/agent`) whose conversation was left out for that reason. */
     private val clashAgents = mutableStateMapOf<String, Set<String>>()
 
+    /** By losing host, per left-out conversation id: its agent (`sandbox/agent`, when known) and the other host the phone keeps it for. */
+    private val clashHolds = mutableStateMapOf<String, Map<String, ClashHold>>()
+
+    /** One left-out conversation's agent and the other host holding it, as the refusal learned them. */
+    private data class ClashHold(val agent: String?, val holder: String?)
+
     /** How many of [host]'s conversations are left out because another host's has the same id. */
     fun leftOut(host: String): Int = clashes[host]?.size ?: 0
 
     /** Whether a conversation of [agent] (its Home, most often) is left out because another host's has the same id. */
     fun leftOut(agent: Agent): Boolean = agent.name in clashAgents[agent.host].orEmpty()
 
+    /** The notice under [host]'s heading when conversations of it are left out, or null when none is. */
+    fun clashNotice(host: String): String? {
+        val count = leftOut(host)
+        if (count == 0) return null
+        return clashNoticeText(count, clashHoldersOf(host))
+    }
+
+    /** The note on [agent]'s page when its Home is left out, or null when none is. */
+    fun clashNote(agent: Agent): String? {
+        if (!leftOut(agent)) return null
+        val holders = clashHoldersOf(agent.host)
+            .filter { agent.name in it.agents }
+            .map { it.copy(agents = listOf(agent.name)) }
+        return clashHomeNoteText(agent.name, holders)
+    }
+
+    /**
+     * The other paired hosts holding [host]'s left-out conversations, with the agents of [host] each
+     * holds. A host this phone no longer pairs, or an id whose agent the phone never learned, is not
+     * named; the count of a host is how many of [host]'s left-out conversations it holds.
+     */
+    private fun clashHoldersOf(host: String): List<ClashHolder> {
+        val pairedNames = paired.map { it.name }.toSet()
+        val held = clashHolds[host].orEmpty()
+        val agents = LinkedHashMap<String, MutableList<String>>()
+        val counts = LinkedHashMap<String, Int>()
+        clashes[host].orEmpty().forEach { id ->     // insertion order: the order the phone learned them
+            val hold = held[id] ?: return@forEach
+            val holder = hold.holder?.takeIf { it in pairedNames } ?: return@forEach
+            val agent = hold.agent ?: return@forEach
+            counts[holder] = (counts[holder] ?: 0) + 1
+            val list = agents.getOrPut(holder) { mutableListOf() }
+            if (agent !in list) list.add(agent)
+        }
+        return agents.keys.map { ClashHolder(it, counts[it] ?: 0, agents[it].orEmpty()) }
+    }
+
     private fun refusedClash(host: String, id: String, agent: String?) {
+        val held = clashHolds[host].orEmpty()
+        val previous = held[id]
+        val next = ClashHold(agent ?: previous?.agent, heldByAnotherHostRow(conversations, host, id)?.host ?: previous?.holder)
+        if (previous != next) clashHolds[host] = held + (id to next)
         if (agent != null && agent !in clashAgents[host].orEmpty()) clashAgents[host] = clashAgents[host].orEmpty() + agent
         if (id in clashes[host].orEmpty()) return
         clashes[host] = clashes[host].orEmpty() + id
@@ -2360,7 +2464,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         paired.forEach { heldTasks.forget(it.name) }
         paired.forEach { agentNames.forget(it.name) }
         paired.forEach { routines.forget(it.name); models.forget(it.name) }
-        archiveRequests.clear(); archivePending.clear(); archiveProblems.clear(); clashes.clear(); clashAgents.clear()
+        archiveRequests.clear(); archivePending.clear(); archiveProblems.clear(); clashes.clear(); clashAgents.clear(); clashHolds.clear()
         agentImages.clear(paired.map { it.name })
         sandboxPolicies.clear(); policyBusy.clear(); policyFresh.clear(); policyErrors.clear(); policyReviews.clear(); policyRequests.clear(); notPolicyOwner.clear()
         saving.execute { policyCache.edit { clear() } }
@@ -2428,6 +2532,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         hostCapabilities.remove(host)
         clashes.remove(host)
         clashAgents.remove(host)
+        clashHolds.remove(host)
         questions.forget(host)
         needsYou.forget(host)
         reminderDismissals.forget(host)
