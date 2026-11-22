@@ -78,7 +78,17 @@ android {
             // Robolectric's Android 17 sets a file descriptor's number
             // through the JDK's jdk.internal.access, which the JDK keeps
             // to itself unless exported.
-            all { it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED") }
+            all {
+                it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
+                // Keep layout assertion details visible in hosted unit-test failures.
+                it.testLogging {
+                    events("failed")
+                    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                    showExceptions = true
+                    showCauses = true
+                    showStackTraces = true
+                }
+            }
         }
     }
 }

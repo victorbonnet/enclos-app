@@ -539,6 +539,8 @@ fun Composer(
     placeholder: String,
     canSend: Boolean = true,
     notice: String? = null,
+    hasFiles: Boolean = false,
+    attachment: (@Composable () -> Unit)? = null,
     onSend: () -> Unit,
 ) {
     val p = palette
@@ -562,6 +564,7 @@ fun Composer(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            attachment?.invoke()
             // Its own cursor: text put in from outside (a command picked) leaves it at the end.
             var field by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
             if (field.text != value) field = TextFieldValue(value, TextRange(value.length))
@@ -586,7 +589,7 @@ fun Composer(
                     }
                 },
             )
-            val enabled = value.isNotBlank() && canSend
+            val enabled = (value.isNotBlank() || hasFiles) && canSend
             val ground by animateColorAsState(if (enabled) p.buttonBg else p.surface, Motion.change(), label = "send")
             val arrow by animateColorAsState(if (enabled) p.buttonText else p.textFaint, Motion.change(), label = "arrow")
             Box(

@@ -61,6 +61,9 @@ class BridgeConnection(
     private val onUnreadable: (Unreadable) -> Unit,
     private val onClosed: (String) -> Unit,
 ) {
+    /** Serial upload lane for this connection; backpressure cannot occupy another host's lane. */
+    internal val fileUpload = kotlinx.coroutines.Dispatchers.IO.limitedParallelism(1)
+
     @Volatile private var socket: WebSocket? = null
     private var handshake: DeviceHandshake? = null
     /** Set once [first] is sealed and queued: only then may [send] seal anything. */
@@ -164,6 +167,26 @@ class BridgeConnection(
             return false
         }
         return socket?.send(sealed.toByteString()) ?: false
+    }
+
+    /** OkHttp send is enqueue-only. Pace uploads before sealing so no nonce is skipped. */
+    fun sendPaced(frame: JSONObject, alive: () -> Unit = {}): Boolean {
+        alive()
+        if (Thread.currentThread().isInterrupted) { close("File send interrupted"); return false }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60)
+        while (!ended.get() && (socket?.queueSize() ?: return false) > 128_000) {
+            alive()
+            if (System.nanoTime() > deadline) { close("Sending files timed out"); return false }
+            try { Thread.sleep(10) } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                close("File send interrupted")
+                return false
+            }
+        }
+        return synchronized(this) {
+            alive()
+            !Thread.currentThread().isInterrupted && !ended.get() && send(frame)
+        }
     }
 
     /** Ends the connection from the app's side, saying [why]. */
