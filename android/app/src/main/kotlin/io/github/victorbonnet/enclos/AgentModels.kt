@@ -54,7 +54,89 @@ data class ModelOptions(
 data class ProviderModels(val provider: String, val models: List<ModelChoice>, val limited: Boolean)
 
 /** Why a model provider's models did not load, and whether asking again may help. */
-data class ModelListError(val text: String, val retry: Boolean)
+data class ModelListError(val text: String, val retry: Boolean, val tooLarge: Boolean = false)
+
+/** Which model providers to keep on the Model page: complements of one axis, or null for all. */
+enum class ModelProviderFilter { ReadyHere, NeedsHostSetup }
+
+/** A text matches when every word of [query] is in it, whatever the case or accents (the inbox's rule). */
+internal fun wordsMatch(text: String, query: String): Boolean {
+    val words = fold(query).split(' ').filter { it.isNotEmpty() }
+    if (words.isEmpty()) return true
+    val folded = fold(text)
+    return words.all { it in folded }
+}
+
+/** Whether a model provider is kept by the chip and query; label and id are searched, never setup. */
+internal fun providerMatches(p: ModelProvider, query: String, filter: ModelProviderFilter?): Boolean {
+    val byFilter = when (filter) {
+        null -> true
+        ModelProviderFilter.ReadyHere -> p.usable
+        ModelProviderFilter.NeedsHostSetup -> !p.usable
+    }
+    return byFilter && wordsMatch("${p.label} ${p.id}", query)
+}
+
+/** Whether a model matches [query]; label and id are searched. */
+internal fun modelMatches(m: ModelChoice, query: String): Boolean = wordsMatch("${m.label} ${m.id}", query)
+
+/** One provider row: [kept] when it is only on screen because it carries the pick. */
+data class ProviderRow(val provider: ModelProvider, val kept: Boolean)
+
+/**
+ * The provider rows for [query] and [filter]: the matching ones in the runtime's order, and the picked one
+ * first when it does not match. [matches] counts only the matching ones; [total] all of them;
+ * [ready] how many are usable.
+ */
+data class ProvidersView(
+    val rows: List<ProviderRow>,
+    val matches: List<ModelProvider>,
+    val total: Int,
+    val ready: Int,
+    val narrowed: Boolean = false,
+) {
+    val count: String
+        get() = if (narrowed) "${matches.size} of $total" else "$total ${if (total == 1) "provider" else "providers"}"
+}
+
+fun providersView(providers: List<ModelProvider>, picked: String?, query: String, filter: ModelProviderFilter?): ProvidersView {
+    val narrowed = query.isNotBlank() || filter != null
+    val matches = providers.filter { providerMatches(it, query, filter) }
+    val kept = picked?.let { id -> providers.firstOrNull { it.id == id } }?.takeIf { p -> matches.none { it.id == p.id } }
+    val rows = buildList {
+        if (kept != null) add(ProviderRow(kept, kept = true))
+        matches.forEach { add(ProviderRow(it, kept = false)) }
+    }
+    return ProvidersView(rows = rows, matches = matches, total = providers.size, ready = providers.count { it.usable }, narrowed = narrowed)
+}
+
+/** One model row: [kept] when it is only on screen because it carries a check. */
+data class ModelRow(val choice: ModelChoice, val kept: Boolean)
+
+/**
+ * The model rows for [query]: the matching ones in the runtime's order, and the checked one first when it does
+ * not match. [matches] counts only the matching ones, [listed] all of them.
+ */
+data class ModelsView(
+    val rows: List<ModelRow>,
+    val matches: List<ModelChoice>,
+    val listed: Int,
+    val narrowed: Boolean = false,
+) {
+    val count: String
+        get() = if (narrowed) "${matches.size} of $listed" else "$listed listed"
+}
+
+fun modelsView(models: List<ModelChoice>, checked: (ModelChoice) -> Boolean, query: String): ModelsView {
+    val narrowed = query.isNotBlank()
+    val matches = models.filter { modelMatches(it, query) }
+    val kept = models.firstOrNull(checked)?.takeIf { c -> matches.none { it.id == c.id } }
+    val rows = buildList {
+        if (kept != null) add(ModelRow(kept, kept = true))
+        matches.forEach { add(ModelRow(it, kept = false)) }
+    }
+    return ModelsView(rows = rows, matches = matches, listed = models.size, narrowed = narrowed)
+}
 
 data class ModelRequest(val id: String, val address: String, val action: String, val provider: String? = null, val model: String? = null)
 
@@ -199,7 +281,7 @@ class ModelClient(
             val key = modelsKey(address, request.provider!!)
             modelErrors[key] = when (code) {
                 // Asked again, the same list fails the same way.
-                "unsupported" -> ModelListError(reason ?: "This model provider lists too many models to show on the phone.", retry = false)
+                "unsupported" -> ModelListError(reason ?: "This model provider lists too many models to show on the phone.", retry = false, tooLarge = true)
                 "not_found" -> ModelListError(reason ?: "The runtime no longer lists this model provider. Refresh.", retry = false)
                 else -> ModelListError(reason ?: "The host could not list its models.", retry = true)
             }
