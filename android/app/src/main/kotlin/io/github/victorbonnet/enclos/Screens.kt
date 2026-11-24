@@ -343,6 +343,12 @@ fun InboxScreen(
         }
     }
     val found = inboxSearchResults(query, listed, searched)
+    // A search reads every message, off the main thread. Until its first pass
+    // after the tabs come back is done there is no row at all: a row here
+    // would move a place restored on Back (#66), because a list that has rows
+    // lays them out and takes the clamped result as the new place. An empty
+    // list keeps the place it was handed until the rows it belongs to arrive.
+    val searching = query.isNotBlank() && searched == null
     val requests = model.attentionItems().filter { query.isBlank() || "${it.summary} ${it.agent.orEmpty()} ${it.host}".contains(query, ignoreCase = true) }
     val narrowed = archivedOnly || query.isNotBlank() || filter != InboxFilter.All
     // Groups have their own section; the agents' trees hold one-to-one conversations.
@@ -366,6 +372,7 @@ fun InboxScreen(
                 )
                 else -> {
                     LazyColumn(Modifier.weight(1f), state = state) {
+                        if (searching) return@LazyColumn
                         if (archivedOnly) item(key = "archive-view") {
                             Text("Archived conversations", style = Type.meta, color = palette.accent, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
                         }

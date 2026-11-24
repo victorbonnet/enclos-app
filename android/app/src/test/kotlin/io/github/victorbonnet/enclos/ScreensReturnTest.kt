@@ -207,6 +207,25 @@ class ScreensReturnTest {
     }
 
     @Test
+    fun back_under_an_active_search_returns_to_the_same_rows() {
+        val model = fixture()
+        try {
+            show(model)
+            compose.onNodeWithContentDescription("Search conversations").performTextInput("agent")
+            compose.waitForIdle()
+            val before = scrollTwoViewports()
+            assertFalse("the search results never left their first row", before.containsKey("Agent 1"))
+
+            open(anchor(before))
+            back()
+
+            assertSamePlace(before, rows(), "the search's results")
+        } finally {
+            model.endFixture()
+        }
+    }
+
+    @Test
     fun the_search_and_the_archived_choice_are_still_what_they_were() {
         val model = fixture(archived = 2)
         try {
