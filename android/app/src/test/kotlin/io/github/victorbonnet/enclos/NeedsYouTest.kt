@@ -173,4 +173,64 @@ class NeedsYouTest {
         assertTrue(index.items.isEmpty())
     }
 
+    private fun heldItem(id: String, waitsOn: Any? = null, includeWaitsOn: Boolean = false) = JSONObject()
+        .put("id", id).put("kind", "held_task").put("agent", "lab/main").put("conversation", "home")
+        .put("summary", "Blocked on review").put("since", 1).put("expired", false).put("version", "held:1")
+        .apply { if (includeWaitsOn) put("waits_on", waitsOn) }
+
+    @Test fun waits_on_parses_team_as_true_and_all_other_values_leniently_as_false() {
+        val team = OpenItem.from("one", heldItem("h-team", "team", includeWaitsOn = true))
+        assertEquals("h-team", team.id)
+        assertTrue(team.waitsOnTeam)
+
+        val absent = OpenItem.from("one", heldItem("h-absent"))
+        assertEquals("h-absent", absent.id)
+        assertFalse(absent.waitsOnTeam)
+
+        val cases: List<Pair<String, Any>> = listOf(
+            "h-person" to "person",
+            "h-int" to 3,
+            "h-bool" to true,
+            "h-array" to JSONArray(),
+            "h-object" to JSONObject(),
+            "h-case" to "Team",
+            "h-other" to "other",
+        )
+        for ((id, raw) in cases) {
+            val parsed = OpenItem.from("one", heldItem(id, raw, includeWaitsOn = true))
+            assertEquals("item $id must be parsed", id, parsed.id)
+            assertFalse("item $id must read waitsOnTeam = false", parsed.waitsOnTeam)
+        }
+    }
+
+    @Test fun open_item_json_round_trips_waits_on_for_held_tasks_and_omits_it_for_other_kinds() {
+        val team = OpenItem("one", "h-team", "held_task", "lab/main", "home", "Blocked", 1, false, "held:1", waitsOnTeam = true)
+        val teamJson = team.json()
+        assertEquals("team", teamJson.getString("waits_on"))
+        val restored = OpenItem.from("one", teamJson)
+        assertEquals("h-team", restored.id)
+        assertTrue(restored.waitsOnTeam)
+
+        val withoutField = JSONObject(teamJson.toString()).apply { remove("waits_on") }
+        val restoredWithout = OpenItem.from("one", withoutField)
+        assertEquals("h-team", restoredWithout.id)
+        assertFalse(restoredWithout.waitsOnTeam)
+
+        val question = OpenItem("one", "q-1", "question", "lab/main", "home", "Allow?", 1, false)
+        assertFalse(question.json().has("waits_on"))
+    }
+
+    @Test fun without_answered_still_hides_answered_held_tasks_for_both_team_and_person() {
+        val teamCard = HeldTask("one", "lab/main", "home", "h-team", "Team task", "reviewer", "Blocked", since = 1, resume = "", stateWire = "answered", revision = 2, resumable = false)
+        val personCard = HeldTask("one", "lab/main", "home", "h-person", "Person task", "director", "Blocked", since = 1, resume = "", stateWire = "answered", revision = 2, resumable = false)
+        val cards = mapOf(teamCard.key to teamCard, personCard.key to personCard)
+        val teamRow = OpenItem.from("one", heldItem("h-team", "team", includeWaitsOn = true).put("version", "held:2"))
+        val personRow = OpenItem.from("one", heldItem("h-person", "person", includeWaitsOn = true).put("version", "held:2"))
+        assertTrue(teamRow.waitsOnTeam)
+        assertFalse(personRow.waitsOnTeam)
+        assertTrue(withoutAnswered(listOf(teamRow), cards).isEmpty())
+        assertTrue(withoutAnswered(listOf(personRow), cards).isEmpty())
+        assertTrue(withoutAnswered(listOf(teamRow, personRow), cards).isEmpty())
+    }
+
 }
