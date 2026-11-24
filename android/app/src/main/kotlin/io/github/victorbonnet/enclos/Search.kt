@@ -139,25 +139,39 @@ fun words(line: Line): String {
     return line.attachments.joinToString(", ") { if (it.image) "Image" else it.shownName }
 }
 
+private val MARKS = Regex("\\p{Mn}+")
+private val SPACES = Regex("\\s+")
+
 /** [text] in lower case, without accents, its spaces single: what search compares. */
 fun fold(text: String): String =
     Normalizer.normalize(text, Normalizer.Form.NFD)
-        .replace(Regex("\\p{Mn}+"), "")
+        .replace(MARKS, "")
         .lowercase()
-        .replace(Regex("\\s+"), " ")
+        .replace(SPACES, " ")
         .trim()
 
-/**
- * Where the words of [query] are in [text], by the rules [search] uses
- * ([fold]: case, accents, spaces), as ranges of [text]'s own characters, to
- * highlight. [text] is folded one character at a time, each folded character
- * keeping where it came from, since folding changes the length (an accent
- * written as its own mark goes, `İ` lowercases to two characters).
- */
-fun matches(text: String, query: String): List<IntRange> {
-    val words = fold(query).split(' ').filter { it.isNotEmpty() }
-    if (words.isEmpty()) return emptyList()
-    val folded = StringBuilder()
+private const val FOLD_CACHE_LIMIT = 4096
+
+private class FoldedSpans(val folded: String, val starts: IntArray, val ends: IntArray)
+
+private class FoldedText(private val source: String) {
+    val plain: String = fold(source)
+    val spans: FoldedSpans by lazy(LazyThreadSafetyMode.PUBLICATION) { buildSpans(source) }
+}
+
+private val foldedCache = ConcurrentHashMap<String, FoldedText>()
+
+private fun foldedText(text: String): FoldedText {
+    foldedCache[text]?.let { return it }
+    if (foldedCache.size >= FOLD_CACHE_LIMIT) foldedCache.clear()
+    return foldedCache.computeIfAbsent(text, ::FoldedText)
+}
+
+/** Cached [fold] for repeated matching against the same label or id. */
+internal fun folded(text: String): String = foldedText(text).plain
+
+private fun buildSpans(text: String): FoldedSpans {
+    val folded = StringBuilder(text.length)
     // For each folded character: where its source starts, and where it ends.
     val starts = mutableListOf<Int>()
     val ends = mutableListOf<Int>()
@@ -185,12 +199,26 @@ fun matches(text: String, query: String): List<IntRange> {
         }
         i = next
     }
+    return FoldedSpans(folded.toString(), starts.toIntArray(), ends.toIntArray())
+}
+
+/**
+ * Where the words of [query] are in [text], by the rules [search] uses
+ * ([fold]: case, accents, spaces), as ranges of [text]'s own characters, to
+ * highlight. [text] is folded one character at a time, each folded character
+ * keeping where it came from, since folding changes the length (an accent
+ * written as its own mark goes, `İ` lowercases to two characters).
+ */
+fun matches(text: String, query: String): List<IntRange> {
+    val words = fold(query).split(' ').filter { it.isNotEmpty() }
+    if (words.isEmpty()) return emptyList()
+    val spans = foldedText(text).spans
     val found = mutableListOf<IntRange>()
     for (word in words) {
-        var at = folded.indexOf(word)
+        var at = spans.folded.indexOf(word)
         while (at >= 0) {
-            found += starts[at] until ends[at + word.length - 1]
-            at = folded.indexOf(word, at + word.length)
+            found += spans.starts[at] until spans.ends[at + word.length - 1]
+            at = spans.folded.indexOf(word, at + word.length)
         }
     }
     return found

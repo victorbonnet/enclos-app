@@ -920,7 +920,7 @@ internal fun SearchField(query: String, onQuery: (String) -> Unit, label: String
         singleLine = true,
         textStyle = Type.message.copy(color = p.text),
         cursorBrush = SolidColor(p.accent),
-        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp)
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp)
             .semantics { contentDescription = label },
         decorationBox = { field ->
             Row(
@@ -1203,13 +1203,10 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
                         .padding(horizontal = 16.dp, vertical = 14.dp),
                 )
             }
-            val leftOut = model.leftOut(host.name)
-            if (leftOut > 0) {
+            val clash = model.clashNotice(host.name)
+            if (clash != null) {
                 item(key = "$key-clash") {
-                    Text(
-                        "$leftOut ${if (leftOut == 1) "conversation" else "conversations"} of this host not shown: another paired host has an agent with the same sandbox and name, whose conversations use the same ids.",
-                        style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
+                    Text(clash, style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                 }
             }
             if (query.isBlank() && model.canManageSandboxes(host.name)) {

@@ -5,6 +5,8 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -288,13 +290,13 @@ class ModelScreenTest {
         compose.onNodeWithText("Ready here · 1").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("No model provider matches \u201Czzz\u201D with Ready here on.").assertExists()
-        compose.onNodeWithText("1 of the 2 are ready to use here.").assertExists()
+        compose.onNodeWithText("1 of the 2 is ready to use here.").assertExists()
 
         // Query + Needs host setup on.
         compose.onNodeWithText("Needs host setup · 1").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("No model provider matches \u201Czzz\u201D with Needs host setup on.").assertExists()
-        compose.onNodeWithText("1 of the 2 need setup on the host.").assertExists()
+        compose.onNodeWithText("1 of the 2 needs setup on the host.").assertExists()
 
         // Show all clears the query and leaves the chip on.
         compose.onNodeWithText("Show all 2 model providers").performScrollTo().performClick()
@@ -316,8 +318,8 @@ class ModelScreenTest {
         compose.onNodeWithText("Ready here · 0").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("No model provider is ready to use here.").assertExists()
-        compose.onNodeWithText("Turn the filter off to see the 1 that need setup on the host.").assertExists()
-        compose.onNodeWithText("Show all 1 model providers").assertDoesNotExist()
+        compose.onNodeWithText("Turn the filter off to see the one that needs setup on the host.").assertExists()
+        compose.onAllNodesWithText("Show all", substring = true).assertCountEquals(0)
     }
 
     @Test
@@ -329,7 +331,35 @@ class ModelScreenTest {
         compose.onNodeWithText("Needs host setup · 0").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("No model provider needs host setup.").assertExists()
-        compose.onNodeWithText("Turn the filter off to see the 1 that are ready to use here.").assertExists()
+        compose.onNodeWithText("Turn the filter off to see the one that is ready to use here.").assertExists()
+        compose.onAllNodesWithText("Show all", substring = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun chips_show_no_count_until_the_list_arrives() {
+        val host = Host()
+        compose.setContent { ModelScreen(host.client, address, hostConnected = true, back = {}) }
+        compose.waitForIdle()
+        compose.onNodeWithText("Ready here").assertExists()
+        compose.onNodeWithText("Needs host setup").assertExists()
+        compose.onNodeWithText("Ready here · 0").assertDoesNotExist()
+        compose.onNodeWithText("Needs host setup · 0").assertDoesNotExist()
+        host.answer()
+        compose.onNodeWithText("Ready here · 1").assertExists()
+        compose.onNodeWithText("Needs host setup · 1").assertExists()
+    }
+
+    @Test
+    fun one_provider_reads_singular() {
+        val host = Host(
+            current = null,
+            providers = listOf(JSONObject().put("id", "provider-a").put("label", "Provider A").put("usable", true)),
+        )
+        show(host)
+        compose.onNodeWithText("1 provider").assertExists()
+        compose.onNodeWithContentDescription("Search model providers and models").performTextInput("zzz")
+        compose.waitForIdle()
+        compose.onNodeWithText("Show all 1 model provider").assertExists()
         compose.onNodeWithText("Show all 1 model providers").assertDoesNotExist()
     }
 
@@ -413,6 +443,8 @@ class ModelScreenTest {
         compose.waitForIdle()
         restore.emulateSavedInstanceStateRestore()
         host.answer()
+        compose.onNodeWithContentDescription("Search model providers and models").assertTextEquals("one")
+        compose.onNodeWithText("Ready here · 1").assertIsOn()
         compose.onNodeWithText("MODEL PROVIDER · READY HERE").assertExists()
         compose.onNodeWithText("1 of 2").assertExists()
     }
