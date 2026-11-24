@@ -79,6 +79,7 @@ fun QuestionCard(client: QuestionClient, question: QuestionInfo) {
                 enabled = enabled,
                 singleLine = false,
                 minLines = 2,
+                keyboardOptions = MessageKeyboard,
             )
         }
         if (terminal) {
