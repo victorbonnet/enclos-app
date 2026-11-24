@@ -38,7 +38,10 @@ internal const val ASK_FOR_CHOICES_HINT = "The agent looks into it and writes it
  * 0073), laid out so the person decides without opening anything: the decision, what is blocked
  * in full, then the answers. Each choice of the agent's ask is one tap: the recommended one first,
  * filled and marked, the others outlined. A typed answer is folded behind **Answer in your own
- * words** (open at once when the ask has no choices, or a draft is kept). A card no agent wrote
+ * words** (open at once when the ask has no choices, or text is kept). The client keeps the typed
+ * text in memory for this exact card and connection ([HeldTaskClient.draftFor]); text typed before
+ * the request or the connection changed shows apart, read-only, to be used or discarded
+ * ([HeldTaskClient.earlier]). A card no agent wrote
  * shows the runtime's title and its whole reason, and offers **Ask the agent for choices** and,
  * where the runtime allows it, Resume. **Details** folds the rest: the task's id and title, the
  * runtime's reason unless it is shown above, then [details] (View task, View
@@ -50,12 +53,15 @@ internal const val ASK_FOR_CHOICES_HINT = "The agent looks into it and writes it
 fun HeldTaskAnswerPanel(client: HeldTaskClient, card: HeldTask, details: @Composable ColumnScope.() -> Unit) {
     val p = palette
     var open by rememberSaveable(card.host, card.agent, card.task) { mutableStateOf(false) }
-    var draft by rememberSaveable(card.host, card.agent, card.task) { mutableStateOf("") }
+    // The typed text lives in the client, in memory only: never in saved state.
+    val draft = client.draftFor(card)
     var writing by rememberSaveable(card.host, card.agent, card.task) { mutableStateOf(false) }
     val ask = card.ask
     val answering = client.offersAnswer(card)
     val unavailable = client.answerUnavailable(card)
     val enabled = answering && unavailable == null
+    // Text typed before this request or connection changed: reviewed before it is reused.
+    val kept = if (answering) client.earlier(card) else null
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         // The agent wrote the decision and what is blocked; a card no agent wrote shows the runtime's title and reason.
         SelectionContainer { Text(ask?.decision ?: card.title, style = Type.heading, color = p.text) }
@@ -79,9 +85,18 @@ fun HeldTaskAnswerPanel(client: HeldTaskClient, card: HeldTask, details: @Compos
                         RequestSecondaryButton("Resume task", enabled = client.canResume(card)) { client.resume(card) }
                     }
                 }
-                if (writing || draft.isNotEmpty() || ask?.choices?.isEmpty() == true) {
+                if (writing || draft.isNotEmpty() || kept != null || ask?.choices?.isEmpty() == true) {
+                    kept?.let {
+                        Text(
+                            when (it.why) {
+                                HeldTaskEarlierReason.RequestChanged -> "This request changed. Your earlier text has not been added to it."
+                                HeldTaskEarlierReason.ConnectionChanged -> "The connection changed. Review this request before reusing your earlier text."
+                            },
+                            style = Type.small, color = p.text,
+                        )
+                    }
                     FormField(
-                        draft, { draft = it },
+                        draft, { client.edit(card, it) },
                         label = "Your answer",
                         placeholder = "Write your answer",
                         enabled = enabled,
@@ -92,8 +107,34 @@ fun HeldTaskAnswerPanel(client: HeldTaskClient, card: HeldTask, details: @Compos
                     if (draft.isNotBlank() && typed == null) {
                         Text("Remove tabs or hidden characters, or shorten the answer, to send it.", style = Type.small, color = p.textMuted)
                     }
+                    if (draft.isNotEmpty()) {
+                        // "Not sent." only before any send of this text: after one, the notes say it may have arrived.
+                        Text(
+                            if (client.draftAttempted(card)) "Kept temporarily in this app." else "Not sent. Kept temporarily in this app.",
+                            style = Type.small, color = p.textMuted,
+                        )
+                        Text("It may be lost if Android closes the app.", style = Type.small, color = p.textMuted)
+                    }
                     RequestSecondaryButton("Send", enabled = enabled && typed != null) {
                         typed?.let { client.answer(card, HeldTaskAnswer.Text(it)) }
+                    }
+                    kept?.let {
+                        Text("Earlier text · read-only", style = Type.small, color = p.textMuted)
+                        SelectionContainer {
+                            Text(
+                                it.text, style = Type.message, color = p.text,
+                                modifier = Modifier.fillMaxWidth().clip(Shapes.control).background(p.surface)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                            )
+                        }
+                        Text(
+                            "Review the current decision, blocker and choices first. Using earlier text fills Your answer; it does not send it.",
+                            style = Type.small, color = p.textMuted,
+                        )
+                        RequestSecondaryButton("Use text in Your answer", enabled = client.canAnswer(card) && draft.isEmpty()) {
+                            client.useEarlier(card)
+                        }
+                        RequestSecondaryButton("Discard earlier text") { client.discardEarlier(card) }
                     }
                 } else {
                     // The only way to type an answer: a full 48dp target that wraps at large text.
