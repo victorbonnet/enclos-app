@@ -1177,13 +1177,10 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
                         .padding(horizontal = 16.dp, vertical = 14.dp),
                 )
             }
-            val leftOut = model.leftOut(host.name)
-            if (leftOut > 0) {
+            val clash = model.clashNotice(host.name)
+            if (clash != null) {
                 item(key = "$key-clash") {
-                    Text(
-                        "$leftOut ${if (leftOut == 1) "conversation" else "conversations"} of this host not shown: another paired host has an agent with the same sandbox and name, whose conversations use the same ids.",
-                        style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
+                    Text(clash, style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                 }
             }
             if (query.isBlank() && model.canManageSandboxes(host.name)) {

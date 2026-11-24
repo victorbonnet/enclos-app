@@ -318,13 +318,8 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
             AgentNameControls(model, agent)
             AgentPhotoControls(model, agent)
             Section("Conversations") {
-                if (model.leftOut(agent)) {
-                    SettingRow {
-                        Text(
-                            "This agent's Home is not shown here: another paired host has an agent named ${agent.name} too, and this phone keeps the first one's.",
-                            style = Type.small, color = p.textMuted,
-                        )
-                    }
+                model.clashNote(agent)?.let { note ->
+                    SettingRow { Text(note, style = Type.small, color = p.textMuted) }
                 }
                 if (home != null) {
                     SettingRow(Modifier.clickable(onClickLabel = "Open Home") { openChat(home.id) }) {
