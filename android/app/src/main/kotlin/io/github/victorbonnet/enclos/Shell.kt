@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
@@ -116,6 +117,13 @@ fun HomeShell(
     // change once a swipe ends, not half way through it.
     val view = View.entries[views.settledPage]
     var query by rememberSaveable { mutableStateOf("") }
+    // Each view's list keeps its own place (#66), owned here and not by the
+    // pager page that shows it: a page that is not showing is dropped from
+    // composition, and the pager saves a page's state only while it shows, so
+    // the other view's rows and offset would go with it. Held by the shell,
+    // the two positions outlive the pages and never share a value.
+    val inboxPlace = rememberLazyListState()
+    val agentsPlace = rememberLazyListState()
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
@@ -138,8 +146,8 @@ fun HomeShell(
             HorizontalPager(state = views, modifier = Modifier.fillMaxSize()) { page ->
                 Box(Modifier.fillMaxSize().background(p.bg)) {
                     when (View.entries[page]) {
-                        View.Conversations -> InboxScreen(model, query, unreadOnly, archivedOnly, openChat, start, openAgent, openRoutines, pair, openApproval)
-                        View.Agents -> AgentsScreen(model, query, openAgent, openSandbox, pair, createSandbox, openHost)
+                        View.Conversations -> InboxScreen(model, query, unreadOnly, archivedOnly, openChat, start, openAgent, openRoutines, pair, openApproval, state = inboxPlace)
+                        View.Agents -> AgentsScreen(model, query, openAgent, openSandbox, pair, createSandbox, openHost, state = agentsPlace)
                     }
                 }
             }
