@@ -83,8 +83,15 @@ class MessageKeyboardEditorInfoTest {
             }
             until("composer did not open") { tree().any { it.contentDescription?.toString() == "Attach files" } }
             until("composer field is not in the tree") {
-                tree().firstOrNull { it.className?.toString() == "android.widget.EditText" && it.isEnabled }
-                    ?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+                var ancestor = tree().firstOrNull { it.contentDescription?.toString() == "Attach files" }?.parent
+                var composerField: AccessibilityNodeInfo? = null
+                while (ancestor != null && composerField == null) {
+                    composerField = nodes(ancestor).firstOrNull {
+                        it.className?.toString() == "android.widget.EditText" && it.isEnabled
+                    }
+                    ancestor = ancestor.parent
+                }
+                composerField?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
             }
             var info: EditorInfo? = null
             until("the Compose host did not take focus") {
@@ -98,10 +105,12 @@ class MessageKeyboardEditorInfoTest {
                 info != null
             }
             val editor = info!!
-            // A1: text | short message | cap sentences | multi-line | auto-correct.
-            // The literal 0x0002C041 of spec §3A is not asserted: this emulator's IME
-            // ORs one further bit (0x200000) into inputType, observed 0x0022C041 on
-            // 2026-11-24. Every component the card names is asserted instead.
+            // A1: text | short message | cap sentences | multi-line | auto-correct = 0x0002C041.
+            // Compose foundation-android 1.12.1 sets TYPE_TEXT_FLAG_ENABLE_TEXT_SUGGESTION_SELECTED
+            // (0x200000) itself on API >= 37 (EditorInfoApi37.setEnableTextSuggestionSelectedInputType,
+            // called from EditorInfo_androidKt behind an SDK_INT >= 37 check), so that bit is masked off.
+            // Every component the card names is also asserted on its own.
+            assertEquals(0x0002C041, editor.inputType and 0x00200000.inv())
             assertEquals(InputType.TYPE_CLASS_TEXT, editor.inputType and InputType.TYPE_MASK_CLASS)
             assertEquals(0x40, editor.inputType and InputType.TYPE_MASK_VARIATION)
             assertEquals(InputType.TYPE_TEXT_FLAG_CAP_SENTENCES, editor.inputType and InputType.TYPE_TEXT_FLAG_CAP_SENTENCES)
@@ -112,7 +121,17 @@ class MessageKeyboardEditorInfoTest {
             assertEquals(EditorInfo.IME_ACTION_UNSPECIFIED, editor.imeOptions and EditorInfo.IME_MASK_ACTION)
             assertNotEquals(EditorInfo.IME_ACTION_SEND, editor.imeOptions and EditorInfo.IME_MASK_ACTION)
         } finally {
-            runner.runOnMainSync { activity?.finish() }
+            runner.runOnMainSync {
+                model?.let { m ->
+                    m.conversations.removeAll { it.id == conversation.id }
+                    m.agents.removeAll { it.host == conversation.host }
+                    m.links.remove(conversation.host)
+                    field<MutableMap<String, BridgeConnection>>(m, "connections").remove(conversation.host)
+                }
+                activity?.finish()
+            }
+            connection.close()
+            runner.waitForIdleSync()
         }
     }
 }

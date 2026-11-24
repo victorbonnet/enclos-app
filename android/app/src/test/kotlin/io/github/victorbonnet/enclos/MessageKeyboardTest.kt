@@ -8,7 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-// The EditorInfo criterion (A1-A4) is asserted in the instrumented suite
+// The EditorInfo criterion (A1/A2) is asserted in the instrumented suite
 // (MessageKeyboardEditorInfoTest); this is the value half, and it is not device proof.
 class MessageKeyboardTest {
     @Test
