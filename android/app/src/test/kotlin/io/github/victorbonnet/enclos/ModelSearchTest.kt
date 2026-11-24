@@ -145,4 +145,13 @@ class ModelSearchTest {
         assertEquals(listOf("anthropic/claude-opus-4"), none.rows.map { it.choice.id })
         assertEquals(listOf(true), none.rows.map { it.kept })
     }
+
+    @Test
+    fun matches_keeps_its_spans_when_the_same_text_is_read_again() {
+        val text = "Cafe\u0301  \u0130stanbul Mod\u00e8le"
+        val first = matches(text, "cafe")
+        val second = matches(text, "istanbul modele")
+        assertEquals(listOf("Cafe\u0301"), first.map { text.substring(it.first, it.last + 1) })
+        assertEquals(listOf("\u0130stanbul", "Mod\u00e8le"), second.map { text.substring(it.first, it.last + 1) })
+    }
 }

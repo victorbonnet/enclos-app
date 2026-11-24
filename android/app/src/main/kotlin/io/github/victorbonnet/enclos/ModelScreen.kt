@@ -87,28 +87,29 @@ fun ModelScreen(client: ModelClient, address: String, hostConnected: Boolean, ba
             ActionButton("Save", enabled = canSave, onClick = { if (options?.restarts == true) confirming = true else save() })
         }
         Hairline()
+        // Pinned search-and-filter band: 104dp as approved (4 + 44 + 4 + 1 + 3 + 44 + 3 + 1).
         SearchField(
             query = query,
             onQuery = { query = it },
             label = "Search model providers and models",
-            modifier = Modifier.padding(top = 12.dp),
+            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
         )
         Hairline()
         Row(
             Modifier.fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp, vertical = 3.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Choice(
-                label = "Ready here · $readyCount",
+                label = if (options == null) "Ready here" else "Ready here · $readyCount",
                 on = filter == ModelProviderFilter.ReadyHere,
                 multiple = true,
                 onClick = { filter = if (filter == ModelProviderFilter.ReadyHere) null else ModelProviderFilter.ReadyHere },
             )
             Choice(
-                label = "Needs host setup · $needsSetupCount",
+                label = if (options == null) "Needs host setup" else "Needs host setup · $needsSetupCount",
                 on = filter == ModelProviderFilter.NeedsHostSetup,
                 multiple = true,
                 onClick = { filter = if (filter == ModelProviderFilter.NeedsHostSetup) null else ModelProviderFilter.NeedsHostSetup },
@@ -165,23 +166,43 @@ fun ModelScreen(client: ModelClient, address: String, hostConnected: Boolean, ba
                             }
                             hasQuery && filter == ModelProviderFilter.ReadyHere -> SettingRow {
                                 Text("No model provider matches \u201C$trimmedQuery\u201D with Ready here on.", style = Type.small, color = p.textMuted)
-                                Text("$readyCount of the ${providersView.total} are ready to use here.", style = Type.small, color = p.textMuted)
+                                Text(
+                                    if (readyCount == 1) "1 of the ${providersView.total} is ready to use here."
+                                    else "$readyCount of the ${providersView.total} are ready to use here.",
+                                    style = Type.small,
+                                    color = p.textMuted,
+                                )
                             }
                             hasQuery && filter == ModelProviderFilter.NeedsHostSetup -> SettingRow {
                                 Text("No model provider matches \u201C$trimmedQuery\u201D with Needs host setup on.", style = Type.small, color = p.textMuted)
-                                Text("$needsSetupCount of the ${providersView.total} need setup on the host.", style = Type.small, color = p.textMuted)
+                                Text(
+                                    if (needsSetupCount == 1) "1 of the ${providersView.total} needs setup on the host."
+                                    else "$needsSetupCount of the ${providersView.total} need setup on the host.",
+                                    style = Type.small,
+                                    color = p.textMuted,
+                                )
                             }
                             filter == ModelProviderFilter.ReadyHere -> SettingRow {
                                 Text("No model provider is ready to use here.", style = Type.small, color = p.textMuted)
-                                Text("Turn the filter off to see the $needsSetupCount that need setup on the host.", style = Type.small, color = p.textMuted)
+                                Text(
+                                    if (needsSetupCount == 1) "Turn the filter off to see the one that needs setup on the host."
+                                    else "Turn the filter off to see the $needsSetupCount that need setup on the host.",
+                                    style = Type.small,
+                                    color = p.textMuted,
+                                )
                             }
                             filter == ModelProviderFilter.NeedsHostSetup -> SettingRow {
                                 Text("No model provider needs host setup.", style = Type.small, color = p.textMuted)
-                                Text("Turn the filter off to see the $readyCount that are ready to use here.", style = Type.small, color = p.textMuted)
+                                Text(
+                                    if (readyCount == 1) "Turn the filter off to see the one that is ready to use here."
+                                    else "Turn the filter off to see the $readyCount that are ready to use here.",
+                                    style = Type.small,
+                                    color = p.textMuted,
+                                )
                             }
                         }
                         if (hasQuery) {
-                            val clearLabel = "Show all ${providersView.total} model providers"
+                            val clearLabel = if (providersView.total == 1) "Show all 1 model provider" else "Show all ${providersView.total} model providers"
                             SettingRow(Modifier.clickable(role = Role.Button, onClickLabel = clearLabel) { query = "" }) {
                                 Text(clearLabel, style = Type.label, color = p.accent)
                             }

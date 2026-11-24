@@ -920,7 +920,7 @@ internal fun SearchField(query: String, onQuery: (String) -> Unit, label: String
         singleLine = true,
         textStyle = Type.message.copy(color = p.text),
         cursorBrush = SolidColor(p.accent),
-        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp)
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp)
             .semantics { contentDescription = label },
         decorationBox = { field ->
             Row(

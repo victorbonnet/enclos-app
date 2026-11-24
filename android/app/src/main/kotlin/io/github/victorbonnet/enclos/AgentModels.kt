@@ -63,7 +63,7 @@ enum class ModelProviderFilter { ReadyHere, NeedsHostSetup }
 internal fun wordsMatch(text: String, query: String): Boolean {
     val words = fold(query).split(' ').filter { it.isNotEmpty() }
     if (words.isEmpty()) return true
-    val folded = fold(text)
+    val folded = folded(text)
     return words.all { it in folded }
 }
 
