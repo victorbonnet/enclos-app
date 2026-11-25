@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -33,6 +34,8 @@ import java.io.OutputStream
 import java.security.MessageDigest
 
 @RunWith(RobolectricTestRunner::class)
+// Native graphics: an undecodable image really fails to decode, as on a phone (the default fakes a bitmap).
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 class DownloadsTest {
     @get:Rule
     val compose = createComposeRule()
@@ -287,6 +290,67 @@ class DownloadsTest {
             assertEquals("Saved to Downloads", ShadowToast.getTextOfLatestToast())
         } finally {
             source.delete()
+        }
+    }
+
+    @Test fun a_cancel_landing_while_the_file_is_published_still_clears_saving_and_shows_the_notice() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val source = File.createTempFile("enclos-late", ".bin").apply { writeBytes("payload".toByteArray()) }
+        val job = kotlinx.coroutines.Job()
+        // The cancel lands inside finish: the file is published, the notice and the state still to come.
+        val store = FakeDownloadStore(onFinish = { job.cancel() })
+        try {
+            val attachment = Attachment("att-late", "application/octet-stream", "late.bin", source.length())
+            val controller = io.github.victorbonnet.enclos.ui.DownloadController(
+                attachment, context, kotlinx.coroutines.CoroutineScope(job + kotlinx.coroutines.Dispatchers.Default), store,
+            )
+            controller.start(source)
+            assertTrue(controller.saving)
+            untilMain { !controller.saving }
+            assertTrue(controller.saved)
+            assertEquals("Download again", controller.label)
+            assertEquals(1, store.completed.size)
+            assertEquals("Saved to Downloads", ShadowToast.getTextOfLatestToast())
+        } finally {
+            job.cancel()
+            source.delete()
+        }
+    }
+
+    @Test fun an_undecodable_image_whose_file_was_cleared_is_fetched_again_and_then_saved() {
+        val garbage = File.createTempFile("enclos-undecodable", ".png").apply { writeBytes("not an image".toByteArray()) }
+        val fresh = File.createTempFile("enclos-undecodable-fresh", ".png").apply { writeBytes("still not an image".toByteArray()) }
+        val store = FakeDownloadStore()
+        val states = androidx.compose.runtime.mutableStateMapOf<String, FileState>()
+        var fetches = 0
+        try {
+            val attachment = Attachment("att-undecodable", "image/png", "photo.png", garbage.length())
+            states[attachment.id] = FileState.Ready(garbage)
+            compose.setContent {
+                CompositionLocalProvider(LocalDownloadStore provides store) {
+                    io.github.victorbonnet.enclos.ui.Files(listOf(attachment), states) { fetches++ }
+                }
+            }
+            // The image does not decode: its line, with a Download control, stands in for it.
+            compose.waitUntil(timeoutMillis = 5_000) {
+                compose.onAllNodesWithContentDescription("Download photo.png").fetchSemanticsNodes().isNotEmpty()
+            }
+            // The system clears the cache while the line is shown, then Download is tapped.
+            assertTrue(garbage.delete())
+            compose.onNodeWithContentDescription("Download photo.png").performClick()
+            compose.waitForIdle()
+            assertEquals(1, fetches)
+            assertEquals(0, store.beginCalls)
+            states[attachment.id] = FileState.Loading(0, fresh.length())
+            compose.waitForIdle()
+            states[attachment.id] = FileState.Ready(fresh)
+            untilMain { store.completed.isNotEmpty() }
+            compose.waitForIdle()
+            assertEquals(1, store.beginCalls)
+            assertEquals("Saved to Downloads", ShadowToast.getTextOfLatestToast())
+        } finally {
+            garbage.delete()
+            fresh.delete()
         }
     }
 

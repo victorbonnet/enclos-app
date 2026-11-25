@@ -110,7 +110,11 @@ fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: 
                 if (itself && (state == null || gone)) fetch(a)
             }
             if (a.image) {
-                ImageFile(a, state, itself, { fetch(a) }, openFile = { opened = Opened(a, it, asImage = false) }) { opened = Opened(a, it, asImage = true) }
+                ImageFile(
+                    a, state, itself, { fetch(a) },
+                    openFile = { opened = Opened(a, it, asImage = false) },
+                    stateOf = { states[a.id] },
+                ) { opened = Opened(a, it, asImage = true) }
             } else {
                 OtherFile(a, state, itself, { fetch(a) }, { opened = Opened(a, it, asImage = false) }, stateOf = { states[a.id] })
             }
@@ -126,7 +130,16 @@ private sealed interface Decoded {
 }
 
 @Composable
-private fun ImageFile(a: Attachment, state: FileState?, itself: Boolean, retry: () -> Unit, openFile: (File) -> Unit, open: (File) -> Unit) {
+private fun ImageFile(
+    a: Attachment,
+    state: FileState?,
+    itself: Boolean,
+    retry: () -> Unit,
+    openFile: (File) -> Unit,
+    // Handed to the file line an undecodable image falls back to: a Download tapped there reads the state live.
+    stateOf: () -> FileState?,
+    open: (File) -> Unit,
+) {
     val shape = Shapes.control
     when (state) {
         is FileState.Ready -> {
@@ -141,7 +154,7 @@ private fun ImageFile(a: Attachment, state: FileState?, itself: Boolean, retry: 
                 null, Decoded.Missing -> Placeholder("Opening the image", retry)
                 // A corrupt file, a format this Android does not decode, or one too
                 // large to draw: its line opens the document viewer, with its notice and Share.
-                Decoded.Undecodable -> OtherFile(a, state, itself, retry, openFile)
+                Decoded.Undecodable -> OtherFile(a, state, itself, retry, openFile, stateOf)
                 is Decoded.Drawn -> Image(
                     d.bitmap.asImageBitmap(),
                     contentDescription = a.shownName,
