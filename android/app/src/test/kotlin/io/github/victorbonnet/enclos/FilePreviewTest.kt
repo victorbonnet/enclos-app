@@ -124,6 +124,13 @@ class FilePreviewTest {
         assertNull(handoffOf(pdf, "report.pdf.apk", sharing = false))
         assertEquals("image/svg+xml", handoffOf(Attachment("id", "image/svg+xml", "chart.svg", 1), "chart.svg", sharing = true)?.type)
         assertEquals("application/octet-stream", handoffOf(Attachment("id", "", "blob", 1), "blob", sharing = true)?.type)
+        // APK: Share only, never Open in another app.
+        val apk = Attachment("id", "application/vnd.android.package-archive", "build.apk", 1)
+        assertNull(handoffOf(apk, "build.apk", sharing = false))
+        val apkShare = handoffOf(apk, "build.apk", sharing = true)!!
+        assertEquals(Intent.ACTION_SEND, apkShare.action)
+        assertEquals("application/vnd.android.package-archive", apkShare.type)
+        assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, apkShare.flags)
     }
 
     @Test fun a_block_going_on_with_a_cut_line_is_marked() {

@@ -43,6 +43,7 @@ fun FileViewer(attachment: Attachment, file: File, close: () -> Unit) {
     val exists by produceState<Boolean?>(null, file) { value = withContext(Dispatchers.IO) { file.isFile } }
     val viewable = viewIntentType(attachment.mediaType, file.name) != null
     val elsewhere = if (viewable) "You can still open it in another app or share it." else "You can still share it."
+    val download = rememberDownload(attachment)
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val view = LocalView.current
         val lightBars = p.bg.luminance() > 0.5f
@@ -74,8 +75,15 @@ fun FileViewer(attachment: Attachment, file: File, close: () -> Unit) {
                 }
             }
             Hairline()
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(size(attachment.size), style = Type.meta, color = p.textFaint, modifier = Modifier.weight(1f))
+                if (LocalDownloadsOffered.current) {
+                    DownloadActionButton(download, enabled = exists == true) { download.start(file) }
+                }
                 if (viewable) {
                     // At least 48dp tall: the shared button's 44dp gives way to this minimum.
                     ActionButton("Open in another app", Modifier.heightIn(min = 48.dp), enabled = exists == true) { openAttachment(context, attachment, file) }
