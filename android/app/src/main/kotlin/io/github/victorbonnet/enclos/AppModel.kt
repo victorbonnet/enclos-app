@@ -445,9 +445,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
     val attentionItems: List<OpenItem> by derivedStateOf {
         // A held task whose card is answered leaves at once, before the host's next index (enclos ADR 0073).
-        withoutAnswered(
-            attentionItems(needsYou.items.values, approvals.values, needsYou.indexedHosts.keys, needsYou.staleHosts.keys, needsYou.coveredPolicies),
-            heldTasks.cards,
+        // A held task the runtime says waits on the team was never the person's to decide.
+        withoutTeamWaits(
+            withoutAnswered(
+                attentionItems(needsYou.items.values, approvals.values, needsYou.indexedHosts.keys, needsYou.staleHosts.keys, needsYou.coveredPolicies),
+                heldTasks.cards,
+            )
         )
     }
     private val attentionByAgent: Map<String, Int> by derivedStateOf { attentionCounts(attentionItems) }

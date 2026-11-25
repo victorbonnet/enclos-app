@@ -9,10 +9,13 @@ data class OpenItem(
     val host: String, val id: String, val kind: String, val agent: String?,
     val conversation: String?, val summary: String, val since: Long, val expired: Boolean,
     val version: String = "",
+    /** A held task its runtime says waits on the team. */
+    val waitsOnTeam: Boolean = false,
 ) {
     val key get() = "$host/$kind/${agent.orEmpty()}/$id"
     fun json() = JSONObject().put("id", id).put("kind", kind).put("agent", agent)
         .put("conversation", conversation).put("summary", summary).put("since", since).put("expired", expired).put("version", version)
+        .apply { if (kind == "held_task") put("waits_on", if (waitsOnTeam) "team" else "person") }
     companion object {
         fun from(host: String, value: JSONObject): OpenItem {
             val id = value.getString("id")
@@ -29,11 +32,12 @@ data class OpenItem(
             require(summary.toByteArray().size <= 1200 && !Visible.hasHidden(summary))
             val version = if (value.has("version")) value.getString("version") else ""
             require(version.toByteArray().size <= 512 && !Visible.hasHidden(version))
+            val waitsOnTeam = value.optString("waits_on") == "team"
             val rawSince = value.get("since")
             require(rawSince is Long || rawSince is Int)
             require(value.get("expired") is Boolean)
             require(kind == "policy_request" || (agent != null && conversation != null))
-            return OpenItem(host, id, kind, agent, conversation, summary, (rawSince as Number).toLong().also { require(it >= 0) }, value.getBoolean("expired"), version)
+            return OpenItem(host, id, kind, agent, conversation, summary, (rawSince as Number).toLong().also { require(it >= 0) }, value.getBoolean("expired"), version, waitsOnTeam)
         }
     }
 }

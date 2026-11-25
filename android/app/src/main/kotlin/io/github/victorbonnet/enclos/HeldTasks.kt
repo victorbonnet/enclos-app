@@ -372,3 +372,11 @@ fun withoutAnswered(items: List<OpenItem>, cards: Map<HeldTaskKey, HeldTask>): L
     val indexed = item.version.removePrefix("held:").toLongOrNull() ?: return@filterNot false
     card.state == HeldTaskState.Answered && card.revision >= indexed
 }
+
+/**
+ * A held task its runtime says waits on the team is not the person's: the team's
+ * own schedule resolves it, so it never enters Needs you, while its card stays in
+ * its conversation as today.
+ */
+fun withoutTeamWaits(items: List<OpenItem>): List<OpenItem> =
+    items.filterNot { it.kind == "held_task" && it.waitsOnTeam }
