@@ -15,6 +15,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.draw.clip
@@ -305,6 +306,7 @@ fun InboxScreen(
     openRoutines: (Agent) -> Unit,
     pair: () -> Unit,
     openApproval: (String) -> Unit,
+    state: LazyListState = rememberLazyListState(),
 ) {
     // "5 min ago" stays true while the screen shows.
     val now by produceState(System.currentTimeMillis() / 1000) {
@@ -341,6 +343,12 @@ fun InboxScreen(
         }
     }
     val found = inboxSearchResults(query, listed, searched)
+    // A search reads every message, off the main thread. Until its first pass
+    // after the tabs come back is done there is no row at all: a row here
+    // would move a place restored on Back (#66), because a list that has rows
+    // lays them out and takes the clamped result as the new place. An empty
+    // list keeps the place it was handed until the rows it belongs to arrive.
+    val searching = query.isNotBlank() && searched == null
     val requests = model.attentionItems().filter { query.isBlank() || "${it.summary} ${it.agent.orEmpty()} ${it.host}".contains(query, ignoreCase = true) }
     val narrowed = archivedOnly || query.isNotBlank() || filter != InboxFilter.All
     // Groups have their own section; the agents' trees hold one-to-one conversations.
@@ -363,7 +371,8 @@ fun InboxScreen(
                     if (archivedOnly) "Archived conversations stay here until you unarchive them." else "Start one below, or find archived conversations with the archive filter above.",
                 )
                 else -> {
-                    LazyColumn(Modifier.weight(1f)) {
+                    LazyColumn(Modifier.weight(1f), state = state) {
+                        if (searching) return@LazyColumn
                         if (archivedOnly) item(key = "archive-view") {
                             Text("Archived conversations", style = Type.meta, color = palette.accent, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
                         }
@@ -1136,7 +1145,7 @@ private fun MoreRow(name: String, hidden: Int, shown: Int, unfolded: Boolean, on
  * whose address or runtime has every word of it.
  */
 @Composable
-fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, openSandbox: (String) -> Unit, pair: () -> Unit, createSandbox: (String) -> Unit, openHost: (String) -> Unit) {
+fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, openSandbox: (String) -> Unit, pair: () -> Unit, createSandbox: (String) -> Unit, openHost: (String) -> Unit, state: LazyListState = rememberLazyListState()) {
     // "5 min ago" stays true while the screen shows.
     val now by produceState(System.currentTimeMillis() / 1000) {
         while (true) {
@@ -1153,7 +1162,7 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
     RecentUsageRefresh(model, model.paired.map { it.name })
     val words = fold(query).split(' ').filter { it.isNotEmpty() }
     val shown = model.agents.filter { a -> words.all { it in fold("${a.label} ${a.address} ${a.runtime}") } }
-    LazyColumn(Modifier.fillMaxSize()) {
+    LazyColumn(Modifier.fillMaxSize(), state = state) {
         model.paired.forEach { host ->
             val live = model.connected(host.name)
             val its = shown.filter { it.host == host.name }

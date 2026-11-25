@@ -42,6 +42,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -280,13 +281,20 @@ class MainActivity : ComponentActivity() {
  * draws its own ground, so two never show through each other mid-move.
  */
 @Composable
-private fun Screens(model: AppModel, ask: Ask) {
+internal fun Screens(model: AppModel, ask: Ask) {
     var saved by rememberSaveable { mutableStateOf("tabs") }
     // The Inbox filters, kept here, outside the routes' transition: the first
     // screen is not composed while a full screen shows, and they outlive it.
     var unreadOnly by rememberSaveable { mutableStateOf(false) }
     var archivedOnly by rememberSaveable { mutableStateOf(false) }
     val views = rememberPagerState(pageCount = { View.entries.size })
+    // The first screen keeps its place while a full screen shows over it (#66):
+    // replaced by another route, its composition goes, and with it the lists'
+    // rows and offsets, the search and the rest of what `rememberSaveable` holds.
+    // Held by route, so they are there again when it comes back. Only the tabs:
+    // a detail page is not asked to keep its place, and a conversation's would
+    // be one entry per chat that never goes (#66 BN04, BN07).
+    val kept = rememberSaveableStateHolder()
     val routes = remember { SeekableTransitionState(Route.restore(saved)) }
     val transition = rememberTransition(routes, label = "route")
     val scope = rememberCoroutineScope()
@@ -435,26 +443,28 @@ private fun Screens(model: AppModel, ask: Ask) {
                             }
                         },
                     )
-                    Route.Tabs -> HomeShell(
-                        model,
-                        views,
-                        unreadOnly = unreadOnly,
-                        archivedOnly = archivedOnly,
-                        onUnreadOnly = { unreadOnly = it },
-                        onArchivedOnly = { archivedOnly = it },
-                        onView = onView,
-                        openChat = { go(Route.Chat(it)) },
-                        openAgent = { go(Route.AgentPage(it)) },
-                        openRoutines = { go(Route.RoutinesPage(it.address)) },
-                        openSandbox = { go(Route.SandboxPage(it)) },
-                        openApproval = { go(Route.ApprovalPage(it)) },
-                        start = start,
-                        settings = { go(Route.Settings) },
-                        compose = { go(Route.NewChat) },
-                        pair = { go(Route.Pair) },
-                        createSandbox = { go(Route.CreateSandbox(it)) },
-                        openHost = { go(Route.HostPage(it)) },
-                    )
+                    Route.Tabs -> kept.SaveableStateProvider(route.save()) {
+                        HomeShell(
+                            model,
+                            views,
+                            unreadOnly = unreadOnly,
+                            archivedOnly = archivedOnly,
+                            onUnreadOnly = { unreadOnly = it },
+                            onArchivedOnly = { archivedOnly = it },
+                            onView = onView,
+                            openChat = { go(Route.Chat(it)) },
+                            openAgent = { go(Route.AgentPage(it)) },
+                            openRoutines = { go(Route.RoutinesPage(it.address)) },
+                            openSandbox = { go(Route.SandboxPage(it)) },
+                            openApproval = { go(Route.ApprovalPage(it)) },
+                            start = start,
+                            settings = { go(Route.Settings) },
+                            compose = { go(Route.NewChat) },
+                            pair = { go(Route.Pair) },
+                            createSandbox = { go(Route.CreateSandbox(it)) },
+                            openHost = { go(Route.HostPage(it)) },
+                        )
+                    }
                 }
             }
         }
