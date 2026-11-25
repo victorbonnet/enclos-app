@@ -46,11 +46,10 @@ object Downloads {
     fun savedName(name: String): String {
         var current = Attachments.fileName(name)
         while (true) {
-            val next = Attachments.fileName(
-                current.replace(Regex(" {2,}"), " ").trimStart('.', ' ').trimEnd(),
-            )
+            val next = current.replace(Regex(" {2,}"), " ").trimStart('.', ' ').trimEnd()
             if (next == current) return current
             current = next
+            if (current.isEmpty()) return Attachments.fileName("")
         }
     }
 
