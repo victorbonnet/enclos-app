@@ -102,6 +102,7 @@ fun HeldTaskAnswerPanel(client: HeldTaskClient, card: HeldTask, details: @Compos
                         enabled = enabled,
                         singleLine = false,
                         minLines = 2,
+                        keyboardOptions = MessageKeyboard,
                     )
                     val typed = heldAnswerText(draft)
                     if (draft.isNotBlank() && typed == null) {

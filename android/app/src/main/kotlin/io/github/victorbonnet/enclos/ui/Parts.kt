@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
@@ -74,6 +75,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -528,6 +531,16 @@ fun SystemLine(text: String, modifier: Modifier = Modifier) {
 }
 
 /**
+ * What the three chat fields ask the keyboard for: a message field that starts
+ * each sentence with a capital. It sets no IME action on purpose, so ↵ adds a
+ * new line and the arrow beside the field sends.
+ */
+internal val MessageKeyboard = KeyboardOptions(
+    capitalization = KeyboardCapitalization.Sentences,
+    keyboardType = KeyboardType.ShortMessage,
+)
+
+/**
  * The message field and its send button. While it cannot send ([canSend]
  * false, such as while the host is not connected), the field still takes
  * text, the button stays off, and [notice] above them says why.
@@ -576,6 +589,7 @@ fun Composer(
                 },
                 textStyle = Type.message.copy(color = p.text),
                 cursorBrush = SolidColor(p.accent),
+                keyboardOptions = MessageKeyboard,
                 maxLines = 5,
                 modifier = Modifier.weight(1f),
                 decorationBox = { field ->
@@ -628,6 +642,7 @@ fun FormField(
     singleLine: Boolean = true,
     minLines: Int = 1,
     textStyle: TextStyle = Type.message,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
 ) {
     val p = palette
     Column(Modifier.fillMaxWidth()) {
@@ -643,6 +658,7 @@ fun FormField(
             minLines = if (singleLine) 1 else minLines,
             textStyle = textStyle.copy(color = if (enabled) p.text else p.textFaint),
             cursorBrush = SolidColor(p.accent),
+            keyboardOptions = keyboardOptions,
             modifier = modifier.fillMaxWidth().then(if (label == null) Modifier else Modifier.semantics { contentDescription = label }),
             decorationBox = { field ->
                 Box(
