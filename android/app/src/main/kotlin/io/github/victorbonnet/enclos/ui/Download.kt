@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -19,13 +20,19 @@ import io.github.victorbonnet.enclos.Attachment
 import io.github.victorbonnet.enclos.DownloadOutcome
 import io.github.victorbonnet.enclos.DownloadStore
 import io.github.victorbonnet.enclos.Downloads
+import io.github.victorbonnet.enclos.FileState
+import io.github.victorbonnet.enclos.downloadFetchFailureNotice
 import io.github.victorbonnet.enclos.downloadNotice
 import io.github.victorbonnet.enclos.saveToDownloads
 import io.github.victorbonnet.enclos.showDownloadNotice
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -42,8 +49,10 @@ val LocalDownloadsOffered = staticCompositionLocalOf { Downloads.offered() }
 
 /**
  * Shared state for saving one [attachment] to Downloads from a viewer or file card.
- * A second tap while saving does nothing; leaving composition cancels the copy,
- * discards the pending row, and shows the cancelled notice once.
+ * A second tap while saving does nothing. The copy runs in [scope]: a viewer's own
+ * (so closing the viewer cancels the copy, discards the pending row and shows the
+ * cancelled notice once), or, for a file card in a scrolling list, the app's
+ * ([DownloadHub]), which no scroll can end.
  */
 @Stable
 class DownloadController(
@@ -57,6 +66,8 @@ class DownloadController(
 
     var saved by mutableStateOf(false)
         private set
+
+    private var waiting: Job? = null
 
     val label: String
         get() = if (saved) "Download again" else "Download"
@@ -75,22 +86,68 @@ class DownloadController(
         if (!Downloads.offered() || saving) return
         saving = true
         scope.launch {
-            try {
-                val outcome = saveToDownloads(context, attachment, file, store)
+            // A cancel that lands once the file is published still comes back as Saved.
+            val outcome = try {
+                saveToDownloads(context, attachment, file, store)
+            } catch (_: CancellationException) {
+                DownloadOutcome.Cancelled
+            }
+            // The notice and the state are not cancellable: a closed viewer still hears how it ended.
+            withContext(NonCancellable) {
                 if (outcome == DownloadOutcome.Saved) saved = true
                 downloadNotice(outcome)?.let { notify(it) }
-            } catch (e: CancellationException) {
-                withContext(NonCancellable) {
-                    downloadNotice(DownloadOutcome.Cancelled)?.let { notify(it) }
-                }
-                throw e
-            } finally {
                 saving = false
             }
         }
     }
+
+    /**
+     * Download, tapped on a file that is not on the phone (not fetched, failed, or
+     * cleared from the cache): asks [fetch] for it, then saves it once it comes, or
+     * says why it did not. [stateOf] reads the file's state live, since the card
+     * that was tapped may be off screen by then. A new tap replaces an earlier wait;
+     * a state that is already there when the tap lands (the stale one the fetch
+     * replaces) is never taken for the answer.
+     */
+    fun startWhenFetched(stateOf: () -> FileState?, fetch: () -> Unit) {
+        if (!Downloads.offered() || saving) return
+        waiting?.cancel()
+        val before = stateOf()
+        fetch()
+        waiting = scope.launch {
+            // Each write to the state is its own answer, even an equal one: compared by identity.
+            val answer = snapshotFlow { Seen(stateOf()) }
+                .map { it.state }
+                .first { now -> now !== before && (now is FileState.Ready || now is FileState.Failed) }
+            waiting = null
+            when (answer) {
+                is FileState.Ready -> start(answer.file)
+                is FileState.Failed -> notify(downloadFetchFailureNotice(answer.why))
+                else -> {}
+            }
+        }
+    }
+
+    private class Seen(val state: FileState?)
 }
 
+/**
+ * The saves and the waits for a fetch that outlive the card they started from, one
+ * [DownloadController] per attachment, run in the app's own scope. Without it a
+ * download stops when its card scrolls out of the chat. Used from the main thread.
+ */
+internal object DownloadHub {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private data class Key(val id: String, val context: Context, val store: DownloadStore?)
+    private val controllers = HashMap<Key, DownloadController>()
+
+    fun controller(attachment: Attachment, context: Context, store: DownloadStore?): DownloadController {
+        val app = context.applicationContext
+        return controllers.getOrPut(Key(attachment.id, app, store)) { DownloadController(attachment, app, scope, store) }
+    }
+}
+
+/** For a viewer: a copy that ends with the viewer. */
 @Composable
 fun rememberDownload(attachment: Attachment): DownloadController {
     val context = LocalContext.current
@@ -99,6 +156,14 @@ fun rememberDownload(attachment: Attachment): DownloadController {
     return remember(attachment.id, context, scope, store) {
         DownloadController(attachment, context, scope, store)
     }
+}
+
+/** For a file card in a list: a copy that scrolling the card away does not end. */
+@Composable
+internal fun rememberCardDownload(attachment: Attachment): DownloadController {
+    val context = LocalContext.current
+    val store = LocalDownloadStore.current
+    return remember(attachment.id, context, store) { DownloadHub.controller(attachment, context, store) }
 }
 
 /** Shared bottom-row Download button for document and HTML viewers. */

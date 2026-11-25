@@ -69,9 +69,7 @@ import io.github.victorbonnet.enclos.Attachment
 import io.github.victorbonnet.enclos.Attachments
 import io.github.victorbonnet.enclos.FileState
 import io.github.victorbonnet.enclos.Images
-import io.github.victorbonnet.enclos.downloadFetchFailureNotice
 import io.github.victorbonnet.enclos.shareAttachment
-import io.github.victorbonnet.enclos.showDownloadNotice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -114,7 +112,7 @@ fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: 
             if (a.image) {
                 ImageFile(a, state, itself, { fetch(a) }, openFile = { opened = Opened(a, it, asImage = false) }) { opened = Opened(a, it, asImage = true) }
             } else {
-                OtherFile(a, state, itself, { fetch(a) }) { opened = Opened(a, it, asImage = false) }
+                OtherFile(a, state, itself, { fetch(a) }, { opened = Opened(a, it, asImage = false) }, stateOf = { states[a.id] })
             }
         }
     }
@@ -175,31 +173,18 @@ private fun Placeholder(text: String, onClick: (() -> Unit)? = null) {
 
 /** A file's name and size. Opening it never starts the share sheet. */
 @Composable
-internal fun OtherFile(a: Attachment, state: FileState?, itself: Boolean, retry: () -> Unit, open: (File) -> Unit) {
-    val context = LocalContext.current
+internal fun OtherFile(
+    a: Attachment,
+    state: FileState?,
+    itself: Boolean,
+    retry: () -> Unit,
+    open: (File) -> Unit,
+    // The file's state read live, for a Download tapped before the file came: the card may be gone by then.
+    stateOf: () -> FileState? = { state },
+) {
     val p = palette
     val offered = LocalDownloadsOffered.current
-    val download = rememberDownload(a)
-    var pendingDownload by remember(a.id) { mutableStateOf(false) }
-    var priorFailure by remember(a.id) { mutableStateOf<FileState.Failed?>(null) }
-
-    LaunchedEffect(state, pendingDownload) {
-        if (!pendingDownload) return@LaunchedEffect
-        when (state) {
-            is FileState.Ready -> {
-                pendingDownload = false
-                priorFailure = null
-                download.start(state.file)
-            }
-            is FileState.Failed -> if (state !== priorFailure) {
-                pendingDownload = false
-                priorFailure = null
-                showDownloadNotice(context, downloadFetchFailureNotice(state.why))
-            }
-            is FileState.Loading -> priorFailure = null
-            null -> {}
-        }
-    }
+    val download = rememberCardDownload(a)
 
     Row(
         Modifier.fillMaxWidth().clip(Shapes.control).border(1.dp, p.line, Shapes.control),
@@ -246,20 +231,10 @@ internal fun OtherFile(a: Attachment, state: FileState?, itself: Boolean, retry:
                             is FileState.Ready -> if (state.file.isFile) {
                                 download.start(state.file)
                             } else {
-                                pendingDownload = true
-                                priorFailure = null
-                                retry()
+                                download.startWhenFetched(stateOf, retry)
                             }
-                            is FileState.Failed -> {
-                                pendingDownload = true
-                                priorFailure = state
-                                retry()
-                            }
-                            null -> {
-                                pendingDownload = true
-                                priorFailure = null
-                                retry()
-                            }
+                            is FileState.Failed -> download.startWhenFetched(stateOf, retry)
+                            null -> download.startWhenFetched(stateOf, retry)
                             is FileState.Loading -> {}
                         }
                     }

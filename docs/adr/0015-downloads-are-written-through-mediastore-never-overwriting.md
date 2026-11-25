@@ -10,7 +10,7 @@ Agents send files such as build APKs that a person wants in the phone's shared D
 
 ## Decision
 
-Every Download action in the app goes through one write path (`Downloads.kt`) backed by `MediaStore.Downloads` on API 29 and later, with no storage permission in the manifest. On API 28, Download is not offered (absent, not disabled); Share and Open stay unchanged. Each write inserts a row with `IS_PENDING = 1`, streams the cached bytes unchanged, and clears `IS_PENDING = 0` only on completion; any failure or cancellation deletes the pending row. The file is written under the sanitised ASCII cache name (`Attachments.fileName`), never overwriting an existing file in Downloads (taking the first free `name (n).ext` when the name is already taken).
+Every Download action in the app goes through one write path (`Downloads.kt`) backed by `MediaStore.Downloads` on API 29 and later, with no storage permission in the manifest. On API 28, Download is not offered (absent, not disabled); Share and Open stay unchanged. Each write inserts a row with `IS_PENDING = 1`, streams the cached bytes unchanged, and clears `IS_PENDING = 0` only on completion; any failure or cancellation before the file is published deletes the pending row. The file is written under the sanitised ASCII cache name (`Attachments.fileName`), never overwriting an existing file in Downloads (taking the first free `name (n).ext` when the name is already taken).
 
 ## Reason
 
