@@ -30,4 +30,13 @@ core-android:
 android: core-android
     cd android && ./gradlew --no-daemon :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 
+# Draws the design screens (android/app/src/test/.../screenshots) to PNGs in
+# android/app/build/screenshots, which git ignores, and lists them. No phone,
+# emulator or browser: Robolectric draws them on the JVM (docs/design-screens.md).
+# Needs what `just android` needs
+screenshots: core-android
+    rm -rf android/app/build/screenshots
+    cd android && ./gradlew --no-daemon -Penclos.screenshots :app:testDebugUnitTest --tests '*.screenshots.*'
+    find "$PWD/android/app/build/screenshots" -name '*.png' | sort
+
 ci: fmt clippy test deny uniffi-versions
