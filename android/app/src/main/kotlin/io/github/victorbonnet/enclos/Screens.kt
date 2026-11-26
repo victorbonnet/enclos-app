@@ -353,7 +353,17 @@ fun InboxScreen(
     val narrowed = archivedOnly || query.isNotBlank() || filter != InboxFilter.All
     // Groups have their own section; the agents' trees hold one-to-one conversations.
     val groupsFound = found.filter { it.conversation.group }
-    val agents = byAgent(sorted.filter { !it.group }, found.filter { !it.conversation.group }, model.unfolded.toSet(), model::unread, narrowed)
+    val direct = sorted.filter { !it.group }
+    val raised = if (query.isNotBlank()) Raised.None else raisedBy(direct.map { "${it.host}/${it.agent}" }.distinct(), model::raisingTasks)
+    val agents = byAgent(
+        direct,
+        found.filter { !it.conversation.group },
+        model.unfolded.toSet(),
+        model::unread,
+        narrowed,
+        raised = raised,
+        lastAt = { model.lines[it.id]?.lastOrNull()?.time ?: 0L },
+    )
     // A section folded away stays so, except under a search: that shows all it finds.
     val shown = { s: InboxSection -> query.isNotBlank() || s.name !in model.folded }
     val unreadIn = { group: Boolean -> sorted.filter { it.group == group }.sumOf { model.unread(it.id) } }

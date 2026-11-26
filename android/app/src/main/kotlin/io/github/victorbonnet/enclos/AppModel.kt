@@ -931,6 +931,21 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             ?.firstNotNullOfOrNull { tasks[TaskKey(address.substringBefore('/'), sandbox, it.task)] }
     }
 
+    /**
+     * The tasks the agent at [address] (`host/sandbox/agent`) is working on that
+     * raise it in the Inbox: every task its activity names that the phone keeps
+     * in `queued` or `running`.
+     */
+    fun raisingTasks(address: String): List<AgentTask> {
+        if (!offersTasks(address)) return emptyList()
+        val host = address.substringBefore('/')
+        val sandbox = address.substringAfter('/').substringBefore('/')
+        return activityOf(address)?.doing?.filterIsInstance<Doing.Task>()
+            ?.mapNotNull { tasks[TaskKey(host, sandbox, it.task)] }
+            ?.filter { it.state == TaskState.Queued || it.state == TaskState.Running }
+            .orEmpty()
+    }
+
     /** The key a task is kept under on the phone. */
     private fun taskKey(key: TaskKey) = "${key.host}/${key.sandbox}/${key.id}"
 

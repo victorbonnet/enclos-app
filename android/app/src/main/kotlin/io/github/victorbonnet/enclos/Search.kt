@@ -96,13 +96,54 @@ private val Conversation.address get() = "$host/$agent"
 const val RECENT = 5
 
 /**
+ * Agents and conversations raised to the top of the Inbox's Agents section by
+ * queued or running tasks, keyed by each agent's address (`host/sandbox/agent`)
+ * and, within each agent, by conversation id, each mapped to its newest task's
+ * start time (`AgentTask.since`).
+ */
+data class Raised(
+    val agents: Map<String, Long> = emptyMap(),
+    val conversations: Map<String, Map<String, Long>> = emptyMap(),
+) {
+    companion object {
+        val None = Raised()
+    }
+}
+
+/**
+ * Builds the [Raised] set for [addresses] from each agent's raising tasks.
+ * Only tasks in `queued` or `running` raise; each agent and each named
+ * conversation takes the newest [AgentTask.since] among its raising tasks.
+ */
+fun raisedBy(addresses: Iterable<String>, tasks: (String) -> List<AgentTask>): Raised {
+    val agents = LinkedHashMap<String, Long>()
+    val conversations = LinkedHashMap<String, MutableMap<String, Long>>()
+    for (address in addresses) {
+        val active = tasks(address).filter { it.state == TaskState.Queued || it.state == TaskState.Running }
+        if (active.isEmpty()) continue
+        agents[address] = active.maxOf { it.since }
+        for (task in active) {
+            val conversation = task.conversation ?: continue
+            val map = conversations.getOrPut(address) { LinkedHashMap() }
+            val current = map[conversation]
+            if (current == null || task.since > current) map[conversation] = task.since
+        }
+    }
+    return if (agents.isEmpty()) Raised.None else Raised(agents, conversations)
+}
+
+/**
  * The inbox by agent. [sorted] is every listed conversation, the newest
  * first; [found] what the search and filter let through, in that order.
- * Each agent once, the one with the newest conversation first. Under it,
- * newest first, its conversations other than Home: every one while it is
- * in [expanded], else the [RECENT] newest and any older one with something
- * [unread]. While [narrowed] (a search or a filter), an agent shows only if
- * something of it was found, and everything found shows.
+ * Each agent once, [raised] agents first (newest task start, then newest
+ * matching message via [lastAt], then address ascending), then the rest in
+ * the order of their newest conversation. Under an agent, its [raised]
+ * conversations come first (newest task start, then [lastAt]), then its
+ * other non-Home conversations newest first: every one while it is in
+ * [expanded], else the [RECENT] newest, any older one with something
+ * [unread], and every raised one. While [narrowed] (a search or a filter),
+ * an agent shows only if something of it was found, and everything found
+ * shows, with [raised] reordering only what is already admitted.
  */
 fun byAgent(
     sorted: List<Conversation>,
@@ -110,17 +151,56 @@ fun byAgent(
     expanded: Set<String>,
     unread: (String) -> Int,
     narrowed: Boolean,
+    raised: Raised = Raised.None,
+    lastAt: (Conversation) -> Long = { 0L },
 ): List<AgentEntry> {
     val all = sorted.groupBy { it.address }
+    val foundByAgent = if (narrowed) found.groupBy { it.conversation.address } else emptyMap()
     val shown = (if (narrowed) found.map { it.conversation } else sorted).map { it.address }.distinct()
-    return shown.map { address ->
+    val ordered = if (raised.agents.isEmpty()) {
+        shown
+    } else {
+        val (up, rest) = shown.partition { it in raised.agents }
+        val newestAt: (String) -> Long = { address ->
+            val scope = if (narrowed) foundByAgent[address].orEmpty().map { it.conversation } else all[address].orEmpty()
+            scope.maxOfOrNull(lastAt) ?: 0L
+        }
+        up.sortedWith(
+            compareByDescending<String> { raised.agents.getValue(it) }
+                .thenByDescending(newestAt)
+                .thenBy { it },
+        ) + rest
+    }
+    return ordered.map { address ->
         val its = all[address].orEmpty()
         val home = its.firstOrNull { it.home }
         val others = its.filter { !it.home }
+        val raisedUnder = raised.conversations[address].orEmpty()
         val under = if (narrowed) {
-            found.filter { it.conversation.address == address && !it.conversation.home }
+            val matching = foundByAgent[address].orEmpty().filter { !it.conversation.home }
+            if (raisedUnder.isEmpty()) {
+                matching
+            } else {
+                val (up, rest) = matching.partition { it.conversation.id in raisedUnder }
+                up.sortedWith(
+                    compareByDescending<Found> { raisedUnder.getValue(it.conversation.id) }
+                        .thenByDescending { lastAt(it.conversation) },
+                ) + rest
+            }
         } else {
-            others.filterIndexed { i, c -> address in expanded || i < RECENT || unread(c.id) > 0 }.map { Found(it, null) }
+            val visible = others.filterIndexed { i, c ->
+                address in expanded || i < RECENT || unread(c.id) > 0 || c.id in raisedUnder
+            }
+            val orderedVisible = if (raisedUnder.isEmpty()) {
+                visible
+            } else {
+                val (up, rest) = visible.partition { it.id in raisedUnder }
+                up.sortedWith(
+                    compareByDescending<Conversation> { raisedUnder.getValue(it.id) }
+                        .thenByDescending(lastAt),
+                ) + rest
+            }
+            orderedVisible.map { Found(it, null) }
         }
         val homeMatch = found.firstOrNull { it.conversation.id == home?.id }?.match
         val first = its.firstOrNull() ?: found.first { it.conversation.address == address }.conversation
