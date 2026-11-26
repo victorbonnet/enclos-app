@@ -81,6 +81,13 @@ class ModelScreenTest {
             }
         }
 
+        /** Delivers the queued options answer only, leaving the models unanswered. */
+        fun deliverOptions() {
+            val next = queued.firstOrNull { it.optString("result") == "options" } ?: return
+            queued.remove(next)
+            compose.runOnIdle { client.received("mac", next) }
+        }
+
         /** Delivers what the host answered, until the page asks nothing more. */
         fun answer() {
             repeat(10) {
@@ -381,6 +388,27 @@ class ModelScreenTest {
     }
 
     @Test
+    fun loading_models_shows_the_header_and_a_query_waits_for_them() {
+        val host = Host(extraModels = 1)
+        compose.setContent { ModelScreen(host.client, address, hostConnected = true, back = {}) }
+        compose.waitForIdle()
+        host.deliverOptions()
+        compose.waitForIdle()
+        assertTrue("models asked for", host.actions("models").isNotEmpty())
+        compose.onNodeWithText("loading…").assertExists()
+        compose.onNodeWithContentDescription("Search model providers and models").performTextInput("two")
+        compose.waitForIdle()
+        compose.onNodeWithText("loading…").assertExists()
+        compose.onNodeWithText("No model matches \u201Ctwo\u201D.").assertDoesNotExist()
+        compose.onNodeWithText("Use \u201Ctwo\u201D as a model ID").assertDoesNotExist()
+        host.answer()
+        compose.onNodeWithText("1 of 3").assertExists()
+        compose.onNodeWithText("Model Two").assertExists()
+        compose.onNodeWithText("loading…").assertDoesNotExist()
+        compose.onNodeWithText("Model 3").assertDoesNotExist()
+    }
+
+    @Test
     fun use_query_as_model_id_is_hidden_when_custom_models_is_false() {
         val host = Host(customModels = false)
         show(host)
@@ -397,6 +425,12 @@ class ModelScreenTest {
         compose.onNodeWithText("not loaded").assertExists()
         compose.onNodeWithText("This model provider lists too many models to show on the phone.").assertExists()
         compose.onNodeWithText("Search can only match models that load on the phone. Type the model's id below.").assertExists()
+        compose.onNodeWithContentDescription("Search model providers and models").performTextInput("gpt")
+        compose.waitForIdle()
+        compose.onNodeWithText("not loaded").assertExists()
+        compose.onNodeWithText("Search can only match models that load on the phone. Type the model's id below.").assertExists()
+        compose.onNodeWithText("No model matches \u201Cgpt\u201D.").assertDoesNotExist()
+        compose.onNodeWithText("Use \u201Cgpt\u201D as a model ID").assertDoesNotExist()
     }
 
     @Test
@@ -415,7 +449,10 @@ class ModelScreenTest {
         compose.onNodeWithText("Search matches its models once they load.").assertDoesNotExist()
         compose.onNodeWithContentDescription("Search model providers and models").performTextInput("gpt")
         compose.waitForIdle()
+        compose.onNodeWithText("not loaded").assertExists()
         compose.onNodeWithText("Search matches its models once they load.").assertExists()
+        compose.onNodeWithText("No model matches \u201Cgpt\u201D.").assertDoesNotExist()
+        compose.onNodeWithText("Use \u201Cgpt\u201D as a model ID").assertDoesNotExist()
     }
 
     @Test

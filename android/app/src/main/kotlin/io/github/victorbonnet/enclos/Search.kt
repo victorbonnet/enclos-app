@@ -159,13 +159,36 @@ private class FoldedText(private val source: String) {
     val spans: FoldedSpans by lazy(LazyThreadSafetyMode.PUBLICATION) { buildSpans(source) }
 }
 
-private val foldedCache = ConcurrentHashMap<String, FoldedText>()
+/** Texts longer than this are folded each time, never kept. */
+private const val FOLD_CACHE_TEXT_MAX = 8_192
+
+/** The most characters of source text the cache keeps, over all its entries. */
+private const val FOLD_CACHE_CHARS = 262_144
+
+/** Least recently read first; guarded by itself. */
+private val foldedCache = LinkedHashMap<String, FoldedText>(256, 0.75f, true)
+private var foldedChars = 0
 
 private fun foldedText(text: String): FoldedText {
-    foldedCache[text]?.let { return it }
-    if (foldedCache.size >= FOLD_CACHE_LIMIT) foldedCache.clear()
-    return foldedCache.computeIfAbsent(text, ::FoldedText)
+    if (text.length > FOLD_CACHE_TEXT_MAX) return FoldedText(text)
+    synchronized(foldedCache) { foldedCache[text]?.let { return it } }
+    val made = FoldedText(text)
+    synchronized(foldedCache) {
+        foldedCache[text]?.let { return it }
+        foldedCache[text] = made
+        foldedChars += text.length
+        val oldest = foldedCache.entries.iterator()
+        while ((foldedCache.size > FOLD_CACHE_LIMIT || foldedChars > FOLD_CACHE_CHARS) && oldest.hasNext()) {
+            val gone = oldest.next()
+            foldedChars -= gone.key.length
+            oldest.remove()
+        }
+    }
+    return made
 }
+
+/** What the cache holds now: entries and the characters of their sources. */
+internal fun foldCacheSize(): Pair<Int, Int> = synchronized(foldedCache) { foldedCache.size to foldedChars }
 
 /** Cached [fold] for repeated matching against the same label or id. */
 internal fun folded(text: String): String = foldedText(text).plain

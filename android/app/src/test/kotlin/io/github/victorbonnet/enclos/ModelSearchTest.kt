@@ -147,6 +147,24 @@ class ModelSearchTest {
     }
 
     @Test
+    fun the_fold_cache_stays_bounded_and_matches_stay_right() {
+        val big = "Caf\u00e9 ".repeat(1500)
+        repeat(200) { n -> assertEquals(1, matches("${big}x$n unique", "unique").size) }
+        val (bigEntries, bigChars) = foldCacheSize()
+        assertTrue("big entries $bigEntries", bigEntries < 200)
+        assertTrue("big chars $bigChars", bigChars <= 262_144)
+
+        repeat(6000) { n -> matches("message number $n", "number") }
+        val (entries, chars) = foldCacheSize()
+        assertTrue("entries $entries", entries <= 4096)
+        assertTrue("chars $chars", chars <= 262_144)
+
+        val long = "x".repeat(20_000) + " Needle"
+        assertEquals(listOf(20_001..20_006), matches(long, "needle"))
+        assertEquals(entries to chars, foldCacheSize())
+    }
+
+    @Test
     fun matches_keeps_its_spans_when_the_same_text_is_read_again() {
         val text = "Cafe\u0301  \u0130stanbul Mod\u00e8le"
         val first = matches(text, "cafe")
