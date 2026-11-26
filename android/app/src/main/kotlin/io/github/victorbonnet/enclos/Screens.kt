@@ -407,7 +407,7 @@ fun InboxScreen(
                                 items(groupsFound, key = { "group:${it.conversation.id}" }) { f ->
                                     Arriving { GroupRow(model, f.conversation, f.match, query, now) { open(f.conversation.id) } }
                                 }
-                                item(key = "groups-gap") { Gap(14.dp) }
+                                item(key = "groups-gap") { Gap(if (agents.isEmpty()) 14.dp else 6.dp) }
                             }
                         }
                         if (agents.isNotEmpty()) {
@@ -1808,7 +1808,6 @@ private fun MentionSuggestions(offered: List<String>, photoOf: (String) -> Photo
         exit = fadeOut(Motion.exit()) + shrinkVertically(Motion.exit(), shrinkTowards = Alignment.Bottom),
     ) {
         Column(Modifier.fillMaxWidth().background(p.surface)) {
-            Hairline()
             offered.forEach { h ->
                 Row(
                     Modifier.fillMaxWidth().clickable(onClickLabel = "Address @$h") { onPick(h) }.padding(horizontal = 16.dp, vertical = 9.dp),
@@ -1877,7 +1876,6 @@ private fun CommandSuggestions(offered: List<AgentCommand>, typed: String, onPic
         exit = fadeOut(Motion.exit()) + shrinkVertically(Motion.exit(), shrinkTowards = Alignment.Bottom),
     ) {
         Column(Modifier.fillMaxWidth().background(p.surface)) {
-            Hairline()
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
                 items(shown, key = { it.name }) { c ->
                     Column(

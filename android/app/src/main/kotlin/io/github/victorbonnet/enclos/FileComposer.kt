@@ -256,7 +256,7 @@ internal fun FileOutcome(phase: FilePhase, text: String, names: List<String>, on
         else -> return
     }
     // On its own `surface` so accent actions keep their contrast over the glass bar.
-    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp).clip(Shapes.control).background(palette.surface).heightIn(max = 160.dp).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp).clip(Shapes.control).background(palette.surface).heightIn(max = 160.dp).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 8.dp)) {
         Text(listOf(text, names.joinToString()).filter { it.isNotBlank() }.joinToString(" · "), style = Type.small, color = palette.text)
         Text(line, style = Type.small, color = palette.text)
         Column {

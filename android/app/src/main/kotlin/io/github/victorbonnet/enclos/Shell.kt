@@ -193,7 +193,7 @@ private fun ViewSwitch(view: View, waiting: Int, onView: (View) -> Unit) {
             ) { Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 Glyph(icon, if (on) p.text else p.textMuted, size = 22.dp)
                 if (option == View.Conversations && waiting > 0) Text(
-                    if (waiting > 99) "99+" else waiting.toString(), style = Type.small, color = if (on) p.accent else p.text,
+                    if (waiting > 99) "99+" else waiting.toString(), style = Type.small, color = p.accent,
                     // Drawn as 1A has it: the count keeps its own `surface` pill on the unselected half too.
                     modifier = if (on) Modifier else Modifier.clip(Shapes.pill).background(p.surface).padding(horizontal = 6.dp),
                 )

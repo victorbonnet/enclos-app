@@ -12,8 +12,9 @@ import kotlin.math.pow
 /**
  * What may be drawn on the bars' glass (`docs/spec.md`, "The bars"): over the
  * worst backdrops a bar can have, black and white, `text` holds 7:1 and
- * `textMuted` 4.5:1 in both themes, and `textFaint` and `accent` do not, which
- * is why only the first two are ever drawn straight on glass.
+ * `textMuted` 4.5:1 in both themes, while `textFaint` and light `accent` do not
+ * (dark `accent` just clears 4.5:1), which is why only the first two are drawn
+ * straight on glass.
  */
 class GlassContrastTest {
     private fun linear(c: Float): Double = if (c <= 0.04045f) c / 12.92 else ((c + 0.055) / 1.055).pow(2.4)
