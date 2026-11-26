@@ -407,7 +407,7 @@ fun InboxScreen(
                                 items(groupsFound, key = { "group:${it.conversation.id}" }) { f ->
                                     Arriving { GroupRow(model, f.conversation, f.match, query, now) { open(f.conversation.id) } }
                                 }
-                                item(key = "groups-gap") { Gap(6.dp) }
+                                item(key = "groups-gap") { Gap(14.dp) }
                             }
                         }
                         if (agents.isNotEmpty()) {

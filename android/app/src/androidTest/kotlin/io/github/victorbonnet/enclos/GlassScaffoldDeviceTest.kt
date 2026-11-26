@@ -84,6 +84,11 @@ class GlassScaffoldDeviceTest {
         val side = activity.resources.displayMetrics.widthPixels / 4
         val low = roughest(before, side, h - GlassStripes.bottomPx + 8, h - 8)
         assertTrue("bottom bar is smooth: $low", low < 12)
+        // It is tinted light, not an opaque or untinted bar, and it follows the stripes like the top bar does.
+        val y = h - GlassStripes.bottomPx / 2 - 8
+        val lowBefore = rgb(before, side, y); val lowAfter = rgb(after, side, y)
+        assertTrue("bottom bar is tinted light: $lowBefore", lowBefore.first > 150 && lowBefore.second > 150)
+        assertTrue("the bottom bar follows what passes under it: $lowBefore -> $lowAfter", abs(lowBefore.first - lowAfter.first) > 8)
         activity.finish()
     }
 
