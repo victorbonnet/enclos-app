@@ -112,7 +112,7 @@ fun SandboxPolicyScreen(model: AppModel, address: String, back: () -> Unit) {
     val review = model.policyReviews[address]
     LaunchedEffect(review) { if (review != null) editing = null }
     DisposableEffect(address) { onDispose { model.policyReviews.remove(address) } }
-    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.navigationBars), top = {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("${address.substringAfter('/')} policy", style = Type.name, color = p.text, modifier = Modifier.weight(1f))

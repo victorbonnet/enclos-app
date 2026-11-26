@@ -1365,7 +1365,7 @@ fun SettingsScreen(model: AppModel, back: () -> Unit, pair: () -> Unit, ask: Ask
             clearing = false
         }
     }
-    GlassScaffold(top = {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar { IconButton(Glyphs.back, "Back", back) }
         LargeTitle("Settings")
     }) { room ->
@@ -1555,7 +1555,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
         }
     }
     GlassScaffold(
-        Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+        insets = WindowInsets.ime.union(WindowInsets.navigationBars),
         scrolling = { list.isScrollInProgress },
         top = {
             Column {

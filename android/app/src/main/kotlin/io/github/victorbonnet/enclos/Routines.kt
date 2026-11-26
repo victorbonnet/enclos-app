@@ -39,7 +39,7 @@ fun RoutinesScreen(model: AppModel, address: String, back: () -> Unit) {
     var editorDirty by remember { mutableStateOf(false) }
     var discardSheet by remember { mutableStateOf(false) }
     LaunchedEffect(address, live) { if (live) client.refresh(address) }
-    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.navigationBars), top = {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("Routines", style = Type.name, color = p.text, modifier = Modifier.weight(1f))

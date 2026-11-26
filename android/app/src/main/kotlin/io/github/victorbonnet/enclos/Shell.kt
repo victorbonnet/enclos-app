@@ -127,7 +127,7 @@ fun HomeShell(
     val agentsPlace = rememberLazyListState()
     // The lists run the full height, under the switch and under the search (glass both).
     GlassScaffold(
-        Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+        insets = WindowInsets.ime.union(WindowInsets.navigationBars),
         scrolling = { inboxPlace.isScrollInProgress || agentsPlace.isScrollInProgress },
         top = {
             Row(
@@ -275,7 +275,7 @@ private fun can(capability: String): String? = when (capability) {
 fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (String) -> Unit, start: (Agent) -> Unit, openRoutines: () -> Unit, openModel: () -> Unit) {
     val p = palette
     val agent = model.agents.firstOrNull { it.address == address }
-    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.navigationBars), top = {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text(agent?.label ?: address, style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -640,7 +640,7 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
     val listed = model.sandboxesOf(host).firstOrNull { it.name == sandbox }
     val operation = model.provisioning[address]
     val now = remember { System.currentTimeMillis() / 1000 }
-    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.navigationBars), top = {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text(sandbox, style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp), color = p.text, maxLines = 1)
@@ -813,7 +813,7 @@ private fun Info(label: String, value: String) {
 @Composable
 fun GroupRefused(why: String, back: () -> Unit) {
     val p = palette
-    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.navigationBars), top = {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar { IconButton(Glyphs.back, "Back", back) }
     }) { room ->
         Text("The group was not started: $why", style = Type.small, color = p.textMuted, modifier = Modifier.padding(room).padding(16.dp))
@@ -857,7 +857,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit, s
     androidx.compose.runtime.DisposableEffect(Unit) { onDispose { draftNow?.let { model.dropDraft(it.id) } } }
     val canGroup = agents.groupBy { it.host to it.sandbox }.values.any { it.size >= 2 }
     GlassScaffold(
-        Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+        insets = WindowInsets.ime.union(WindowInsets.navigationBars),
         top = {
         AppBar {
             IconButton(Glyphs.clear, "Close", back)

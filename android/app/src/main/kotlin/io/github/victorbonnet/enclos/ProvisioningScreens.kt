@@ -86,7 +86,7 @@ fun CreateSandboxScreen(model: AppModel, host: String, back: () -> Unit, created
             model.clearProvisioning(host)
         }
     }
-    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)), top = {
+    GlassScaffold(insets = WindowInsets.ime.union(WindowInsets.navigationBars), top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("Create sandbox", style = Type.heading.copy(fontSize = 18.sp), color = p.text)

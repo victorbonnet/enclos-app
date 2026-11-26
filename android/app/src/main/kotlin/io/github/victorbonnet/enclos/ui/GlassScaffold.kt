@@ -7,6 +7,8 @@ import android.os.Build
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.statusBars
@@ -55,7 +57,9 @@ private enum class Slot { Body, Top, Bottom }
  * its own scroll (`contentPadding` of a list, `padding` after `verticalScroll`), so
  * what is at rest never sits under a bar and what scrolls passes under it. The top
  * bar also takes the status bar's room, so the glass fills it; the bottom bar
- * stops at the navigation bar (the caller's own inset), where the page shows.
+ * reaches the physical bottom edge: it pads its own content by [insets] (the
+ * navigation bar, the keyboard) so the glass fills that room too, and with no
+ * bottom bar the content takes [insets] as bottom padding.
  *
  * A bar's controls draw only `text` and `textMuted` on it; anything fainter or
  * accented sits on its own fill.
@@ -63,6 +67,7 @@ private enum class Slot { Body, Top, Bottom }
 @Composable
 fun GlassScaffold(
     modifier: Modifier = Modifier,
+    insets: WindowInsets = WindowInsets(0, 0, 0, 0),
     frost: Boolean = CanFrost,
     scrolling: () -> Boolean = { false },
     top: (@Composable () -> Unit)? = null,
@@ -75,15 +80,15 @@ fun GlassScaffold(
         val width = constraints.maxWidth
         val height = constraints.maxHeight
         val bar = Constraints(minWidth = width, maxWidth = width, minHeight = 0, maxHeight = height)
-        val topBar = top?.let { subcompose(Slot.Top) { Bar(Edge.Top, frost, seen, scrolling, it) }.map { m -> m.measure(bar) } }.orEmpty()
-        val bottomBar = bottom?.let { subcompose(Slot.Bottom) { Bar(Edge.Bottom, frost, seen, scrolling, it) }.map { m -> m.measure(bar) } }.orEmpty()
+        val topBar = top?.let { subcompose(Slot.Top) { Bar(Edge.Top, frost, seen, scrolling, insets, it) }.map { m -> m.measure(bar) } }.orEmpty()
+        val bottomBar = bottom?.let { subcompose(Slot.Bottom) { Bar(Edge.Bottom, frost, seen, scrolling, insets, it) }.map { m -> m.measure(bar) } }.orEmpty()
         val topHeight = topBar.maxOfOrNull { it.height } ?: 0
         val bottomHeight = bottomBar.maxOfOrNull { it.height } ?: 0
         // The veil's fade lies over the content beside the bar, so the content clears it too.
         val fade = if (frost) 0 else Glass.fade.roundToPx()
         val inset = PaddingValues(
             top = (if (topBar.isEmpty()) 0 else topHeight + fade).toDp(),
-            bottom = (if (bottomBar.isEmpty()) 0 else bottomHeight + fade).toDp(),
+            bottom = (if (bottomBar.isEmpty()) insets.getBottom(this) else bottomHeight + fade).toDp(),
         )
         val body = subcompose(Slot.Body) {
             Box(
@@ -104,7 +109,7 @@ fun GlassScaffold(
 private enum class Edge { Top, Bottom }
 
 @Composable
-private fun Bar(edge: Edge, frost: Boolean, seen: GraphicsLayer?, scrolling: () -> Boolean, content: @Composable () -> Unit) {
+private fun Bar(edge: Edge, frost: Boolean, seen: GraphicsLayer?, scrolling: () -> Boolean, insets: WindowInsets, content: @Composable () -> Unit) {
     val p = palette
     val blurred = if (frost && seen != null) rememberGraphicsLayer() else null
     // The radius the layer's blur was last built for: the effect is built again only when it changes.
@@ -147,6 +152,6 @@ private fun Bar(edge: Edge, frost: Boolean, seen: GraphicsLayer?, scrolling: () 
             }
             // Read in the order a person sees it: the top bar, then the content, then the bottom bar.
             .semantics { isTraversalGroup = true; traversalIndex = if (edge == Edge.Top) -1f else 1f }
-            .then(if (edge == Edge.Top) Modifier.windowInsetsPadding(WindowInsets.statusBars) else Modifier),
+            .then(if (edge == Edge.Top) Modifier.windowInsetsPadding(WindowInsets.statusBars) else Modifier.windowInsetsPadding(insets.only(WindowInsetsSides.Bottom))),
     ) { content() }
 }

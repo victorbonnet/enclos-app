@@ -2,6 +2,7 @@ package io.github.victorbonnet.enclos
 
 import android.content.Intent
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.core.content.edit
@@ -222,8 +223,17 @@ class MainActivity : ComponentActivity() {
         open(intent)
     }
 
+    /** Android 10+ paints a scrim behind a 3-button navigation bar unless told not to: that is a band. */
+    private fun clearNavigationBarScrim() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Edge to edge from the first frame, not after the first composition: the window never shows its
+        // own background where a bar is; the navigation bar is transparent, with no contrast scrim.
+        enableEdgeToEdge()
+        clearNavigationBarScrim()
         applyTheme(this, model.theme.value)
         // Before the first frame, so none is drawn unsecured.
         secure(model.lock.on.value)
@@ -250,6 +260,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(dark) {
                 val bars = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark }
                 enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
+                clearNavigationBarScrim()
             }
             val lockOn = model.lock.on.value
             LaunchedEffect(lockOn) { secure(lockOn) }

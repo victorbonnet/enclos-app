@@ -239,7 +239,7 @@ fun PolicyRequestScreen(model: AppModel, key: String, back: () -> Unit, openChat
         if (closing && request?.state == "closed") back()
         else if (closing && operation != PolicyRequestAction.Close) closing = false
     }
-    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.navigationBars), top = {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("Sandbox policy", style = Type.name, color = p.text)

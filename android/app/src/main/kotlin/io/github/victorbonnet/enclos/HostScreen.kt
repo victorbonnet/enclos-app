@@ -66,7 +66,7 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
     val slots = usageSlots(model.agents.filter { it.host == name }.map { it.name }, charted)
     val colors: Map<String, Color> = slots.mapValues { (_, slot) -> seriesColor(slot) }
     val removed = model.forgetting.offered(name)
-    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.navigationBars), top = {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text(name, style = Type.heading.copy(fontSize = 18.sp), color = p.text)

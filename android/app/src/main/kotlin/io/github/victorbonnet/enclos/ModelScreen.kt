@@ -70,7 +70,7 @@ fun ModelScreen(client: ModelClient, address: String, hostConnected: Boolean, ba
             client.errors[address] = "Not sent: the page changed meanwhile. Check it and save again."
         }
     }
-    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.navigationBars), top = {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("Model", style = Type.name, color = p.text, modifier = Modifier.weight(1f))
