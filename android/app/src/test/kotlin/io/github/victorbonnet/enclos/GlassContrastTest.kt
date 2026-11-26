@@ -57,13 +57,14 @@ class GlassContrastTest {
     }
 
     @Test
-    fun text_faint_and_accent_do_not_hold_over_the_worst_backdrop() {
-        // Light over black and dark over white are the worst cases (spec figures: 3.39 / 3.43 and 3.25 / 4.57).
+    fun text_faint_and_accent_match_the_spec_figures_in_the_worst_case() {
+        // Spec 2.3: light over black 3.39 / 3.43, dark over white 3.25 / 4.57. The first three fail 4.5:1,
+        // which is why faint and accent text sit on their own `surface` pill instead of on the glass.
         val light = over(LightPalette, Color.Black)
         val dark = over(DarkPalette, Color.White)
-        assertTrue(contrast(LightPalette.textFaint, light) < 4.5)
-        assertTrue(contrast(LightPalette.accent, light) < 4.5)
-        assertTrue(contrast(DarkPalette.textFaint, dark) < 4.5)
-        assertTrue(contrast(DarkPalette.accent, dark) <= 4.6)
+        assertEquals(3.39, contrast(LightPalette.textFaint, light), 0.03)
+        assertEquals(3.43, contrast(LightPalette.accent, light), 0.03)
+        assertEquals(3.25, contrast(DarkPalette.textFaint, dark), 0.03)
+        assertEquals(4.57, contrast(DarkPalette.accent, dark), 0.03)
     }
 }

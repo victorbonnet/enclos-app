@@ -1577,12 +1577,17 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
                         // working on a task the phone keeps, tapping it opens the task's sheet.
                         val task = model.activeTask(scope)
                         val open = if (task != null) Modifier.clickable(onClickLabel = "Open the task") { model.taskDetails.show(task.key) } else Modifier
-                        Row(open, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // Frame 2: a `surface` chip, the live wave and the words in `accent`.
+                        Row(
+                            Modifier.clip(Shapes.pill).background(p.surface).then(open).padding(horizontal = 10.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
                             WorkingWave(square = 4.dp, lift = 3.dp)
                             Text(
                                 if (conversation.title != null) "$agent · $doing" else doing,
                                 style = Type.small,
-                                color = p.textMuted,
+                                color = p.accent,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -1834,7 +1839,6 @@ private fun GroupStrip(status: GroupStatus, turnOf: String?, onStop: () -> Unit)
     val p = palette
     val text = status.label(turnOf) ?: return
     Column(Modifier.fillMaxWidth()) {
-        Hairline()
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1844,12 +1848,12 @@ private fun GroupStrip(status: GroupStatus, turnOf: String?, onStop: () -> Unit)
             Text(
                 text,
                 style = Type.small,
-                color = if (status.state == "working") p.accent else p.textMuted,
+                color = if (status.state == "working") p.text else p.textMuted,
                 maxLines = if (status.state == "stopped") Int.MAX_VALUE else 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            if (status.state == "working") TextLink("Stop", onStop) else Spacer(Modifier.height(44.dp))
+            if (status.state == "working") ActionButton("Stop", onGlass = true, onClick = onStop) else Spacer(Modifier.height(48.dp))
         }
     }
 }

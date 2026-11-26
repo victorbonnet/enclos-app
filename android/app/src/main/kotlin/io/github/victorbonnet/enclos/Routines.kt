@@ -43,7 +43,7 @@ fun RoutinesScreen(model: AppModel, address: String, back: () -> Unit) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("Routines", style = Type.name, color = p.text, modifier = Modifier.weight(1f))
-            ActionButton("Refresh", enabled = live && !busy, onClick = { client.refresh(address) })
+            ActionButton("Refresh", enabled = live && !busy, onGlass = true, onClick = { client.refresh(address) })
             if (client.canOperate(address, "create")) IconButton(Glyphs.plus, "New routine", { creating = true })
         }
     }) { room ->

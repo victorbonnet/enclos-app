@@ -74,8 +74,8 @@ fun ModelScreen(client: ModelClient, address: String, hostConnected: Boolean, ba
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("Model", style = Type.name, color = p.text, modifier = Modifier.weight(1f))
-            ActionButton("Refresh", enabled = live && !busy, onClick = { client.refresh(address) })
-            ActionButton("Save", enabled = canSave, onClick = { if (options?.restarts == true) confirming = true else save() })
+            ActionButton("Refresh", enabled = live && !busy, onGlass = true, onClick = { client.refresh(address) })
+            ActionButton("Save", enabled = canSave, onGlass = true, onClick = { if (options?.restarts == true) confirming = true else save() })
         }
     }) { room ->
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(room).padding(bottom = 24.dp)) {

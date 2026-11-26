@@ -70,7 +70,7 @@ fun GlassScaffold(
     content: @Composable (PaddingValues) -> Unit,
 ) {
     // What the content drew, kept as a layer so a bar can draw the part behind it again, blurred.
-    val seen = rememberGraphicsLayer()
+    val seen = if (frost) rememberGraphicsLayer() else null
     SubcomposeLayout(modifier.fillMaxSize()) { constraints ->
         val width = constraints.maxWidth
         val height = constraints.maxHeight
@@ -87,7 +87,7 @@ fun GlassScaffold(
         )
         val body = subcompose(Slot.Body) {
             Box(
-                Modifier.fillMaxSize().then(if (frost) Modifier.drawWithContent {
+                Modifier.fillMaxSize().then(if (seen != null) Modifier.drawWithContent {
                     seen.record { this@drawWithContent.drawContent() }
                     drawLayer(seen)
                 } else Modifier),
@@ -104,9 +104,11 @@ fun GlassScaffold(
 private enum class Edge { Top, Bottom }
 
 @Composable
-private fun Bar(edge: Edge, frost: Boolean, seen: GraphicsLayer, scrolling: () -> Boolean, content: @Composable () -> Unit) {
+private fun Bar(edge: Edge, frost: Boolean, seen: GraphicsLayer?, scrolling: () -> Boolean, content: @Composable () -> Unit) {
     val p = palette
-    val blurred = if (frost) rememberGraphicsLayer() else null
+    val blurred = if (frost && seen != null) rememberGraphicsLayer() else null
+    // The radius the layer's blur was last built for: the effect is built again only when it changes.
+    val builtFor = remember { floatArrayOf(-1f) }
     val density = androidx.compose.ui.platform.LocalDensity.current
     // Cheaper while a list moves (spec M): the radius drops at once and comes back within 150 ms.
     val latest by rememberUpdatedState(scrolling)
@@ -120,10 +122,13 @@ private fun Bar(edge: Edge, frost: Boolean, seen: GraphicsLayer, scrolling: () -
     Box(
         Modifier.fillMaxWidth().pointerInput(Unit) { detectTapGestures { } } // a bar is a target: taps on its blank parts stop here
             .drawBehind {
-                if (blurred != null) {
+                if (blurred != null && seen != null) {
                     // The content behind this bar, blurred, then the tint over it.
                     val originY = if (edge == Edge.Top) 0f else (seen.size.height - size.height)
-                    blurred.renderEffect = BlurEffect(radius, radius, TileMode.Clamp)
+                    if (builtFor[0] != radius) {
+                        builtFor[0] = radius
+                        blurred.renderEffect = BlurEffect(radius, radius, TileMode.Clamp)
+                    }
                     blurred.clip = true
                     blurred.record(size = IntSize(size.width.toInt(), size.height.toInt())) {
                         translate(top = -originY) { drawLayer(seen) }
