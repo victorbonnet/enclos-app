@@ -8,7 +8,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -56,6 +61,7 @@ private enum class Slot { Body, Top, Bottom }
 fun GlassScaffold(
     modifier: Modifier = Modifier,
     frost: Boolean = CanFrost,
+    scrolling: () -> Boolean = { false },
     top: (@Composable () -> Unit)? = null,
     bottom: (@Composable () -> Unit)? = null,
     content: @Composable (PaddingValues) -> Unit,
@@ -66,8 +72,8 @@ fun GlassScaffold(
         val width = constraints.maxWidth
         val height = constraints.maxHeight
         val bar = Constraints(minWidth = width, maxWidth = width, minHeight = 0, maxHeight = height)
-        val topBar = top?.let { subcompose(Slot.Top) { Bar(Edge.Top, frost, seen, it) }.map { m -> m.measure(bar) } }.orEmpty()
-        val bottomBar = bottom?.let { subcompose(Slot.Bottom) { Bar(Edge.Bottom, frost, seen, it) }.map { m -> m.measure(bar) } }.orEmpty()
+        val topBar = top?.let { subcompose(Slot.Top) { Bar(Edge.Top, frost, seen, scrolling, it) }.map { m -> m.measure(bar) } }.orEmpty()
+        val bottomBar = bottom?.let { subcompose(Slot.Bottom) { Bar(Edge.Bottom, frost, seen, scrolling, it) }.map { m -> m.measure(bar) } }.orEmpty()
         val topHeight = topBar.maxOfOrNull { it.height } ?: 0
         val bottomHeight = bottomBar.maxOfOrNull { it.height } ?: 0
         // The veil's fade lies over the content beside the bar, so the content clears it too.
@@ -95,19 +101,25 @@ fun GlassScaffold(
 private enum class Edge { Top, Bottom }
 
 @Composable
-private fun Bar(edge: Edge, frost: Boolean, seen: GraphicsLayer, content: @Composable () -> Unit) {
+private fun Bar(edge: Edge, frost: Boolean, seen: GraphicsLayer, scrolling: () -> Boolean, content: @Composable () -> Unit) {
     val p = palette
     val blurred = if (frost) rememberGraphicsLayer() else null
-    val radius = with(androidx.compose.ui.platform.LocalDensity.current) { Glass.radius.toPx() }
-    val fade = with(androidx.compose.ui.platform.LocalDensity.current) { Glass.fade.toPx() }
-    val blur = remember(radius) { if (frost) BlurEffect(radius, radius, TileMode.Clamp) else null }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    // Cheaper while a list moves (spec M): the radius drops at once and comes back within 150 ms.
+    val moving by remember { derivedStateOf(scrolling) }
+    val radius by animateFloatAsState(
+        with(density) { (if (moving) Glass.scrollRadius else Glass.radius).toPx() },
+        if (moving) snap() else tween(150),
+        label = "glass radius",
+    )
+    val fade = with(density) { Glass.fade.toPx() }
     Box(
         Modifier.fillMaxWidth()
             .drawBehind {
                 if (blurred != null) {
                     // The content behind this bar, blurred, then the tint over it.
                     val originY = if (edge == Edge.Top) 0f else (seen.size.height - size.height)
-                    blurred.renderEffect = blur
+                    blurred.renderEffect = BlurEffect(radius, radius, TileMode.Clamp)
                     blurred.clip = true
                     blurred.record(size = IntSize(size.width.toInt(), size.height.toInt())) {
                         translate(top = -originY) { drawLayer(seen) }

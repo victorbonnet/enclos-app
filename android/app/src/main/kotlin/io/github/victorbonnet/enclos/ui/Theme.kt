@@ -129,6 +129,9 @@ object Shapes {
 /** The bars' material (see `GlassScaffold`): the blur behind a bar, and the fade where a phone cannot blur. */
 object Glass {
     val radius = 20.dp
+
+    /** The radius while a list is moving (spec M). */
+    val scrollRadius = 12.dp
     val fade = 20.dp
 }
 

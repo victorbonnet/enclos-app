@@ -80,7 +80,10 @@ class GlassScaffoldDeviceTest {
         assertTrue("the bar follows what passes under it: $a -> $b", abs(a.first - b.first) > 8)
         // The bottom bar is glass too: no hard step in it.
         val h = before.height
-        assertTrue("bottom bar is smooth", roughest(before, x, h - GlassStripes.bottomPx - 40, h - 130) < 40)
+        // Off-centre: the gesture pill of the navigation bar sits mid-width and is the system's, not the bar's.
+        val side = activity.resources.displayMetrics.widthPixels / 4
+        val low = roughest(before, side, h - GlassStripes.bottomPx + 8, h - 8)
+        assertTrue("bottom bar is smooth: $low", low < 12)
         activity.finish()
     }
 

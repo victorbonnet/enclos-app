@@ -1556,6 +1556,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
     }
     GlassScaffold(
         Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+        scrolling = { list.isScrollInProgress },
         top = {
             Column {
             AppBar {

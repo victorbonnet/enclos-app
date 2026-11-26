@@ -62,6 +62,8 @@ Not built: the Reply and Mark read actions; fetching the message in the backgrou
 
 ## 4. Screens
 
+**The bars.** Every top and bottom bar is the same material, full-bleed, with no shadow and no hairline at the edge where content passes: on Android 12 and later the content behind it is blurred (20 dp, 12 dp while a list is being scrolled or flung, back within 150 ms of it stopping) and tinted with `bg` at 0.76, so what passes under the bar is seen through it; before Android 12 the bar is `bg` and fades 20 dp into the content. The content behind a bar keeps its own room — the conversation's messages sit 8 dp below the name bar and 12 dp above the composer at rest — so nothing that is not moving is ever behind glass. The material is the bar's edge; where nothing passes behind it, the bar is the page. A bar's own controls draw only `text` and `textMuted` on it; anything faint, accented or inverted sits on its own fill.
+
 **The first screen** has two views, the conversations (the [inbox](#inbox)) and the [agents](#agents). Its top line holds the switch between them (a pill with the conversations' bubble and the agents' glyph, the one shown on `surface`), then, on the conversations, unread only, and Settings' gear. Swiping left on the main content opens the agents; swiping right returns to the conversations. The content follows the finger and settles on a view when released; there is no wrapping at either end. The switch shows the view a swipe would settle on and can still be tapped; the actions on the top line and the search field's label change once the swipe has settled. Vertical swipes scroll the current list. Over the end of the view, on a fade to the ground, sit the search for that view (a pill on `surface`: "Search conversations", "Search agents") and the compose button, which opens a [new conversation](#new-conversation); both show once a host is paired, and stay in place while the views slide, with the same search text across both. Back from the agents view leads to the conversations. Pairing a host lands on the agents.
 
 **Full screens** arrive over it from the right: a conversation, an [agent's page](#an-agents-page), a [sandbox's page](#agents), a new conversation, [Settings](#settings), pairing and a policy request. Back from each leads to the first screen, except an agent's page opened from its sandbox's page, which goes back to that page, and a conversation, or the new conversation screen, opened from a policy request (to ask why, or its own conversation), which goes back to the request. The app is in portrait only, for now, the QR scanner included.
@@ -298,7 +300,7 @@ In sections, each named small, faint and in capitals above a hairline, its rows 
 
 ### Conversation
 
-The conversation's name in the bar (the agent's name while it has none), the agent and its address under it, or, while the agent's runtime reports it at work, the wave and what it is doing ([agent activity](#agent-activity-and-tasks)), its avatar pulsing; tapping them renames it, except `working on a task`, which opens the task's [sheet](#a-tasks-sheet) when the phone keeps it. Messages bottom-up, anchored at the newest: the screen follows what arrives unless the person scrolled up to read, and stays anchored when the keyboard opens. A day separator in lowercase (`today`, `yesterday`, `mon 3 nov`) starts each day. Each message has its time (`HH:mm`).
+The conversation's name in the bar (the agent's name while it has none), the agent and its address under it, or, while the agent's runtime reports it at work, the wave and what it is doing ([agent activity](#agent-activity-and-tasks)), its avatar pulsing; tapping them renames it, except `working on a task`, which opens the task's [sheet](#a-tasks-sheet) when the phone keeps it. Messages bottom-up, anchored at the newest: the screen follows what arrives unless the person scrolled up to read, and stays anchored when the keyboard opens. The messages run under the name bar above them and the composer below them; the name bar and the composer take the status bar's and the navigation bar's room at the screen's edges. A day separator in lowercase (`today`, `yesterday`, `mon 3 nov`) starts each day. Each message has its time (`HH:mm`).
 
 - The person's messages: right, on `button-bg`, shown exactly as typed.
 - The agent's: left, on `surface` with a hairline, [markdown](#5-messages) drawn, selectable to copy. One the agent sent on its own (`kind: notify`, such as a cron job's) has an "on its own" header; the protocol does not say which job.
@@ -509,7 +511,7 @@ Short and functional, never decorative: something moves to show where it came fr
 
 ## 7. Theme
 
-Light or dark: the system's setting by default. Once the person chooses (System · Light · Dark, in Settings, Appearance), the app keeps their choice on this device until they choose System again. Switching crossfades the colours; the screen is not rebuilt. The colours are the design system's tokens, the same in both apps.
+Light or dark: the system's setting by default. Once the person chooses (System · Light · Dark, in Settings, Appearance), the app keeps their choice on this device until they choose System again. Switching crossfades the colours; the screen is not rebuilt. The colours are the design system's tokens, the same in both apps. The bars' material crossfades with the palette: its tint is `glass`, one of the tokens, so a theme switch does not flash the bars.
 
 ## 8. On the phone
 
@@ -532,6 +534,7 @@ It is off until the person turns it on in Settings, Security, which needs a scre
 | UI | Jetpack Compose, Material 3 structure in enclos's tokens | SwiftUI, the platform's structure in the same tokens |
 | Core | `core-ffi` through UniFFI's Kotlin bindings (JNA) | the same crate through UniFFI's Swift bindings |
 | Home views | `HorizontalPager` below the top switch, which follows the active page; search and compose stay fixed; each view's list position is held above its pager page, so it outlives the page leaving composition and the first screen opening a full one | a native paging view below the switch, with fixed search and compose controls, each view's position kept the same way (not built) |
+| Bars | Filtered glass on Android 12 and later: the content runs under every top and bottom bar and is blurred and tinted behind it. Before Android 12 the same bars are opaque, fading 20 dp into the content. Crossfading with the theme. | iOS: not started |
 | Destination title | title at the top, no bar above (28 sp); its action on the same line | large navigation title (34 pt), its action in the navigation bar |
 | Portrait only | `screenOrientation="portrait"` (Android 16+ ignores it on large screens) | supported orientations: portrait (`Info.plist`) |
 | New conversation | extended FAB | compose button in the navigation bar |

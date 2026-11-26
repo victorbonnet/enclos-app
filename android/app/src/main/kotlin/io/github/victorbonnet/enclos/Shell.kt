@@ -128,6 +128,7 @@ fun HomeShell(
     // The lists run the full height, under the switch and under the search (glass both).
     GlassScaffold(
         Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+        scrolling = { inboxPlace.isScrollInProgress || agentsPlace.isScrollInProgress },
         top = {
             Row(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
