@@ -239,4 +239,42 @@ class InboxRaiseScreenTest {
             model.endFixture()
         }
     }
+
+    @Test
+    fun search_keeps_todays_order_while_a_task_is_running() {
+        val now = System.currentTimeMillis() / 1000
+        val model = baseModel(now)
+        try {
+            val running = task("t1", title = "Check Lyon forecast", conversation = "c-weather", state = TaskState.Running, since = now - 12 * 60)
+            model.tasks.received(running)
+            model.activities.received(host, activityMessage("org/pm", "t1"))
+
+            compose.setContent {
+                EnclosTheme(dark = false) {
+                    InboxScreen(
+                        model = model,
+                        query = "Home",
+                        unreadOnly = false,
+                        archivedOnly = false,
+                        open = {},
+                        start = {},
+                        openAgent = {},
+                        openRoutines = {},
+                        pair = {},
+                        openApproval = {},
+                    )
+                }
+            }
+            compose.waitUntil(5_000L) {
+                compose.onAllNodesWithText("Designer").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.waitForIdle()
+
+            assertTrue(topOf("Designer") < topOf("PM"))
+            assertTrue(topOf("PM") < topOf("Engineer"))
+            assertTrue(compose.onAllNodesWithText("Check Lyon forecast").fetchSemanticsNodes().isEmpty())
+        } finally {
+            model.endFixture()
+        }
+    }
 }
