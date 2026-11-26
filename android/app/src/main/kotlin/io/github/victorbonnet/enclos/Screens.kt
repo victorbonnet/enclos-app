@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.DpOffset
@@ -1153,58 +1154,75 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
             value = System.currentTimeMillis() / 1000
         }
     }
+    val workingOnly by model.agentsWorkingOnly
     if (model.paired.isEmpty()) {
         Column(Modifier.fillMaxSize()) {
+            // Nothing listed yet: the total says so, with no Working only to choose.
+            AgentsHeader(0, workingOnly = null, onWorkingOnly = {})
             Empty("No host yet.", "On a host, run enclos app serve, then enclos app pair, and scan its code.", "Pair a host →", pair)
         }
         return
     }
     RecentUsageRefresh(model, model.paired.map { it.name })
-    val words = fold(query).split(' ').filter { it.isNotEmpty() }
-    val shown = model.agents.filter { a -> words.all { it in fold("${a.label} ${a.address} ${a.runtime}") } }
+    val view = agentsView(
+        paired = model.paired.map { it.name },
+        agents = model.agents,
+        query = query,
+        workingOnly = workingOnly,
+        folded = { model.hostFold(it) in model.folded },
+        sandboxesOf = model::sandboxesOf,
+        canManage = model::canManageSandboxes,
+        working = model::showsWorking,
+    )
+    // Show all agents goes with Working only: focus goes back to the switch, now off.
+    val toggleFocus = remember { FocusRequester() }
+    var refocus by remember { mutableStateOf(false) }
+    LaunchedEffect(refocus) {
+        if (refocus) {
+            runCatching { toggleFocus.requestFocus() }
+            refocus = false
+        }
+    }
     LazyColumn(Modifier.fillMaxSize(), state = state) {
-        model.paired.forEach { host ->
-            val live = model.connected(host.name)
-            val its = shown.filter { it.host == host.name }
-            val sandboxes = model.sandboxesOf(host.name).filter { sandbox ->
-                words.all { it in fold("${sandbox.address} ${sandbox.runtime.orEmpty()}") } || its.any { it.sandbox == sandbox.name }
-            }
-            // A search shows only the hosts with something found, unfolded.
-            if (query.isNotBlank() && sandboxes.isEmpty()) return@forEach
-            val key = model.hostFold(host.name)
-            val open = query.isNotBlank() || key !in model.folded
+        // The total and the switch scroll with the list, so large text reaches every row.
+        item(key = "agents-header") {
+            AgentsHeader(view.total, workingOnly, { model.agentsWorkingOnly.value = it }, Modifier.focusRequester(toggleFocus))
+        }
+        view.hosts.forEach { group ->
+            val host = group.host
+            val live = model.connected(host)
+            val key = model.hostFold(host)
             item(key = key) {
-                FoldHeading(host.name, open, 0, query.isBlank(), lead = { ConnectionDot(live) }) { model.fold(key) }
+                FoldHeading(host, group.open, 0, group.foldable, lead = { ConnectionDot(live) }) { model.fold(key) }
             }
-            if (!open) return@forEach
+            if (!group.open) return@forEach
             item(key = "$key-details") {
                 Text(
                     "Host details →",
                     style = Type.label,
                     color = palette.accent,
-                    modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Open ${host.name}") { openHost(host.name) }
+                    modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Open $host") { openHost(host) }
                         .padding(horizontal = 16.dp, vertical = 14.dp),
                 )
             }
-            val clash = model.clashNotice(host.name)
+            val clash = model.clashNotice(host)
             if (clash != null) {
                 item(key = "$key-clash") {
                     Text(clash, style = Type.small, color = palette.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                 }
             }
-            if (query.isBlank() && model.canManageSandboxes(host.name)) {
+            if (group.create) {
                 item(key = "$key-create") {
                     Text("Create sandbox →", style = Type.label, color = palette.accent,
-                        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { createSandbox(host.name) }.padding(horizontal = 16.dp, vertical = 14.dp))
+                        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { createSandbox(host) }.padding(horizontal = 16.dp, vertical = 14.dp))
                 }
             }
-            if (sandboxes.isEmpty()) {
+            if (group.sandboxes.isEmpty()) {
                 item(key = "$key-none") {
-                    Text(if (model.canManageSandboxes(host.name)) "No sandbox yet. Create one to install a runtime." else "No agent yet: the host lists them once connected.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
+                    Text(if (model.canManageSandboxes(host)) "No sandbox yet. Create one to install a runtime." else "No agent yet: the host lists them once connected.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
                 }
             }
-            sandboxes.forEach { sandbox ->
-                val agents = its.filter { it.sandbox == sandbox.name }
+            group.sandboxes.forEach { (sandbox, agents) ->
                 item(key = "sandbox-${sandbox.address}") {
                     Arriving {
                         val runtime = runtimeLine(sandbox)
@@ -1219,13 +1237,118 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
             }
             item(key = "$key-gap") { Gap(8.dp) }
         }
-        if (query.isNotBlank() && model.paired.none { host -> model.sandboxesOf(host.name).any { sandbox -> words.all { it in fold("${sandbox.address} ${sandbox.runtime.orEmpty()}") } } } && shown.isEmpty()) {
-            item {
+        when (view.empty) {
+            AgentsEmpty.NoMatch -> item(key = "agents-empty") {
                 Text("No sandbox or agent matches.", style = Type.small, color = palette.textMuted, modifier = Modifier.padding(16.dp))
             }
+            AgentsEmpty.NoneWorking, AgentsEmpty.NoWorkingMatch -> item(key = "agents-empty") {
+                WorkingOnlyEmpty(view.empty == AgentsEmpty.NoWorkingMatch) {
+                    model.agentsWorkingOnly.value = false
+                    refocus = true
+                }
+            }
+            null -> Unit
         }
         // Room for the search and compose bar over the list's end.
         item { Spacer(Modifier.height(96.dp)) }
+    }
+}
+
+/**
+ * The top of the agents view: [total], the agents this phone lists, and the
+ * labelled Working only switch (none when [workingOnly] is null, before a
+ * host is paired), with what it cannot see once on. The switch and its label
+ * are one control; they share a line where they fit, else stack.
+ */
+@Composable
+internal fun AgentsHeader(total: Int, workingOnly: Boolean?, onWorkingOnly: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    val p = palette
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        SideBySideOrStacked(Modifier.fillMaxWidth().padding(horizontal = 16.dp), gap = 16.dp) {
+            Text(
+                agentCount(total),
+                style = Type.name,
+                color = p.text,
+                modifier = Modifier.padding(vertical = 12.dp).clearAndSetSemantics { contentDescription = "${agentCount(total)} total" },
+            )
+            if (workingOnly != null) {
+                Row(
+                    modifier
+                        .defaultMinSize(minHeight = 48.dp)
+                        .toggleable(value = workingOnly, role = Role.Switch, onValueChange = onWorkingOnly),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                ) {
+                    Text("Working only", style = Type.label, color = p.text, modifier = Modifier.weight(1f))
+                    // Drawn only: the row is the one control, its label its name.
+                    AppSwitch(workingOnly, null, Modifier.clearAndSetSemantics {})
+                }
+            }
+        }
+        if (workingOnly == true) {
+            Text(
+                "Shows work reported to this app. Offline or unreported work may not appear.",
+                style = Type.small,
+                color = p.textMuted,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Two parts on one line, the second at its end, when both fit at their full
+ * width; else one above the other, the second as wide as the line. Measured,
+ * so large text stacks wherever it no longer fits.
+ */
+@Composable
+private fun SideBySideOrStacked(modifier: Modifier, gap: androidx.compose.ui.unit.Dp, content: @Composable () -> Unit) {
+    androidx.compose.ui.layout.Layout(content, modifier) { measurables, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        if (measurables.size < 2) {
+            val only = measurables.map { it.measure(loose) }
+            return@Layout layout(constraints.maxWidth, only.maxOfOrNull { it.height } ?: 0) { only.forEach { it.place(0, 0) } }
+        }
+        val (first, second) = measurables
+        val firstWidth = first.maxIntrinsicWidth(constraints.maxHeight)
+        val secondWidth = second.maxIntrinsicWidth(constraints.maxHeight)
+        if (firstWidth + gap.roundToPx() + secondWidth <= constraints.maxWidth) {
+            val a = first.measure(loose)
+            val b = second.measure(loose.copy(maxWidth = secondWidth))
+            val height = maxOf(a.height, b.height)
+            layout(constraints.maxWidth, height) {
+                a.place(0, (height - a.height) / 2)
+                b.place(constraints.maxWidth - b.width, (height - b.height) / 2)
+            }
+        } else {
+            val a = first.measure(loose)
+            val b = second.measure(loose.copy(minWidth = constraints.maxWidth))
+            layout(constraints.maxWidth, a.height + b.height) {
+                a.place(0, 0)
+                b.place(0, a.height)
+            }
+        }
+    }
+}
+
+/**
+ * Working only left no agent: none shows at work, or none at work matches
+ * the search ([searching]). Not a claim that every agent is idle: the line
+ * above it says what the app cannot see. [showAll] turns Working only off
+ * and leaves the search as it is.
+ */
+@Composable
+private fun WorkingOnlyEmpty(searching: Boolean, showAll: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Text(if (searching) "No working agents match your search" else "No agents working", style = Type.name, color = palette.text)
+        Gap(8.dp)
+        Text(
+            "Show all agents",
+            style = Type.label,
+            color = palette.accent,
+            modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable(role = Role.Button, onClick = showAll)
+                .padding(vertical = 14.dp),
+        )
     }
 }
 
@@ -1248,7 +1371,8 @@ internal fun RecentUsageRefresh(model: AppModel, hosts: List<String>) {
 internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () -> Unit) {
     val working = model.workingOn(agent)
     val activity = model.activityOf(agent.address)
-    val busy = working.isNotEmpty() || activity != null
+    // The same decision as Working only's ([showsWorking]).
+    val busy = showsWorking(working, activity)
     val last = model.lastActive(agent)
     AgentListRow(
         agent = agent, busy = busy,
