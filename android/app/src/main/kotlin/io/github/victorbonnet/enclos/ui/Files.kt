@@ -239,7 +239,7 @@ internal fun OtherFile(
             val canTap = download.enabled && state !is FileState.Loading
             Box(
                 Modifier.heightIn(min = 48.dp).clip(Shapes.control)
-                    .clickable(enabled = canTap, onClickLabel = download.actionLabel, role = Role.Button) {
+                    .clickable(enabled = canTap, role = Role.Button) {
                         when (state) {
                             is FileState.Ready -> if (state.file.isFile) {
                                 download.start(state.file)
@@ -354,7 +354,7 @@ internal fun Viewer(a: Attachment, file: File, close: () -> Unit) {
                         val canSave = download.enabled
                         Box(
                             Modifier.height(48.dp).clip(Shapes.control)
-                                .clickable(enabled = canSave, onClickLabel = download.actionLabel, role = Role.Button) { download.start(file) }
+                                .clickable(enabled = canSave, role = Role.Button) { download.start(file) }
                                 .semantics { contentDescription = download.actionLabel }
                                 .padding(horizontal = 14.dp),
                             contentAlignment = Alignment.Center,

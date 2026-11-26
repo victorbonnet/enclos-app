@@ -1,6 +1,8 @@
 package io.github.victorbonnet.enclos
 
 import android.os.Build
+import android.provider.MediaStore
+import org.junit.After
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
@@ -17,6 +19,21 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 class DownloadsNamingInstrumentedTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
+
+    // Remove what these tests saved, so a second run on the same device starts clean.
+    @After fun remove_what_the_test_saved() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        context.contentResolver.delete(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ? ESCAPE '\\'",
+            arrayOf("nm\\_%"),
+        )
+        context.contentResolver.delete(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            "${MediaStore.MediaColumns.DISPLAY_NAME} = ?",
+            arrayOf("nm_profile"),
+        )
+    }
 
     private fun source(): File = File(context.cacheDir, "naming-src").apply { writeBytes("naming-bytes".toByteArray()) }
 

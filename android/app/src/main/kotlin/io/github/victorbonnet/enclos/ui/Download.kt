@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -69,11 +71,23 @@ class DownloadController(
 
     private var waiting: Job? = null
 
+    // The saves in flight, per file, across every controller of it: a card's save in flight
+    // keeps the viewer's Download disabled, and the other way round.
+    private val key = SaveKey(attachment.id, store)
+
+    /** Called once this controller has neither a save running nor a wait for a fetch. */
+    internal var onIdle: (() -> Unit)? = null
+
+    internal val idle: Boolean
+        get() = !saving && waiting == null
+
     val label: String
         get() = if (saved) "Download again" else "Download"
 
     val enabled: Boolean
-        get() = Downloads.offered() && !saving
+        get() = Downloads.offered() && !saving && !busyElsewhere()
+
+    private fun busyElsewhere(): Boolean = (active[key] ?: 0) > 0
 
     val actionLabel: String
         get() = "$label ${attachment.shownName}"
@@ -83,8 +97,9 @@ class DownloadController(
         withContext(Dispatchers.Main.immediate) { showDownloadNotice(context, text) }
 
     fun start(file: File) {
-        if (!Downloads.offered() || saving) return
+        if (!Downloads.offered() || saving || busyElsewhere()) return
         saving = true
+        active[key] = (active[key] ?: 0) + 1
         scope.launch {
             // A cancel that lands once the file is published still comes back as Saved.
             val outcome = try {
@@ -97,6 +112,9 @@ class DownloadController(
                 if (outcome == DownloadOutcome.Saved) saved = true
                 downloadNotice(outcome)?.let { notify(it) }
                 saving = false
+                val left = (active[key] ?: 1) - 1
+                if (left > 0) active[key] = left else active.remove(key)
+                if (idle) onIdle?.invoke()
             }
         }
     }
@@ -110,7 +128,7 @@ class DownloadController(
      * replaces) is never taken for the answer.
      */
     fun startWhenFetched(stateOf: () -> FileState?, fetch: () -> Unit) {
-        if (!Downloads.offered() || saving) return
+        if (!Downloads.offered() || saving || busyElsewhere()) return
         waiting?.cancel()
         val before = stateOf()
         fetch()
@@ -125,25 +143,53 @@ class DownloadController(
                 is FileState.Failed -> notify(downloadFetchFailureNotice(answer.why))
                 else -> {}
             }
+            if (idle) onIdle?.invoke()
         }
     }
 
     private class Seen(val state: FileState?)
+
+    private data class SaveKey(val id: String, val store: DownloadStore?)
+
+    private companion object {
+        val active = mutableStateMapOf<SaveKey, Int>()
+    }
 }
 
 /**
  * The saves and the waits for a fetch that outlive the card they started from, one
  * [DownloadController] per attachment, run in the app's own scope. Without it a
  * download stops when its card scrolls out of the chat. Used from the main thread.
+ *
+ * A visit lasts while any file card is composed: when the last one leaves, idle
+ * controllers are dropped (so "Download again" does not outlive the visit); one still
+ * saving or waiting for a fetch goes on, and is dropped once it ends.
  */
 internal object DownloadHub {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private data class Key(val id: String, val context: Context, val store: DownloadStore?)
     private val controllers = HashMap<Key, DownloadController>()
+    private var cards = 0
 
     fun controller(attachment: Attachment, context: Context, store: DownloadStore?): DownloadController {
         val app = context.applicationContext
-        return controllers.getOrPut(Key(attachment.id, app, store)) { DownloadController(attachment, app, scope, store) }
+        val key = Key(attachment.id, app, store)
+        return controllers.getOrPut(key) {
+            DownloadController(attachment, app, scope, store).also { c -> c.onIdle = { dropIfOver(key, c) } }
+        }
+    }
+
+    fun cardEntered() { cards++ }
+
+    fun cardLeft() {
+        cards = (cards - 1).coerceAtLeast(0)
+        if (cards == 0) {
+            controllers.values.removeAll { it.idle }
+        }
+    }
+
+    private fun dropIfOver(key: Key, c: DownloadController) {
+        if (cards == 0 && controllers[key] === c) controllers.remove(key)
     }
 }
 
@@ -163,6 +209,10 @@ fun rememberDownload(attachment: Attachment): DownloadController {
 internal fun rememberCardDownload(attachment: Attachment): DownloadController {
     val context = LocalContext.current
     val store = LocalDownloadStore.current
+    DisposableEffect(Unit) {
+        DownloadHub.cardEntered()
+        onDispose { DownloadHub.cardLeft() }
+    }
     return remember(attachment.id, context, store) { DownloadHub.controller(attachment, context, store) }
 }
 
