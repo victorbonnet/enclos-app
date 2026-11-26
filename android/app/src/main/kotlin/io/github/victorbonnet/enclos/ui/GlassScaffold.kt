@@ -1,5 +1,8 @@
 package io.github.victorbonnet.enclos.ui
 
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.runtime.rememberUpdatedState
 import android.os.Build
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -106,7 +109,8 @@ private fun Bar(edge: Edge, frost: Boolean, seen: GraphicsLayer, scrolling: () -
     val blurred = if (frost) rememberGraphicsLayer() else null
     val density = androidx.compose.ui.platform.LocalDensity.current
     // Cheaper while a list moves (spec M): the radius drops at once and comes back within 150 ms.
-    val moving by remember { derivedStateOf(scrolling) }
+    val latest by rememberUpdatedState(scrolling)
+    val moving by remember { derivedStateOf { latest() } }
     val radius by animateFloatAsState(
         with(density) { (if (moving) Glass.scrollRadius else Glass.radius).toPx() },
         if (moving) snap() else tween(150),
@@ -114,7 +118,7 @@ private fun Bar(edge: Edge, frost: Boolean, seen: GraphicsLayer, scrolling: () -
     )
     val fade = with(density) { Glass.fade.toPx() }
     Box(
-        Modifier.fillMaxWidth()
+        Modifier.fillMaxWidth().pointerInput(Unit) { detectTapGestures { } } // a bar is a target: taps on its blank parts stop here
             .drawBehind {
                 if (blurred != null) {
                     // The content behind this bar, blurred, then the tint over it.

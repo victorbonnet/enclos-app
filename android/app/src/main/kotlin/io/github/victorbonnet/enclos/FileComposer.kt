@@ -292,7 +292,7 @@ internal fun FileComposerControls(
     var menu by rememberSaveable { mutableStateOf(false) }
     val p = palette
     val canAttach = offersFiles && online && !blocked && names.size < MAX_SEND_FILES
-    Column(Modifier.fillMaxWidth().background(p.bg)) {
+    Column(Modifier.fillMaxWidth()) {
         composer({
             if (offersFiles) IconButton(
                 modifier = Modifier.size(48.dp).semantics { contentDescription = "Attach files" },
