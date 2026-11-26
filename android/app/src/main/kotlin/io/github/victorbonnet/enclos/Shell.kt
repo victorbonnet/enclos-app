@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.victorbonnet.enclos.ui.AgentInitial
 import io.github.victorbonnet.enclos.ui.AppBar
+import io.github.victorbonnet.enclos.ui.GlassScaffold
 import io.github.victorbonnet.enclos.ui.Composer
 import io.github.victorbonnet.enclos.ui.ConversationFilters
 import io.github.victorbonnet.enclos.ui.Gap
@@ -124,43 +125,45 @@ fun HomeShell(
     // the two positions outlive the pages and never share a value.
     val inboxPlace = rememberLazyListState()
     val agentsPlace = rememberLazyListState()
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // The switch follows the finger: the view a swipe would settle on.
-            ViewSwitch(View.entries[views.targetPage], model.attentionItems().size, onView)
-            Spacer(Modifier.weight(1f))
-            if (view == View.Conversations && model.paired.isNotEmpty()) {
-                ConversationFilters(
-                    unreadOnly = unreadOnly,
-                    archivedOnly = archivedOnly,
-                    onUnreadChange = onUnreadOnly,
-                    onArchivedChange = onArchivedOnly,
-                )
-            }
-            IconButton(Glyphs.settings, "Settings", settings, tint = p.textMuted)
-        }
-        Box(Modifier.weight(1f)) {
-            HorizontalPager(state = views, modifier = Modifier.fillMaxSize()) { page ->
-                Box(Modifier.fillMaxSize().background(p.bg)) {
-                    when (View.entries[page]) {
-                        View.Conversations -> InboxScreen(model, query, unreadOnly, archivedOnly, openChat, start, openAgent, openRoutines, pair, openApproval, state = inboxPlace)
-                        View.Agents -> AgentsScreen(model, query, openAgent, openSandbox, pair, createSandbox, openHost, state = agentsPlace)
-                    }
+    // The lists run the full height, under the switch and under the search (glass both).
+    GlassScaffold(
+        Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+        top = {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // The switch follows the finger: the view a swipe would settle on.
+                ViewSwitch(View.entries[views.targetPage], model.attentionItems().size, onView)
+                Spacer(Modifier.weight(1f))
+                if (view == View.Conversations && model.paired.isNotEmpty()) {
+                    ConversationFilters(
+                        unreadOnly = unreadOnly,
+                        archivedOnly = archivedOnly,
+                        onUnreadChange = onUnreadOnly,
+                        onArchivedChange = onArchivedOnly,
+                    )
                 }
+                IconButton(Glyphs.settings, "Settings", settings, tint = p.textMuted)
             }
-            if (model.paired.isNotEmpty()) {
-                BottomBar(
-                    query,
-                    { query = it },
-                    if (view == View.Conversations) {
-                        if (archivedOnly) "Search archived conversations" else "Search conversations"
-                    } else "Search sandboxes and agents",
-                    compose,
-                    Modifier.align(Alignment.BottomCenter),
-                )
+        },
+        bottom = if (model.paired.isEmpty()) null else ({
+            BottomBar(
+                query,
+                { query = it },
+                if (view == View.Conversations) {
+                    if (archivedOnly) "Search archived conversations" else "Search conversations"
+                } else "Search sandboxes and agents",
+                compose,
+            )
+        }),
+    ) { room ->
+        HorizontalPager(state = views, modifier = Modifier.fillMaxSize()) { page ->
+            Box(Modifier.fillMaxSize().background(p.bg)) {
+                when (View.entries[page]) {
+                    View.Conversations -> InboxScreen(model, query, unreadOnly, archivedOnly, openChat, start, openAgent, openRoutines, pair, openApproval, state = inboxPlace, room = room)
+                    View.Agents -> AgentsScreen(model, query, openAgent, openSandbox, pair, createSandbox, openHost, state = agentsPlace, room = room)
+                }
             }
         }
     }
@@ -188,23 +191,21 @@ private fun ViewSwitch(view: View, waiting: Int, onView: (View) -> Unit) {
                 contentAlignment = Alignment.Center,
             ) { Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 Glyph(icon, if (on) p.text else p.textMuted, size = 22.dp)
-                if (option == View.Conversations && waiting > 0) Text(if (waiting > 99) "99+" else waiting.toString(), style = Type.small, color = p.accent)
+                if (option == View.Conversations && waiting > 0) Text(if (waiting > 99) "99+" else waiting.toString(), style = Type.small, color = if (on) p.accent else p.text)
             } }
         }
     }
 }
 
 /**
- * Over the end of the view, on a fade to `bg`: the search, a pill on
- * `surface`, and the compose button.
+ * Over the end of the view, on glass (`GlassScaffold`'s bottom bar): the
+ * search, a pill on `surface`, and the compose button.
  */
 @Composable
-private fun BottomBar(query: String, onQuery: (String) -> Unit, placeholder: String, compose: () -> Unit, modifier: Modifier) {
+private fun BottomBar(query: String, onQuery: (String) -> Unit, placeholder: String, compose: () -> Unit) {
     val p = palette
     Row(
-        modifier.fillMaxWidth()
-            .background(Brush.verticalGradient(listOf(Color.Transparent, p.bg, p.bg)))
-            .padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 12.dp),
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -269,12 +270,12 @@ private fun can(capability: String): String? = when (capability) {
 fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (String) -> Unit, start: (Agent) -> Unit, openRoutines: () -> Unit, openModel: () -> Unit) {
     val p = palette
     val agent = model.agents.firstOrNull { it.address == address }
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.navigationBars), top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text(agent?.label ?: address, style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         }
-        Hairline()
+    }) { room ->
         val key = AgentKey.of(address)
         // Closes once this phone forgot it: nothing of it is left to show.
         val forgotten = model.forgetting.forgotten[key] == true
@@ -287,7 +288,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
         if (agent == null) {
             // Whether it was removed, as the host says now.
             LaunchedEffect(key) { model.forgetting.refresh(key.host) }
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(room)) {
                 Text(
                     if (model.forgetting.isRemoved(key)) "This agent was removed from its host: nothing of it is left there."
                     else "This agent is no longer listed by its host.",
@@ -298,7 +299,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                 }
                 ForgetAgentSection(model, key, address.substringAfterLast('/'))
             }
-            return@Column
+            return@GlassScaffold
         }
         val activity = model.activityOf(agent.address)
         val working = model.workingOn(agent).isNotEmpty() || activity != null
@@ -307,7 +308,7 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
         val others = conversations.count { !it.home && !it.archived && model.listed(it) }
         val commands = model.commands[agent.address].orEmpty()
         var allCommands by remember { mutableStateOf(false) }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(room)) {
             Column(Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 EditableAgentPhoto(model, agent, working)
                 Gap(14.dp)
@@ -634,15 +635,15 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
     val listed = model.sandboxesOf(host).firstOrNull { it.name == sandbox }
     val operation = model.provisioning[address]
     val now = remember { System.currentTimeMillis() / 1000 }
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.navigationBars), top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text(sandbox, style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp), color = p.text, maxLines = 1)
         }
-        Hairline()
+    }) { room ->
         if (listed == null && operation == null) {
-            Text("This sandbox is no longer listed by its host.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
-            return@Column
+            Text("This sandbox is no longer listed by its host.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(room).padding(16.dp))
+            return@GlassScaffold
         }
         val live = model.connected(host)
         val runtime = (listed?.runtime ?: agents.firstOrNull()?.runtime)?.let(::runtimeName)
@@ -651,7 +652,7 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
         val groups = model.conversations
             .filter { it.group && !it.archived && it.host == host && it.members.first().substringBefore('/') == sandbox }
             .sortedByDescending { model.lines[it.id]?.lastOrNull()?.time ?: 0L }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(room)) {
             Column(Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 SandboxMark(live, side = 56.dp)
                 Gap(14.dp)
@@ -807,10 +808,10 @@ private fun Info(label: String, value: String) {
 @Composable
 fun GroupRefused(why: String, back: () -> Unit) {
     val p = palette
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.navigationBars), top = {
         AppBar { IconButton(Glyphs.back, "Back", back) }
-        Hairline()
-        Text("The group was not started: $why", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
+    }) { room ->
+        Text("The group was not started: $why", style = Type.small, color = p.textMuted, modifier = Modifier.padding(room).padding(16.dp))
     }
 }
 
@@ -850,7 +851,9 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit, s
     val draftNow by androidx.compose.runtime.rememberUpdatedState(madeDraft)
     androidx.compose.runtime.DisposableEffect(Unit) { onDispose { draftNow?.let { model.dropDraft(it.id) } } }
     val canGroup = agents.groupBy { it.host to it.sandbox }.values.any { it.size >= 2 }
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
+    GlassScaffold(
+        Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+        top = {
         AppBar {
             IconButton(Glyphs.clear, "Close", back)
             Box {
@@ -914,24 +917,8 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit, s
                 }
             }
         }
-        if (grouping) {
-            GroupPicker(agents, members, name, { name = it }, Modifier.weight(1f))
-        } else Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            val agent = chosen?.let { selected -> model.agents.firstOrNull { it.address == selected.address } }
-            if (agent == null) {
-                Text("No agent yet: pair a host, or wait for it to list its agents.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(24.dp))
-            } else {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    AgentInitial(agent.label, model.workingOn(agent).isNotEmpty() || model.activityOf(agent.address) != null, side = 64.dp, photo = agent.photoKey)
-                    Gap(14.dp)
-                    Text(agent.label, style = Type.heading, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Gap(4.dp)
-                    Text("${agent.sandbox} · ${runtimeName(agent.runtime)} · ${agent.host}", style = Type.small, color = p.textMuted)
-                    val count = model.commands[agent.address]?.size ?: 0
-                    if (count > 0) Text("$count commands: type / to see them", style = Type.small, color = p.textFaint)
-                }
-            }
-        }
+        },
+        bottom = {
         val agent = if (grouping) members.firstOrNull() else chosen
         val live = agent != null && model.connected(agent.host)
         val enough = !grouping || members.size in 2..6
@@ -972,6 +959,26 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit, s
             val started = model.conversations.firstOrNull { it.id == id } ?: return@Composer
             notSent = model.send(started, text.trim())
             if (notSent == null) opened(id)
+        }
+        },
+    ) { room ->
+        if (grouping) {
+            GroupPicker(agents, members, name, { name = it }, Modifier.fillMaxSize().padding(room))
+        } else Box(Modifier.fillMaxSize().padding(room), contentAlignment = Alignment.Center) {
+            val agent = chosen?.let { selected -> model.agents.firstOrNull { it.address == selected.address } }
+            if (agent == null) {
+                Text("No agent yet: pair a host, or wait for it to list its agents.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(24.dp))
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    AgentInitial(agent.label, model.workingOn(agent).isNotEmpty() || model.activityOf(agent.address) != null, side = 64.dp, photo = agent.photoKey)
+                    Gap(14.dp)
+                    Text(agent.label, style = Type.heading, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Gap(4.dp)
+                    Text("${agent.sandbox} · ${runtimeName(agent.runtime)} · ${agent.host}", style = Type.small, color = p.textMuted)
+                    val count = model.commands[agent.address]?.size ?: 0
+                    if (count > 0) Text("$count commands: type / to see them", style = Type.small, color = p.textFaint)
+                }
+            }
         }
     }
 }

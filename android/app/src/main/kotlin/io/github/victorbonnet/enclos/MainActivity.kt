@@ -30,10 +30,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.CompositionLocalProvider
 import io.github.victorbonnet.enclos.ui.LocalAgentPictures
 import androidx.compose.runtime.Composable
@@ -372,7 +369,8 @@ internal fun Screens(model: AppModel, ask: Ask) {
     // swipe half way does not change what Back does.
     BackHandler(enabled = !onFullScreen && views.settledPage != View.Conversations.ordinal) { onView(View.Conversations) }
 
-    Box(Modifier.fillMaxSize().background(palette.bg).windowInsetsPadding(WindowInsets.statusBars)) {
+    // The status bar's room is each screen's own: its top bar is glass that fills it (`GlassScaffold`).
+    Box(Modifier.fillMaxSize().background(palette.bg)) {
         transition.AnimatedContent(transitionSpec = { routeMove(forward = targetState.depth > initialState.depth) }) { route ->
             val line = palette.line
             // A full screen's left edge is a hairline, so it reads crisply
@@ -413,10 +411,7 @@ internal fun Screens(model: AppModel, ask: Ask) {
                         )
                     }
                     is Route.Chat -> ConversationScreen(model, route.id, back = { go(route.up) })
-                    Route.Settings -> Column(Modifier.fillMaxSize()) {
-                        AppBar { IconButton(Glyphs.back, "Back", { go(Route.Tabs) }) }
-                        SettingsScreen(model, pair = { go(Route.Pair) }, ask = ask, openHost = { go(Route.HostPage(it, fromSettings = true)) })
-                    }
+                    Route.Settings -> SettingsScreen(model, back = { go(Route.Tabs) }, pair = { go(Route.Pair) }, ask = ask, openHost = { go(Route.HostPage(it, fromSettings = true)) })
                     Route.NewChat -> NewChatScreen(model, back = { go(Route.Tabs) }, opened = { go(Route.Chat(it)) })
                     is Route.AgentPage -> AgentScreen(model, route.address, back = { go(route.up) }, openChat = { go(Route.Chat(it)) }, start = start, openRoutines = { go(Route.RoutinesPage(route.address, fromAgent = true, inSandbox = route.inSandbox)) }, openModel = { go(Route.ModelPage(route.address, inSandbox = route.inSandbox)) })
                     is Route.RoutinesPage -> RoutinesScreen(model, route.address, back = { go(route.up) })

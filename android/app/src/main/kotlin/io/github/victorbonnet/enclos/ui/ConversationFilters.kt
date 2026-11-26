@@ -61,7 +61,7 @@ fun ConversationFilters(
                     stateDescription = filtersState(unreadOnly, archivedOnly)
                 },
             contentAlignment = Alignment.Center,
-        ) { Glyph(Glyphs.filter, if (active) p.accent else p.textMuted) }
+        ) { Glyph(Glyphs.filter, if (active) p.text else p.textMuted) }
         DropdownMenu(expanded, { expanded = false }, modifier = Modifier.background(p.bg)) {
             FilterToggle("Unread only", unreadOnly, onUnreadChange)
             FilterToggle("Archived conversations", archivedOnly, onArchivedChange)

@@ -557,8 +557,7 @@ fun Composer(
     onSend: () -> Unit,
 ) {
     val p = palette
-    Column(Modifier.fillMaxWidth().background(p.bg)) {
-        Hairline()
+    Column(Modifier.fillMaxWidth()) {
         AnimatedVisibility(notice != null, enter = fadeIn(Motion.enter()) + expandVertically(Motion.enter()), exit = fadeOut(Motion.exit()) + shrinkVertically(Motion.exit())) {
             // Kept while it leaves, so the text does not vanish before the line closes.
             var shown by remember { mutableStateOf(notice.orEmpty()) }

@@ -239,16 +239,16 @@ fun PolicyRequestScreen(model: AppModel, key: String, back: () -> Unit, openChat
         if (closing && request?.state == "closed") back()
         else if (closing && operation != PolicyRequestAction.Close) closing = false
     }
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+    GlassScaffold(Modifier.windowInsetsPadding(WindowInsets.navigationBars), top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("Sandbox policy", style = Type.name, color = p.text)
         }
-        Hairline()
+    }) { room ->
         if (request == null) {
-            Text("This request is no longer available. Connect to its host to sync.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(24.dp))
+            Text("This request is no longer available. Connect to its host to sync.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(room).padding(24.dp))
         } else {
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp)) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(room).padding(20.dp)) {
                 Text(request.title, style = Type.heading, color = p.text)
                 Gap(12.dp)
                 Text("${request.host}/${request.sandbox}", style = Type.code, color = p.textFaint)
