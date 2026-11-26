@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.SystemClock
+import androidx.compose.ui.graphics.Color
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
@@ -88,10 +89,14 @@ class GlassScaffoldDeviceTest {
         val y = h - GlassStripes.bottomPx / 2 - 8
         val lowBefore = rgb(before, side, y)
         assertTrue("bottom bar is tinted light: $lowBefore", lowBefore.first > 150 && lowBefore.second > 150)
-        // The blur flattens the stripes, so the swing at one row depends on the phase: take the largest over the bar.
-        val rows = (h - GlassStripes.bottomPx + 8) until (h - 8)
-        val swing = rows.maxOf { r -> abs(rgb(before, side, r).first - rgb(after, side, r).first) }
-        assertTrue("the bottom bar follows what passes under it: largest change $swing", swing > 8)
+        // Its backdrop is a solid blue band the stripes never use (bg at .76 over blue: blue above red by ~60).
+        // A bar that blurred the wrong part of the screen would show black and red there, never this blue.
+        assertTrue("the bottom bar blurs what is behind it (blue band): $lowBefore", lowBefore.third - lowBefore.first > 30)
+        // And it follows: the band turns green, the bar turns green.
+        instrumentation.runOnMainSync { GlassStripes.band.value = Color(0, 255, 0) }
+        val recoloured = shot("frost-2")
+        val g = rgb(recoloured, side, y)
+        assertTrue("the bottom bar follows its backdrop (green band): $g", g.second - g.first > 30 && g.second - g.third > 30)
         activity.finish()
     }
 

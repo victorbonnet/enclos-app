@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
@@ -27,11 +29,13 @@ import io.github.victorbonnet.enclos.ui.GlassScaffold
  */
 object GlassStripes {
     val shift = mutableIntStateOf(0)
+    val band = mutableStateOf(Color(0, 0, 255))
     @Volatile var topPx = 0
     @Volatile var bottomPx = 0
 
     fun show(activity: MainActivity, frost: Boolean, dark: Boolean) {
         shift.intValue = 0
+        band.value = Color(0, 0, 255)
         topPx = 0
         val view = ComposeView(activity).apply {
             setContent {
@@ -43,8 +47,13 @@ object GlassStripes {
                     ) { room ->
                         topPx = with(LocalDensity.current) { room.calculateTopPadding().roundToPx() }
                         bottomPx = with(LocalDensity.current) { room.calculateBottomPadding().roundToPx() }
-                        Column(Modifier.fillMaxSize().offset { IntOffset(0, shift.intValue) }) {
-                            repeat(40) { Box(Modifier.fillMaxWidth().height(40.dp).background(if (it % 2 == 0) Color.Black else Color.Red)) }
+                        Box(Modifier.fillMaxSize()) {
+                            Column(Modifier.fillMaxSize().offset { IntOffset(0, shift.intValue) }) {
+                                repeat(40) { Box(Modifier.fillMaxWidth().height(40.dp).background(if (it % 2 == 0) Color.Black else Color.Red)) }
+                            }
+                            // A solid band over the last 200 dp, in a colour the stripes never use: the bottom bar's
+                            // hue can only come from its own backdrop, so a blur taken from the wrong place shows.
+                            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(200.dp).background(band.value))
                         }
                     }
                 }
