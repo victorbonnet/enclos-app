@@ -885,12 +885,20 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * message until the agent answers, and whenever its runtime says it is
      * writing, so there is something to see before the first `typing`.
      */
-    fun working(conversation: String) =
-        typing[conversation] == true || awaiting[conversation] == true || steps[conversation].orEmpty().any { !it.done } ||
-            conversations.firstOrNull { it.id == conversation }?.let { activities.answering(it.host, conversation) } == true
+    fun working(conversation: String) = conversationWorking(conversation, typing, awaiting, steps, conversations, activities)
 
     /** What the agent at [address] (`host/sandbox/agent`) is doing, as its runtime reports it; none while it is idle. */
     fun activityOf(address: String): AgentActivity? = activities.of(address)
+
+    /** Whether [agent] shows at work, in its row and for Working only alike ([showsWorking]). */
+    fun showsWorking(agent: Agent): Boolean = io.github.victorbonnet.enclos.showsWorking(workingOn(agent), activityOf(agent.address))
+
+    /**
+     * Whether the agents view shows only the agents at work: off when the
+     * app starts, kept while it runs (through the screens, the lock and a
+     * configuration change), never written to the phone. Clear cache leaves it.
+     */
+    val agentsWorkingOnly = mutableStateOf(false)
 
     /** Whether the agent at [address] (`host/sandbox/agent`) reports its tasks: its runtime has the `tasks` capability. */
     fun offersTasks(address: String) = agents.any { it.address == address && "tasks" in it.capabilities }
@@ -1210,6 +1218,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         connections.remove(host.name)?.let {
             it.close()
             outgoing.ended(host.name, "the connection was opened again")
+            // Nor will it end the turns it showed: they stop showing at work, as when it ends.
+            conversationWorkEnded(host.name)
         }
         // While retrying, why the last attempt ended stays on screen.
         links[host.name] = links[host.name].reopening()
@@ -1273,12 +1283,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         links[host.name] = HostLink.Ended(why)
         // What the bridge did not show back may not have reached it: back in its field.
         outgoing.ended(host.name, "the connection ended")
-        // Nothing will come over a closed connection: stop showing the agent at work.
-        val ids = conversations.filter { it.host == host.name }.map { it.id }.toSet()
-        typing.keys.filter { it in ids }.forEach { typing.remove(it) }
-        ids.forEach { answered(it) }
-        steps.keys.filter { it in ids }.forEach { steps.remove(it) }
-        turnUsage.keys.filter { it in ids }.forEach { turnUsage.remove(it) }
+        conversationWorkEnded(host.name)
         // Its agents' commands come again with the next connection.
         commands.keys.filter { it.startsWith("${host.name}/") }.forEach { commands.remove(it) }
         // What its agents were doing is live state: unknown until the next connection says it.
@@ -1294,6 +1299,21 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val n = failures.getOrDefault(host.name, 0)
         failures[host.name] = n + 1
         main.postDelayed({ if (foreground && host.name !in connections) reopen(host.name) }, backoff(n))
+    }
+
+    /**
+     * Nothing more will come over [host]'s connection, ended or replaced by
+     * [connect]: its conversations stop showing their agent at work (typing,
+     * a message awaiting its answer, a tool not ended), and their turn's
+     * usage goes. Another host's conversations, and what a new connection
+     * says after, are left alone.
+     */
+    private fun conversationWorkEnded(host: String) {
+        val ids = conversations.filter { it.host == host }.map { it.id }.toSet()
+        typing.keys.filter { it in ids }.forEach { typing.remove(it) }
+        ids.forEach { answered(it) }
+        steps.keys.filter { it in ids }.forEach { steps.remove(it) }
+        turnUsage.keys.filter { it in ids }.forEach { turnUsage.remove(it) }
     }
 
     /**
@@ -2473,6 +2493,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      * Pairings stay, and so does how far each conversation was read.
      */
     fun clearCache() {
+        // The connections [connect] opens again below: their work ends now,
+        // while their conversations are known (once cleared, [connect] finds none).
+        val reopened = foreground && ready
+        if (reopened) paired.filter { it.name in connections }.forEach { conversationWorkEnded(it.name) }
         audit.clear()
         taskBoard.clear()
         // Every host syncs again from the start: what was skipped comes again.
@@ -2520,7 +2544,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         save { clear() }
         saving.execute { java.io.File(getApplication<Application>().cacheDir, "attachments").deleteRecursively() }
         // Each connection again, its sync from the start.
-        if (foreground && ready) paired.forEach { connect(it) }
+        if (reopened) paired.forEach { connect(it) }
     }
 
     fun reconnect(name: String) {
