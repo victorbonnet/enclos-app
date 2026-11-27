@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -55,6 +56,8 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -107,9 +110,13 @@ fun Files(attachments: List<Attachment>, states: Map<String, FileState>, fetch: 
                 if (itself && (state == null || gone)) fetch(a)
             }
             if (a.image) {
-                ImageFile(a, state, itself, { fetch(a) }, openFile = { opened = Opened(a, it, asImage = false) }) { opened = Opened(a, it, asImage = true) }
+                ImageFile(
+                    a, state, itself, { fetch(a) },
+                    openFile = { opened = Opened(a, it, asImage = false) },
+                    stateOf = { states[a.id] },
+                ) { opened = Opened(a, it, asImage = true) }
             } else {
-                OtherFile(a, state, itself, { fetch(a) }) { opened = Opened(a, it, asImage = false) }
+                OtherFile(a, state, itself, { fetch(a) }, { opened = Opened(a, it, asImage = false) }, stateOf = { states[a.id] })
             }
         }
     }
@@ -123,7 +130,16 @@ private sealed interface Decoded {
 }
 
 @Composable
-private fun ImageFile(a: Attachment, state: FileState?, itself: Boolean, retry: () -> Unit, openFile: (File) -> Unit, open: (File) -> Unit) {
+private fun ImageFile(
+    a: Attachment,
+    state: FileState?,
+    itself: Boolean,
+    retry: () -> Unit,
+    openFile: (File) -> Unit,
+    // Handed to the file line an undecodable image falls back to: a Download tapped there reads the state live.
+    stateOf: () -> FileState?,
+    open: (File) -> Unit,
+) {
     val shape = Shapes.control
     when (state) {
         is FileState.Ready -> {
@@ -138,7 +154,7 @@ private fun ImageFile(a: Attachment, state: FileState?, itself: Boolean, retry: 
                 null, Decoded.Missing -> Placeholder("Opening the image", retry)
                 // A corrupt file, a format this Android does not decode, or one too
                 // large to draw: its line opens the document viewer, with its notice and Share.
-                Decoded.Undecodable -> OtherFile(a, state, itself, retry, openFile)
+                Decoded.Undecodable -> OtherFile(a, state, itself, retry, openFile, stateOf)
                 is Decoded.Drawn -> Image(
                     d.bitmap.asImageBitmap(),
                     contentDescription = a.shownName,
@@ -170,37 +186,83 @@ private fun Placeholder(text: String, onClick: (() -> Unit)? = null) {
 
 /** A file's name and size. Opening it never starts the share sheet. */
 @Composable
-private fun OtherFile(a: Attachment, state: FileState?, itself: Boolean, retry: () -> Unit, open: (File) -> Unit) {
+internal fun OtherFile(
+    a: Attachment,
+    state: FileState?,
+    itself: Boolean,
+    retry: () -> Unit,
+    open: (File) -> Unit,
+    // The file's state read live, for a Download tapped before the file came: the card may be gone by then.
+    stateOf: () -> FileState? = { state },
+) {
     val p = palette
+    val offered = LocalDownloadsOffered.current
+    val download = rememberCardDownload(a)
+
     Row(
-        Modifier.fillMaxWidth().clip(Shapes.control).border(1.dp, p.line, Shapes.control)
-            .clickable(role = Role.Button) {
-                when (state) {
-                    // Cleared by the system since: fetched again rather than opened missing.
-                    is FileState.Ready -> if (state.file.isFile) open(state.file) else retry()
-                    is FileState.Failed -> retry()
-                    // A large file, not fetched until asked.
-                    null -> retry()
-                    is FileState.Loading -> {}
-                }
-            }
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().clip(Shapes.control).border(1.dp, p.line, Shapes.control),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Glyph(Glyphs.compose, p.accent, size = 18.dp)
-        Column(Modifier.weight(1f)) {
-            Text(a.shownName, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                when (state) {
-                    is FileState.Loading -> "${size(a.size)} · ${percent(state.done, state.size)}"
-                    is FileState.Failed -> "Did not come: ${state.why}. Tap to try again."
-                    is FileState.Ready -> "${size(a.size)} · ${if (a.artefact) "open page" else "tap to open"}"
-                    null -> if (!itself) "${size(a.size)} · tap to load it" else size(a.size)
-                },
-                style = Type.meta,
-                color = p.textFaint,
-            )
+        Row(
+            Modifier.weight(1f)
+                .clickable(role = Role.Button) {
+                    when (state) {
+                        // Cleared by the system since: fetched again rather than opened missing.
+                        is FileState.Ready -> if (state.file.isFile) open(state.file) else retry()
+                        is FileState.Failed -> retry()
+                        // A large file, not fetched until asked.
+                        null -> retry()
+                        is FileState.Loading -> {}
+                    }
+                }
+                .padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = if (offered) 4.dp else 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Glyph(Glyphs.compose, p.accent, size = 18.dp)
+            Column(Modifier.weight(1f)) {
+                Text(a.shownName, style = Type.small, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    when {
+                        download.saving -> "Saving…"
+                        state is FileState.Loading -> "${size(a.size)} · ${percent(state.done, state.size)}"
+                        state is FileState.Failed -> "Did not come: ${state.why}. Tap to try again."
+                        state is FileState.Ready -> "${size(a.size)} · ${if (a.artefact) "open page" else "tap to open"}"
+                        else -> if (!itself) "${size(a.size)} · tap to load it" else size(a.size)
+                    },
+                    style = Type.meta,
+                    color = p.textFaint,
+                )
+            }
+        }
+        if (offered) {
+            val canTap = download.enabled && state !is FileState.Loading
+            Box(
+                Modifier.heightIn(min = 48.dp).clip(Shapes.control)
+                    .clickable(enabled = canTap, role = Role.Button) {
+                        when (state) {
+                            is FileState.Ready -> if (state.file.isFile) {
+                                download.start(state.file)
+                            } else {
+                                download.startWhenFetched(stateOf, retry)
+                            }
+                            is FileState.Failed -> download.startWhenFetched(stateOf, retry)
+                            null -> download.startWhenFetched(stateOf, retry)
+                            is FileState.Loading -> {}
+                        }
+                    }
+                    .semantics { contentDescription = download.actionLabel }
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    download.label,
+                    style = Type.label,
+                    color = if (canTap) p.accent else p.textFaint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -250,8 +312,9 @@ private val ViewerText = Color(0xFFF2F2EF)
  * zoomed, double-tap to zoom on a point or back to the whole image.
  */
 @Composable
-private fun Viewer(a: Attachment, file: File, close: () -> Unit) {
+internal fun Viewer(a: Attachment, file: File, close: () -> Unit) {
     val context = LocalContext.current
+    val download = rememberDownload(a)
     // Decoded larger than in the bubble, to stay sharp when zoomed.
     val bitmap by produceState<Bitmap?>(null, file) { value = decode(file, 4096) }
     var chrome by remember { mutableStateOf(true) }
@@ -287,6 +350,16 @@ private fun Viewer(a: Attachment, file: File, close: () -> Unit) {
                             .padding(horizontal = 14.dp),
                         contentAlignment = Alignment.Center,
                     ) { Text("Share", style = Type.label, color = ViewerText) }
+                    if (LocalDownloadsOffered.current) {
+                        val canSave = download.enabled
+                        Box(
+                            Modifier.height(48.dp).clip(Shapes.control)
+                                .clickable(enabled = canSave, role = Role.Button) { download.start(file) }
+                                .semantics { contentDescription = download.actionLabel }
+                                .padding(horizontal = 14.dp),
+                            contentAlignment = Alignment.Center,
+                        ) { Text(download.label, style = Type.label, color = if (canSave) ViewerText else ViewerText.copy(alpha = 0.45f)) }
+                    }
                 }
             }
         }

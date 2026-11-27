@@ -77,6 +77,8 @@ fun ArtefactViewer(a: Attachment, file: File, close: () -> Unit) {
     val loaded by produceState<Result<ArtefactDocument>?>(null, file) {
         value = withContext(Dispatchers.IO) { runCatching { ArtefactDocument.read(file) } }
     }
+    val exists by produceState<Boolean?>(null, file) { value = withContext(Dispatchers.IO) { file.isFile } }
+    val download = rememberDownload(a)
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val view = LocalView.current
         val lightBars = p.bg.luminance() > 0.5f
@@ -102,18 +104,31 @@ fun ArtefactViewer(a: Attachment, file: File, close: () -> Unit) {
                     contentAlignment = Alignment.Center,
                 ) { Text("Share", style = Type.label, color = p.accent) }
             }
-            val result = loaded
-            when {
-                shareMissing -> PageNotice("The cached file was cleared. Close the page and open it again to fetch it.")
-                result == null -> PageNotice("Opening the page…")
-                result.isFailure -> PageNotice(
-                    when (val error = result.exceptionOrNull()) {
-                        is CharacterCodingException -> "This page is not UTF-8. Ask the agent to send it as UTF-8."
-                        is IllegalArgumentException -> error.message ?: "This page cannot be opened."
-                        else -> "This page cannot be read. Close it and try fetching it again."
-                    },
-                )
-                else -> StaticPage(result.getOrThrow()) { leaving = it }
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                val result = loaded
+                when {
+                    shareMissing -> PageNotice("The cached file was cleared. Close the page and open it again to fetch it.")
+                    result == null -> PageNotice("Opening the page…")
+                    result.isFailure -> PageNotice(
+                        when (val error = result.exceptionOrNull()) {
+                            is CharacterCodingException -> "This page is not UTF-8. Ask the agent to send it as UTF-8."
+                            is IllegalArgumentException -> error.message ?: "This page cannot be opened."
+                            else -> "This page cannot be read. Close it and try fetching it again."
+                        },
+                    )
+                    else -> StaticPage(result.getOrThrow()) { leaving = it }
+                }
+            }
+            if (LocalDownloadsOffered.current) {
+                Hairline()
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(size(a.size), style = Type.meta, color = p.textFaint, modifier = Modifier.weight(1f))
+                    DownloadActionButton(download, enabled = exists == true && !shareMissing) { download.start(file) }
+                }
             }
         }
         leaving?.let { destination ->

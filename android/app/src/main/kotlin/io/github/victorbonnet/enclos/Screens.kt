@@ -20,6 +20,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import io.github.victorbonnet.enclos.ui.ProvideDownloadVisit
 import io.github.victorbonnet.enclos.ui.ThemeChoice
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1685,6 +1686,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             model.rename(conversation, it).also { sent -> if (sent) renaming = false }
         }
     }
+    ProvideDownloadVisit(id) {
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
@@ -1892,6 +1894,7 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             if (unsent == null) atNewest = true
         }
         }
+    }
     }
 }
 
