@@ -1352,9 +1352,14 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val conversationId = m.optString("conversation")
         if (m.optString("type") in conversationScoped && ConversationKey(host.name, conversationId) in deletion.deleted) return
         // Once for every message about a conversation: another host's with the same id keeps it.
+        // The record of an id left out lives exactly as long as this check refuses it, so the same
+        // place clears it: a frame it stops refusing is the phone keeping that conversation again.
         val about = m.optString("conversation").ifBlank { null }
-        if (about != null && leftOutForClash(conversations, host.name, m.optString("type"), about)) {
-            return refusedClash(host.name, about, m.optString("agent").ifBlank { null })
+        if (about != null && m.optString("type") in conversationScoped) {
+            if (leftOutForClash(conversations, host.name, m.optString("type"), about)) {
+                return refusedClash(host.name, about, if (m.isNull("agent")) null else m.optString("agent").ifBlank { null })
+            }
+            clashOver(host.name, about)
         }
         if (reminderDismissals.received(host.name, m)) return
         if (m.optString("type") == "open_items") {
@@ -2370,8 +2375,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * The other paired hosts holding [host]'s left-out conversations, with the agents of [host] each
-     * holds. A host this phone no longer pairs, or an id whose agent the phone never learned, is not
-     * named; the count of a host is how many of [host]'s left-out conversations it holds.
+     * holds. A host this phone no longer pairs, a host that no longer holds the id, or an id whose
+     * agent the phone never learned, is not named; the count of a host is how many of [host]'s
+     * left-out conversations it holds.
      */
     private fun clashHoldersOf(host: String): List<ClashHolder> {
         val pairedNames = paired.map { it.name }.toSet()
@@ -2380,7 +2386,10 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         val counts = LinkedHashMap<String, Int>()
         clashes[host].orEmpty().forEach { id ->     // insertion order: the order the phone learned them
             val hold = held[id] ?: return@forEach
-            val holder = hold.holder?.takeIf { it in pairedNames } ?: return@forEach
+            // A host paired again under the same name may no longer hold it: name the one that does.
+            val holder = hold.holder
+                ?.takeIf { it in pairedNames && heldByAnotherHostRow(conversations, host, id)?.host == it }
+                ?: return@forEach
             val agent = hold.agent ?: return@forEach
             counts[holder] = (counts[holder] ?: 0) + 1
             val list = agents.getOrPut(holder) { mutableListOf() }
@@ -2399,6 +2408,25 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         clashes[host] = clashes[host].orEmpty() + id
         // No host name in the log: the screens say which.
         android.util.Log.w("enclos", "a conversation has the id of another host's and is left out")
+    }
+
+    /**
+     * The clash over [host]'s conversation [id] is over: a frame about it is kept again (the other
+     * host holding it was forgotten or paired again), so what was left out about it is no longer,
+     * and an agent is no longer left out once none of its conversations are.
+     */
+    private fun clashOver(host: String, id: String) {
+        val left = clashes[host] ?: return
+        if (id !in left) return
+        val remaining = left - id
+        if (remaining.isEmpty()) clashes.remove(host) else clashes[host] = remaining
+        val holds = clashHolds[host].orEmpty() - id
+        if (holds.isEmpty()) clashHolds.remove(host) else clashHolds[host] = holds
+        val agents = clashAgents[host].orEmpty()
+        val stillLeftOut = holds.values.mapNotNullTo(HashSet()) { it.agent }
+        val next = agents.intersect(stillLeftOut)
+        if (next == agents) return
+        if (next.isEmpty()) clashAgents.remove(host) else clashAgents[host] = next
     }
 
     private fun clearArchiveRequests(host: String, problem: String? = null) {
