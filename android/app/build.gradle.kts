@@ -80,6 +80,17 @@ android {
             // to itself unless exported.
             all {
                 it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
+                // `just screenshots` (docs/design-screens.md) draws the
+                // screens in src/test/.../screenshots to PNGs in
+                // build/screenshots. Without -Penclos.screenshots those
+                // tests skip themselves, and a normal test run writes no image.
+                if (providers.gradleProperty("enclos.screenshots").isPresent) {
+                    it.systemProperty("enclos.screenshots.dir", layout.buildDirectory.dir("screenshots").get().asFile.path)
+                    it.systemProperty("roborazzi.test.record", "true")
+                    // The images are files Gradle does not track: never skip or cache the run
+                    it.outputs.upToDateWhen { false }
+                    it.outputs.cacheIf { false }
+                }
                 // Keep layout assertion details visible in hosted unit-test failures.
                 it.testLogging {
                     events("failed")
@@ -123,6 +134,8 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
     testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.androidx.test.espresso.core)
 }
