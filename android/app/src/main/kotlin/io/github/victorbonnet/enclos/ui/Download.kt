@@ -1,6 +1,7 @@
 package io.github.victorbonnet.enclos.ui
 
 import android.content.Context
+import androidx.annotation.MainThread
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
@@ -29,10 +30,13 @@ import io.github.victorbonnet.enclos.saveToDownloads
 import io.github.victorbonnet.enclos.showDownloadNotice
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -87,7 +91,7 @@ class DownloadController(
     val enabled: Boolean
         get() = Downloads.offered() && !saving && !busyElsewhere()
 
-    private fun busyElsewhere(): Boolean = (active[key] ?: 0) > 0
+    private fun busyElsewhere(): Boolean = active.containsKey(key)
 
     val actionLabel: String
         get() = "$label ${attachment.shownName}"
@@ -96,27 +100,52 @@ class DownloadController(
     private suspend fun notify(text: String) =
         withContext(Dispatchers.Main.immediate) { showDownloadNotice(context, text) }
 
+    @MainThread
     fun start(file: File) {
-        if (!Downloads.offered() || saving || busyElsewhere()) return
+        tryStart(file)
+    }
+
+    @MainThread
+    @OptIn(DelicateCoroutinesApi::class)
+    private fun tryStart(file: File): Boolean {
+        if (!enabled) return false
+        val reservation = Any()
+        active[key] = reservation
         saving = true
-        active[key] = (active[key] ?: 0) + 1
-        scope.launch {
-            // A cancel that lands once the file is published still comes back as Saved.
-            val outcome = try {
-                saveToDownloads(context, attachment, file, store)
-            } catch (_: CancellationException) {
-                DownloadOutcome.Cancelled
-            }
-            // The notice and the state are not cancellable: a closed viewer still hears how it ended.
-            withContext(NonCancellable) {
-                if (outcome == DownloadOutcome.Saved) saved = true
-                downloadNotice(outcome)?.let { notify(it) }
-                saving = false
-                val left = (active[key] ?: 1) - 1
-                if (left > 0) active[key] = left else active.remove(key)
-                if (idle) onIdle?.invoke()
-            }
+
+        fun release() {
+            // Either the coroutine or the launch failure owns cleanup for this save.
+            if (active[key] !== reservation) return
+            active.remove(key)
+            saving = false
+            if (idle) onIdle?.invoke()
         }
+
+        try {
+            // Enter the finally block even if the scope is cancelled before dispatch.
+            scope.launch(start = CoroutineStart.ATOMIC) {
+                try {
+                    ensureActive()
+                    // A cancel that lands once the file is published still comes back as Saved.
+                    val outcome = try {
+                        saveToDownloads(context, attachment, file, store)
+                    } catch (_: CancellationException) {
+                        DownloadOutcome.Cancelled
+                    }
+                    withContext(NonCancellable + Dispatchers.Main.immediate) {
+                        if (outcome == DownloadOutcome.Saved) saved = true
+                        downloadNotice(outcome)?.let { showDownloadNotice(context, it) }
+                    }
+                } finally {
+                    withContext(NonCancellable + Dispatchers.Main.immediate) { release() }
+                }
+            }
+        } catch (failure: Throwable) {
+            // A synchronous launch failure leaves cleanup with the main-thread caller.
+            release()
+            throw failure
+        }
+        return true
     }
 
     /**
@@ -139,7 +168,7 @@ class DownloadController(
                 .first { now -> now !== before && (now is FileState.Ready || now is FileState.Failed) }
             waiting = null
             when (answer) {
-                is FileState.Ready -> start(answer.file)
+                is FileState.Ready -> if (tryStart(answer.file)) return@launch
                 is FileState.Failed -> notify(downloadFetchFailureNotice(answer.why))
                 else -> {}
             }
@@ -152,7 +181,7 @@ class DownloadController(
     private data class SaveKey(val id: String, val store: DownloadStore?)
 
     private companion object {
-        val active = mutableStateMapOf<SaveKey, Int>()
+        val active = mutableStateMapOf<SaveKey, Any>()
     }
 }
 

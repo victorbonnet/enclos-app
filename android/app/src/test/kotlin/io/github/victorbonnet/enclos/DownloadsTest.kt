@@ -2,6 +2,7 @@ package io.github.victorbonnet.enclos
 
 import android.content.Context
 import android.net.Uri
+import android.os.Looper
 import android.system.ErrnoException
 import android.system.OsConstants
 import androidx.compose.runtime.CompositionLocalProvider
@@ -15,13 +16,21 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
+import io.github.victorbonnet.enclos.ui.DownloadController
 import io.github.victorbonnet.enclos.ui.LocalDownloadStore
 import io.github.victorbonnet.enclos.ui.OtherFile
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -32,6 +41,8 @@ import java.io.File
 import java.io.IOException
 import java.io.OutputStream
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.CoroutineContext
 
 @RunWith(RobolectricTestRunner::class)
 // Native graphics: an undecodable image really fails to decode, as on a phone (the default fakes a bitmap).
@@ -315,6 +326,88 @@ class DownloadsTest {
             job.cancel()
             source.delete()
         }
+    }
+
+    @Test fun cancellation_before_the_save_body_starts_releases_the_shared_lock() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = FakeDownloadStore()
+        val attachment = Attachment("att-cancel-before-start", "application/octet-stream", "file.bin", 0)
+        val parent = Job()
+        val queued = mutableListOf<Runnable>()
+        val dispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) {
+                queued.add(block)
+            }
+        }
+        val controller = DownloadController(attachment, context, CoroutineScope(parent + dispatcher), store)
+        val other = DownloadController(attachment, context, CoroutineScope(Dispatchers.Main), store)
+        val idleThreads = mutableListOf<Thread>()
+        controller.onIdle = { idleThreads.add(Thread.currentThread()) }
+
+        controller.start(File(context.cacheDir, "cancelled-before-start.bin"))
+        assertTrue(controller.saving)
+        assertFalse(other.enabled)
+        parent.cancel()
+        queued.single().run()
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
+
+        assertTrue(parent.isCompleted)
+        assertFalse(controller.saving)
+        assertTrue(other.enabled)
+        assertEquals(0, store.beginCalls)
+        assertEquals(listOf(Looper.getMainLooper().thread), idleThreads)
+    }
+
+    @Test fun an_unexpected_save_exception_releases_the_shared_lock_on_main() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = FakeDownloadStore()
+        val attachment = Attachment("att-save-exception", "application/octet-stream", "file.bin", 0)
+        val failure = IllegalStateException("unexpected source failure")
+        val source = object : File(context.cacheDir, "exception.bin") {
+            override fun isFile(): Boolean = throw failure
+        }
+        val reported = AtomicReference<Throwable>()
+        val handler = CoroutineExceptionHandler { _, error -> reported.set(error) }
+        val controller = DownloadController(attachment, context, CoroutineScope(Dispatchers.Default + handler), store)
+        val other = DownloadController(attachment, context, CoroutineScope(Dispatchers.Main), store)
+        val idleThreads = mutableListOf<Thread>()
+        controller.onIdle = { idleThreads.add(Thread.currentThread()) }
+
+        controller.start(source)
+        assertFalse(other.enabled)
+        untilMain { reported.get() != null }
+
+        assertFalse(controller.saving)
+        assertTrue(other.enabled)
+        assertEquals(listOf(Looper.getMainLooper().thread), idleThreads)
+        // Coroutine stack-trace recovery may copy the exception as it leaves IO.
+        assertEquals(failure.javaClass, reported.get().javaClass)
+        assertEquals(failure.message, reported.get().message)
+    }
+
+    @Test fun a_synchronous_launch_failure_releases_the_shared_lock_on_main() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = FakeDownloadStore()
+        val attachment = Attachment("att-launch-failure", "application/octet-stream", "file.bin", 0)
+        val failure = IllegalStateException("scope context unavailable")
+        val scope = object : CoroutineScope {
+            override val coroutineContext: CoroutineContext
+                get() = throw failure
+        }
+        val controller = DownloadController(attachment, context, scope, store)
+        val other = DownloadController(attachment, context, CoroutineScope(Dispatchers.Main), store)
+        val idleThreads = mutableListOf<Thread>()
+        controller.onIdle = { idleThreads.add(Thread.currentThread()) }
+
+        val thrown = assertThrows(IllegalStateException::class.java) {
+            controller.start(File(context.cacheDir, "launch-failure.bin"))
+        }
+
+        assertSame(failure, thrown)
+        assertFalse(controller.saving)
+        assertTrue(other.enabled)
+        assertEquals(0, store.beginCalls)
+        assertEquals(listOf(Looper.getMainLooper().thread), idleThreads)
     }
 
     @Test fun an_undecodable_image_whose_file_was_cleared_is_fetched_again_and_then_saved() {
