@@ -323,6 +323,16 @@ fun AgentScreen(model: AppModel, address: String, back: () -> Unit, openChat: (S
                     }
                 }
             }
+            val agentSandboxPaused = model.pause.isPaused(agent.host, agent.sandbox) ||
+                model.sandboxesOf(agent.host).firstOrNull { it.name == agent.sandbox }?.state == "paused"
+            if (agentSandboxPaused) {
+                Text(
+                    agentPausedNotice(agent.sandbox),
+                    style = Type.small,
+                    color = p.textMuted,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
             AgentNameControls(model, agent)
             AgentPhotoControls(model, agent)
             Section("Conversations") {
@@ -658,6 +668,7 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                 Text(sandbox, style = Type.heading, color = p.text)
                 Text("${runtimeShown ?: "No runtime installed"} · $host", style = Type.code, color = p.textFaint)
             }
+            SandboxPauseSection(model, host, sandbox, listed, agents.size)
             if (runtime == null) {
                 Gap(24.dp)
                 RuntimeInstallation(model, host, sandbox)
@@ -709,7 +720,8 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
                 )
             }
             Info("Host", "$host · ${if (live) "connected" else model.links[host].shown()}")
-            listed?.state?.let { Info("State", it) }
+            val runsOnState = if (model.pause.isPaused(host, sandbox)) "paused" else listed?.state
+            runsOnState?.let { Info("State", it) }
             Text(
                 "Its sessions show on the host: enclos sandbox show $sandbox.",
                 style = Type.small,

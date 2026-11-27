@@ -14,7 +14,7 @@ name = "enclos_core"
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
-enclos-protocol = { git = "https://github.com/victorbonnet/enclos", rev = "24ffd73dc945546a4c6166c2fefa762ec02aaaf6", version = "0.1.0" }
+enclos-protocol = { git = "https://github.com/victorbonnet/enclos", rev = "8bcdd756e40f275bf6c63573379cba9b464cc49a", version = "0.1.0" }
 thiserror = "2.0.21"
 uniffi = "0.32.2"
 

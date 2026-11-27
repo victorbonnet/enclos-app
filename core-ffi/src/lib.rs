@@ -230,6 +230,60 @@ mod tests {
         );
     }
 
+    /// The app reads pause messages in Kotlin against its copies of enclos's
+    /// fixtures: each copy must still decode in the pinned crate so the two
+    /// cannot drift.
+    #[test]
+    fn the_apps_pause_fixtures_read_in_the_pinned_crate() {
+        use enclos_protocol::device::{FromDevice, ToDevice, decode_from_device, decode_to_device};
+        let req =
+            include_str!("../../android/app/src/test/resources/protocol/from_device_pause.json");
+        let FromDevice::Pause {
+            revision,
+            sandboxes,
+        } = decode_from_device(req.trim().as_bytes()).unwrap().body
+        else {
+            panic!("the fixture is a pause request");
+        };
+        assert_eq!(revision, Some(7));
+        assert_eq!(sandboxes, Some(vec!["lab".to_owned(), "home".to_owned()]));
+
+        let res = include_str!(
+            "../../android/app/src/test/resources/protocol/to_device_pause_result.json"
+        );
+        let ToDevice::PauseResult {
+            of,
+            paused,
+            partly,
+            revision,
+            sandboxes,
+        } = decode_to_device(res.trim().as_bytes()).unwrap().body
+        else {
+            panic!("the fixture is a pause.result");
+        };
+        assert_eq!(
+            (of.as_str(), paused, partly, revision),
+            ("p-1", false, true, 8)
+        );
+        assert_eq!(sandboxes.expect("sandboxes").len(), 2);
+
+        let state = include_str!(
+            "../../android/app/src/test/resources/protocol/to_device_pause_state.json"
+        );
+        let ToDevice::PauseState {
+            paused,
+            partly,
+            revision,
+            sandboxes,
+            ..
+        } = decode_to_device(state.trim().as_bytes()).unwrap().body
+        else {
+            panic!("the fixture is a pause.state");
+        };
+        assert_eq!((paused, partly, revision), (false, true, 8));
+        assert_eq!(sandboxes.len(), 2);
+    }
+
     /// Every capability the app names in its `auth` (Kotlin's
     /// `DEVICE_CAPABILITIES`) is one the pinned crate knows: a name it does
     /// not know would be ignored by the bridge, and the feature left off.
@@ -237,13 +291,18 @@ mod tests {
     fn the_capabilities_the_app_announces_are_known_to_the_pinned_crate() {
         use enclos_protocol::device::{FromDevice, decode_from_device};
         use enclos_protocol::plugin::Capability;
-        let auth = br#"{"v":1,"id":"a-1","type":"auth","device":"d-1","sig":"c2ln","capabilities":["runtime_approval_scopes","task_events"]}"#;
+        let auth = br#"{"v":1,"id":"a-1","type":"auth","device":"d-1","sig":"c2ln","capabilities":["runtime_approval_scopes","task_events","pause","pause.subset"]}"#;
         let FromDevice::Auth { capabilities, .. } = decode_from_device(auth).unwrap().body else {
             panic!("an auth");
         };
         assert_eq!(
             capabilities,
-            [Capability::RuntimeApprovalScopes, Capability::TaskEvents]
+            [
+                Capability::RuntimeApprovalScopes,
+                Capability::TaskEvents,
+                Capability::Pause,
+                Capability::PauseSubset,
+            ]
         );
     }
 

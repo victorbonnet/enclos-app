@@ -35,7 +35,7 @@ fun message(type: String, vararg fields: Pair<String, Any?>): JSONObject {
 }
 
 /** What this device declares in each connection's `auth`; the bridge keeps it for that connection only. */
-internal val DEVICE_CAPABILITIES = listOf(NATIVE_APPROVAL_SCOPES, TASK_EVENTS)
+internal val DEVICE_CAPABILITIES = listOf(NATIVE_APPROVAL_SCOPES, TASK_EVENTS, PAUSE_CAPABILITY, PAUSE_SUBSET_CAPABILITY)
 
 /** The fields of the device's `auth`: its id, its signature of the handshake, and [DEVICE_CAPABILITIES]. */
 internal fun authFields(device: String, signature: String): Array<Pair<String, Any?>> =

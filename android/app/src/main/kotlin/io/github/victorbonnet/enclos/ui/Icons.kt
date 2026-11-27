@@ -67,4 +67,6 @@ object Glyphs {
     val chevron = glyph("chevron", strokes = listOf("M9 6l6 6-6 6"))
     /** Clear a field: an addition to the design's set. */
     val clear = glyph("clear", strokes = listOf("M6 6l12 12M18 6L6 18"))
+    /** Pause: two vertical bars, decorative. */
+    val pause = glyph("pause", strokes = listOf("M8 5v14M16 5v14"))
 }

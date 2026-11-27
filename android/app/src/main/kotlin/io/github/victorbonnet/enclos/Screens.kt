@@ -1235,10 +1235,8 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
             group.sandboxes.forEach { (sandbox, agents) ->
                 item(key = "sandbox-${sandbox.address}") {
                     Arriving {
-                        val runtime = runtimeLine(sandbox)
-                            ?.let { if (sandbox.update != null) "$it · update available" else it }
-                            ?: "No runtime installed"
-                        ListHeading(sandbox.name, runtime, open = { openSandbox(sandbox.address) }, top = 12.dp) { SandboxMark(live, side = 16.dp) }
+                        val note = sandboxHeadingNote(sandbox, model.pause.isPaused(host, sandbox.name))
+                        ListHeading(sandbox.name, note, open = { openSandbox(sandbox.address) }, top = 12.dp) { SandboxMark(live, side = 16.dp) }
                     }
                 }
                 items(agents, key = { "agent-${it.address}" }) { agent ->
@@ -1379,6 +1377,19 @@ internal fun RecentUsageRefresh(model: AppModel, hosts: List<String>) {
 /** The Agents list and sandbox pages share current activity, attention and usage. */
 @Composable
 internal fun AgentListRow(model: AppModel, agent: Agent, now: Long, onClick: () -> Unit) {
+    val listedState = model.sandboxesOf(agent.host).firstOrNull { it.name == agent.sandbox }?.state
+    val sandboxOverride = sandboxAgentRowStatus(model.pause.states[agent.host], listedState, agent.sandbox)
+    if (sandboxOverride != null) {
+        AgentListRow(
+            agent = agent,
+            busy = false,
+            status = sandboxOverride,
+            usage = null,
+            needsYou = model.attentionCount(agent.address),
+            onClick = onClick,
+        )
+        return
+    }
     val working = model.workingOn(agent)
     val activity = model.activityOf(agent.address)
     // The same decision as Working only's ([showsWorking]).

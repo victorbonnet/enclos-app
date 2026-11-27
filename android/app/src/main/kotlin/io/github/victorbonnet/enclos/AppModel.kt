@@ -400,6 +400,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         send = { host, command -> connections[host]?.send(command) == true },
         agents = { host -> agents.filter { it.host == host } },
     )
+    internal val pause = PauseClient(
+        connected = ::connected,
+        send = { host, command -> connections[host]?.send(command) == true },
+        refreshSandboxes = { host -> provisioningClient.refreshProvisioning(host) },
+        later = { wait, action -> main.postDelayed({ action() }, wait) },
+    )
     private val sandboxes get() = provisioningClient.sandboxes
     val runtimes get() = provisioningClient.runtimes
     val provisioning get() = provisioningClient.provisioning
@@ -1200,6 +1206,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
      */
     fun connect(host: Host) {
         provisioningEnded(host.name)
+        pause.ended(host.name)
         auditEnded(host.name)
         usageEnded(host.name)
         agentNames.ended(host.name)
@@ -1265,6 +1272,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         usageEnded(host.name)
         connections.remove(host.name)
         provisioningEnded(host.name)
+        pause.ended(host.name)
         deletion.ended(host.name)
         forgetting.ended(host.name)
         clearArchiveRequests(host.name, "The connection ended before the archive state was confirmed. Reconnect to check it.")
@@ -1347,6 +1355,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     private fun received(host: Host, m: JSONObject) {
         if (taskBoard.received(host.name, m)) return
         if (provisioningClient.received(host.name, m)) return
+        if (pause.received(host.name, m)) return
         if (deletion.received(host.name, m)) return
         if (forgetting.received(host.name, m)) return
         val conversationId = m.optString("conversation")
@@ -1420,6 +1429,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 failures.remove(host.name)
                 links[host.name] = HostLink.Connected(m.optString("person"))
                 provisioningClient.authenticated(host.name, hostCapabilitiesIn(m))
+                pause.authenticated(host.name, hostCapabilitiesIn(m))
                 connections[host.name]?.send(message("agents"))
                 // The sync sends every task the bridge keeps for this person: those it does not are dropped at `synced`.
                 tasks.syncing(host.name)
@@ -2562,6 +2572,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Forgets what [host] sent, on screen and on the phone. */
     private fun forget(host: String) {
         provisioningEnded(host)
+        pause.forget(host)
         taskBoard.ended(host)
         taskBoardLinks.forget(host)
         unreadable.remove(host)
