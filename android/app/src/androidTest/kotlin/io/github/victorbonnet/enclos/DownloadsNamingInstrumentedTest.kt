@@ -27,13 +27,19 @@ class DownloadsNamingInstrumentedTest {
 
     @Suppress("DEPRECATION") // Include pending rows on API 29 as well.
     @After fun remove_what_the_test_saved() {
+        val leftovers = mutableListOf<Uri>()
         try {
-            rows.forEach { uri ->
-                context.contentResolver.delete(MediaStore.setIncludePending(uri), null, null)
+            if (rows.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val store = MediaStoreDownloadStore(context.contentResolver)
+                rows.forEach { uri ->
+                    context.contentResolver.delete(MediaStore.setIncludePending(uri), null, null)
+                    if (store.state(uri) != RowState.Gone) leftovers.add(uri)
+                }
             }
         } finally {
             source?.let { file -> assertTrue("Could not delete $file", file.delete()) }
         }
+        assertTrue("Rows not removed: $leftovers", leftovers.isEmpty())
     }
 
     private fun trackedStore(): DownloadStore {

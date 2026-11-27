@@ -5,20 +5,38 @@ import android.net.Uri
 import android.os.Looper
 import android.system.ErrnoException
 import android.system.OsConstants
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import io.github.victorbonnet.enclos.ui.DownloadController
+import io.github.victorbonnet.enclos.ui.DownloadVisit
 import io.github.victorbonnet.enclos.ui.LocalDownloadStore
+import io.github.victorbonnet.enclos.ui.LocalDownloadVisit
 import io.github.victorbonnet.enclos.ui.OtherFile
+import io.github.victorbonnet.enclos.ui.ProvideDownloadVisit
+import io.github.victorbonnet.enclos.ui.Viewer
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +47,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -165,6 +184,9 @@ class DownloadsTest {
             // A plain refusal is a failure even though the row is not visible.
             val refused = FakeDownloadStore(failFinish = true, stateAfterFailure = RowState.Gone)
             assertEquals(DownloadOutcome.Failed, saveToDownloads(refused, "a.pdf", "application/pdf", source))
+            assertEquals(1, refused.discarded.size)
+            assertTrue(refused.pending.isEmpty())
+            assertTrue(refused.completed.isEmpty())
         } finally {
             source.delete()
         }
@@ -265,7 +287,7 @@ class DownloadsTest {
             shown = false
             compose.waitForIdle()
             state = FileState.Ready(source)
-            untilMain { store.completed.isNotEmpty() }
+            untilMain { store.completed.isNotEmpty() && ShadowToast.getTextOfLatestToast() != null }
             compose.waitForIdle()
             assertEquals(1, store.beginCalls)
             assertEquals("Saved to Downloads", ShadowToast.getTextOfLatestToast())
@@ -295,7 +317,7 @@ class DownloadsTest {
             state = FileState.Loading(0, source.length())
             compose.waitForIdle()
             state = FileState.Ready(source)
-            untilMain { store.completed.isNotEmpty() }
+            untilMain { store.completed.isNotEmpty() && ShadowToast.getTextOfLatestToast() != null }
             compose.waitForIdle()
             assertEquals(1, store.beginCalls)
             assertEquals("Saved to Downloads", ShadowToast.getTextOfLatestToast())
@@ -355,10 +377,11 @@ class DownloadsTest {
         assertFalse(controller.saving)
         assertTrue(other.enabled)
         assertEquals(0, store.beginCalls)
+        assertEquals("Cancelled. Nothing was saved.", ShadowToast.getTextOfLatestToast())
         assertEquals(listOf(Looper.getMainLooper().thread), idleThreads)
     }
 
-    @Test fun an_unexpected_save_exception_releases_the_shared_lock_on_main() {
+    @Test fun an_unexpected_save_exception_shows_failure_notice_and_releases_the_shared_lock_on_main() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val store = FakeDownloadStore()
         val attachment = Attachment("att-save-exception", "application/octet-stream", "file.bin", 0)
@@ -375,14 +398,14 @@ class DownloadsTest {
 
         controller.start(source)
         assertFalse(other.enabled)
-        untilMain { reported.get() != null }
+        untilMain { !controller.saving }
 
+        assertNull(reported.get())
         assertFalse(controller.saving)
         assertTrue(other.enabled)
+        assertEquals(0, store.beginCalls)
+        assertEquals("The file could not be saved. Nothing was saved.", ShadowToast.getTextOfLatestToast())
         assertEquals(listOf(Looper.getMainLooper().thread), idleThreads)
-        // Coroutine stack-trace recovery may copy the exception as it leaves IO.
-        assertEquals(failure.javaClass, reported.get().javaClass)
-        assertEquals(failure.message, reported.get().message)
     }
 
     @Test fun a_synchronous_launch_failure_releases_the_shared_lock_on_main() {
@@ -408,6 +431,436 @@ class DownloadsTest {
         assertTrue(other.enabled)
         assertEquals(0, store.beginCalls)
         assertEquals(listOf(Looper.getMainLooper().thread), idleThreads)
+    }
+
+    @Test fun cancellation_during_publish_preserves_handoff_and_discards_pending_row() {
+        val source = File.createTempFile("enclos-publish-cancel", ".bin").apply { writeText("payload") }
+        try {
+            val gone = FakeDownloadStore(stateAfterFailure = RowState.Gone, onFinish = { throw kotlinx.coroutines.CancellationException() })
+            assertEquals(DownloadOutcome.Saved, saveToDownloads(gone, "a.bin", "application/octet-stream", source))
+            assertTrue(gone.discarded.isEmpty())
+            val pending = FakeDownloadStore(stateAfterFailure = RowState.Pending, onFinish = { throw kotlinx.coroutines.CancellationException() })
+            assertEquals(DownloadOutcome.Cancelled, saveToDownloads(pending, "a.bin", "application/octet-stream", source))
+            assertEquals(1, pending.discarded.size)
+            assertTrue(pending.pending.isEmpty())
+            assertTrue(pending.completed.isEmpty())
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test fun saved_label_survives_lazy_list_scroll_off_and_back_within_same_visit() {
+        val source = File.createTempFile("enclos-lazy-visit", ".bin").apply { writeBytes("payload".toByteArray()) }
+        val store = FakeDownloadStore()
+        val listState = LazyListState()
+        try {
+            val attachment = Attachment("att-lazy-visit", "application/octet-stream", "big.bin", source.length())
+            compose.setContent {
+                CompositionLocalProvider(LocalDownloadStore provides store) {
+                    ProvideDownloadVisit("conv-scroll") {
+                        LazyColumn(Modifier.fillMaxSize(), state = listState) {
+                            item(key = "file") {
+                                OtherFile(a = attachment, state = FileState.Ready(source), itself = true, retry = {}, open = {})
+                            }
+                            items(40) { Box(Modifier.height(100.dp)) }
+                        }
+                    }
+                }
+            }
+            compose.onNodeWithContentDescription("Download big.bin").performClick()
+            untilMain { store.completed.isNotEmpty() && ShadowToast.getTextOfLatestToast() != null }
+            compose.waitForIdle()
+            compose.onNodeWithText("Download again").assertIsDisplayed()
+
+            // Scroll completely away so the file card leaves composition.
+            compose.runOnIdle { listState.requestScrollToItem(39) }
+            compose.waitForIdle()
+            assertTrue(compose.onAllNodesWithContentDescription("Download again big.bin").fetchSemanticsNodes().isEmpty())
+            assertTrue(compose.onAllNodesWithContentDescription("Download big.bin").fetchSemanticsNodes().isEmpty())
+
+            // Scroll back within the same conversation visit: "Download again" survives.
+            compose.runOnIdle { listState.requestScrollToItem(0) }
+            compose.waitForIdle()
+            compose.onNodeWithContentDescription("Download again big.bin").assertIsDisplayed()
+            compose.onNodeWithText("Download again").assertIsDisplayed()
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test fun visit_end_releases_idle_controllers_and_new_visit_starts_fresh() {
+        val source = File.createTempFile("enclos-visit-end", ".bin").apply { writeBytes("payload".toByteArray()) }
+        val store = FakeDownloadStore()
+        val firstVisit = DownloadVisit()
+        var activeVisit by mutableStateOf<DownloadVisit?>(firstVisit)
+        try {
+            val attachment = Attachment("att-visit-end", "application/octet-stream", "doc.bin", source.length())
+            compose.setContent {
+                CompositionLocalProvider(LocalDownloadStore provides store) {
+                    activeVisit?.let { visit ->
+                        CompositionLocalProvider(LocalDownloadVisit provides visit) {
+                            OtherFile(a = attachment, state = FileState.Ready(source), itself = true, retry = {}, open = {})
+                        }
+                    }
+                }
+            }
+            compose.onNodeWithContentDescription("Download doc.bin").performClick()
+            untilMain { store.completed.isNotEmpty() && ShadowToast.getTextOfLatestToast() != null }
+            compose.waitForIdle()
+            compose.onNodeWithText("Download again").assertIsDisplayed()
+            assertEquals(1, firstVisit.size)
+
+            // End the visit: idle controller is released immediately.
+            compose.runOnIdle {
+                activeVisit = null
+                firstVisit.end()
+            }
+            compose.waitForIdle()
+            assertEquals(0, firstVisit.size)
+
+            // Re-entering the conversation starts a fresh visit with "Download".
+            val secondVisit = DownloadVisit()
+            activeVisit = secondVisit
+            compose.waitForIdle()
+            compose.onNodeWithContentDescription("Download doc.bin").assertIsDisplayed()
+            compose.onNodeWithText("Download").assertIsDisplayed()
+            compose.runOnIdle { secondVisit.end() }
+            assertEquals(0, secondVisit.size)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test fun visit_end_lets_active_save_finish_safely_then_releases_controller() {
+        val source = File.createTempFile("enclos-visit-active", ".bin").apply { writeBytes("payload".toByteArray()) }
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val store = FakeDownloadStore(gate = gate)
+        val visit = DownloadVisit()
+        var shown by mutableStateOf(true)
+        try {
+            val attachment = Attachment("att-visit-active", "application/octet-stream", "big.bin", source.length())
+            compose.setContent {
+                CompositionLocalProvider(LocalDownloadStore provides store, LocalDownloadVisit provides visit) {
+                    if (shown) OtherFile(a = attachment, state = FileState.Ready(source), itself = true, retry = {}, open = {})
+                }
+            }
+            compose.onNodeWithContentDescription("Download big.bin").performClick()
+            untilMain { store.writing.count == 0L }
+            assertEquals(1, visit.size)
+
+            // Genuine visit end while a save is in flight: save continues safely.
+            compose.runOnIdle {
+                shown = false
+                visit.end()
+            }
+            compose.waitForIdle()
+            assertEquals(1, visit.size)
+            assertTrue(store.completed.isEmpty())
+
+            gate.countDown()
+            untilMain { store.completed.isNotEmpty() && visit.size == 0 }
+            assertEquals("Saved to Downloads", ShadowToast.getTextOfLatestToast())
+            assertTrue(store.discarded.isEmpty())
+            assertEquals(0, visit.size)
+        } finally {
+            gate.countDown()
+            source.delete()
+        }
+    }
+
+    @Test fun concurrent_visits_do_not_conflate_saved_labels_or_cleanup() {
+        val source = File.createTempFile("enclos-concurrent-visits", ".bin").apply { writeBytes("payload".toByteArray()) }
+        val store = FakeDownloadStore()
+        val visitA = DownloadVisit()
+        val visitB = DownloadVisit()
+        var showB by mutableStateOf(true)
+        try {
+            val attachmentA = Attachment("att-visit-a", "application/octet-stream", "alpha.bin", source.length())
+            val attachmentB = Attachment("att-visit-b", "application/octet-stream", "beta.bin", source.length())
+            compose.setContent {
+                CompositionLocalProvider(LocalDownloadStore provides store) {
+                    Column {
+                        CompositionLocalProvider(LocalDownloadVisit provides visitA) {
+                            OtherFile(a = attachmentA, state = FileState.Ready(source), itself = true, retry = {}, open = {})
+                        }
+                        if (showB) {
+                            CompositionLocalProvider(LocalDownloadVisit provides visitB) {
+                                OtherFile(a = attachmentA, state = FileState.Ready(source), itself = true, retry = {}, open = {})
+                                OtherFile(a = attachmentB, state = FileState.Ready(source), itself = true, retry = {}, open = {})
+                            }
+                        }
+                    }
+                }
+            }
+            // Save alpha.bin in visitA only.
+            compose.onAllNodesWithContentDescription("Download alpha.bin")[0].performClick()
+            untilMain { store.completed.isNotEmpty() && ShadowToast.getTextOfLatestToast() != null }
+            compose.waitForIdle()
+
+            // visitA shows "Download again", while visitB still shows "Download" for the same attachment.
+            compose.onNodeWithContentDescription("Download again alpha.bin").assertIsDisplayed()
+            compose.onNodeWithContentDescription("Download alpha.bin").assertIsDisplayed()
+            assertEquals(1, visitA.size)
+            assertEquals(2, visitB.size)
+
+            // Ending visitB releases only visitB and leaves visitA's saved label intact.
+            compose.runOnIdle {
+                showB = false
+                visitB.end()
+            }
+            compose.waitForIdle()
+            assertEquals(0, visitB.size)
+            assertEquals(1, visitA.size)
+            compose.onNodeWithContentDescription("Download again alpha.bin").assertIsDisplayed()
+
+            compose.runOnIdle { visitA.end() }
+            assertEquals(0, visitA.size)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test fun abandoned_fetch_wait_is_cancelled_and_released_when_visit_ends() {
+        val source = File.createTempFile("enclos-abandoned-wait", ".bin").apply { writeBytes("payload".toByteArray()) }
+        val store = FakeDownloadStore()
+        val visit = DownloadVisit()
+        var state by mutableStateOf<FileState?>(null)
+        var shown by mutableStateOf(true)
+        var fetches = 0
+        try {
+            val attachment = Attachment("att-abandoned-wait", "application/octet-stream", "late.bin", source.length())
+            compose.setContent {
+                CompositionLocalProvider(LocalDownloadStore provides store, LocalDownloadVisit provides visit) {
+                    if (shown) {
+                        OtherFile(
+                            a = attachment,
+                            state = state,
+                            itself = false,
+                            retry = { fetches++ },
+                            open = {},
+                            stateOf = { state },
+                        )
+                    }
+                }
+            }
+            compose.onNodeWithContentDescription("Download late.bin").performClick()
+            compose.waitForIdle()
+            assertEquals(1, fetches)
+            assertEquals(1, visit.size)
+
+            // Genuine visit end cancels the abandoned wait and releases the controller without a toast.
+            compose.runOnIdle {
+                shown = false
+                visit.end()
+            }
+            compose.waitForIdle()
+            assertEquals(0, visit.size)
+            assertNull(ShadowToast.getTextOfLatestToast())
+
+            // Even if the fetch settles later, the abandoned wait does not start a save.
+            state = FileState.Ready(source)
+            compose.waitForIdle()
+            org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(0, store.beginCalls)
+            assertEquals(0, visit.size)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test fun start_when_fetched_immediate_completion_clears_wait_and_calls_on_idle_once() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val source = File.createTempFile("enclos-imm-wait", ".bin").apply { writeBytes("payload".toByteArray()) }
+        try {
+            // 1. Immediate failure on Main.immediate: wait clears and onIdle fires once.
+            val failStore = FakeDownloadStore()
+            val failAtt = Attachment("att-imm-fail", "application/octet-stream", "fail.bin", 10)
+            var failState: FileState? = null
+            val failController = DownloadController(failAtt, context, CoroutineScope(Dispatchers.Main.immediate), failStore)
+            var failIdle = 0
+            failController.onIdle = { failIdle++ }
+            failController.startWhenFetched({ failState }) { failState = FileState.Failed("not connected") }
+            assertTrue(failController.idle)
+            assertEquals(1, failIdle)
+            assertEquals("The transfer stopped. Nothing was saved.", ShadowToast.getTextOfLatestToast())
+
+            // 2. Immediate ready on Main.immediate: wait hands off to save, onIdle fires once when save finishes.
+            val readyStore = FakeDownloadStore()
+            val readyAtt = Attachment("att-imm-ready", "application/octet-stream", "ready.bin", source.length())
+            var readyState: FileState? = null
+            val readyController = DownloadController(readyAtt, context, CoroutineScope(Dispatchers.Main.immediate), readyStore)
+            var readyIdle = 0
+            readyController.onIdle = { readyIdle++ }
+            readyController.startWhenFetched({ readyState }) { readyState = FileState.Ready(source) }
+            assertTrue(readyController.saving)
+            assertEquals(0, readyIdle)
+            untilMain { !readyController.saving }
+            assertTrue(readyController.idle)
+            assertTrue(readyController.saved)
+            assertEquals(1, readyIdle)
+            assertEquals(1, readyStore.completed.size)
+
+            // 3. Immediate ready when busy elsewhere: tryStart returns false, wait clears and onIdle fires once.
+            val gate = java.util.concurrent.CountDownLatch(1)
+            val busyStore = FakeDownloadStore(gate = gate)
+            val busyAtt = Attachment("att-imm-busy", "application/octet-stream", "busy.bin", source.length())
+            val holder = DownloadController(busyAtt, context, CoroutineScope(Dispatchers.Main.immediate), busyStore)
+            val waiter = DownloadController(busyAtt, context, CoroutineScope(Dispatchers.Main.immediate), busyStore)
+            var busyState: FileState? = null
+            var waiterIdle = 0
+            waiter.onIdle = { waiterIdle++ }
+            // Start wait first, then acquire lock synchronously inside fetch() before delivering Ready.
+            waiter.startWhenFetched({ busyState }) {
+                holder.start(source)
+                busyState = FileState.Ready(source)
+            }
+            assertTrue(waiter.idle)
+            assertEquals(1, waiterIdle)
+            assertEquals(1, busyStore.beginCalls)
+            gate.countDown()
+            untilMain { !holder.saving }
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test fun start_when_fetched_cancellation_and_replacement_call_on_idle_once() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = FakeDownloadStore()
+        val attachment = Attachment("att-wait-cancel", "application/octet-stream", "wait.bin", 10)
+
+        // 1. Replacement does not fire onIdle for the replaced wait; cancelWait fires onIdle once.
+        var state: FileState? = null
+        val controller = DownloadController(attachment, context, CoroutineScope(Dispatchers.Main.immediate), store)
+        var idleCount = 0
+        controller.onIdle = { idleCount++ }
+        controller.startWhenFetched({ state }) {}
+        assertFalse(controller.idle)
+        controller.startWhenFetched({ state }) {}
+        assertFalse(controller.idle)
+        assertEquals(0, idleCount)
+        controller.cancelWait()
+        assertTrue(controller.idle)
+        assertEquals(1, idleCount)
+        // Repeating cancelWait is a no-op.
+        controller.cancelWait()
+        assertEquals(1, idleCount)
+
+        // 2. Pre-start scope cancellation of startWhenFetched clears waiting and calls onIdle once on Main.
+        val parent = Job()
+        val queued = mutableListOf<Runnable>()
+        val dispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) {
+                queued.add(block)
+            }
+        }
+        val queuedController = DownloadController(attachment, context, CoroutineScope(parent + dispatcher), store)
+        val idleThreads = mutableListOf<Thread>()
+        queuedController.onIdle = { idleThreads.add(Thread.currentThread()) }
+        queuedController.startWhenFetched({ state }) {}
+        assertFalse(queuedController.idle)
+        parent.cancel()
+        queued.single().run()
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(queuedController.idle)
+        assertEquals(listOf(Looper.getMainLooper().thread), idleThreads)
+    }
+
+    @Test fun shared_lock_serializes_card_and_viewer_in_both_directions_and_releases_on_cancel() {
+        val source = File.createTempFile("enclos-shared-lock", ".png").apply { writeBytes(ByteArray(128 * 1024) { 1 }) }
+        val gate1 = java.util.concurrent.CountDownLatch(1)
+        val store1 = FakeDownloadStore(gate = gate1)
+        val gate2 = java.util.concurrent.CountDownLatch(1)
+        val store2 = FakeDownloadStore(gate = gate2)
+        var store by mutableStateOf(store1)
+        var showViewer by mutableStateOf(true)
+        try {
+            val attachment = Attachment("att-shared-lock", "image/png", "photo.png", source.length())
+            compose.setContent {
+                CompositionLocalProvider(LocalDownloadStore provides store) {
+                    ProvideDownloadVisit("conv-shared") {
+                        OtherFile(a = attachment, state = FileState.Ready(source), itself = true, retry = {}, open = {})
+                        if (showViewer) Viewer(a = attachment, file = source) { showViewer = false }
+                    }
+                }
+            }
+            // Direction 1: Card save disables Viewer Download until card save finishes.
+            compose.onAllNodesWithContentDescription("Download photo.png")[0].performClick()
+            untilMain { store1.writing.count == 0L }
+            compose.waitForIdle()
+            compose.onAllNodesWithContentDescription("Download photo.png")[0].assertIsNotEnabled()
+            compose.onAllNodesWithContentDescription("Download photo.png")[1].assertIsNotEnabled()
+            gate1.countDown()
+            untilMain {
+                store1.completed.isNotEmpty() &&
+                    ShadowToast.getTextOfLatestToast() == "Saved to Downloads" &&
+                    compose.onAllNodesWithContentDescription("Download again photo.png").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.waitForIdle()
+            compose.onNodeWithContentDescription("Download again photo.png").assertIsEnabled()
+            compose.onNodeWithContentDescription("Download photo.png").assertIsEnabled()
+
+            // Direction 2: Viewer save disables Card Download; closing Viewer cancels save and re-enables Card.
+            store = store2
+            compose.waitForIdle()
+            compose.onAllNodesWithContentDescription("Download photo.png")[1].performClick()
+            untilMain { store2.writing.count == 0L }
+            compose.waitForIdle()
+            compose.onAllNodesWithContentDescription("Download photo.png")[0].assertIsNotEnabled()
+            compose.onAllNodesWithContentDescription("Download photo.png")[1].assertIsNotEnabled()
+
+            // Close the viewer to cancel its coroutine scope while the save is in flight.
+            showViewer = false
+            compose.waitForIdle()
+            gate2.countDown()
+            untilMain {
+                store2.discarded.size == 1 &&
+                    ShadowToast.getTextOfLatestToast() == "Cancelled. Nothing was saved." &&
+                    compose.onAllNodesWithContentDescription("Download photo.png")
+                        .fetchSemanticsNodes()
+                        .singleOrNull()
+                        ?.config
+                        ?.getOrNull(SemanticsProperties.Disabled) == null
+            }
+            compose.waitForIdle()
+            assertEquals("Cancelled. Nothing was saved.", ShadowToast.getTextOfLatestToast())
+            assertEquals(1, store2.discarded.size)
+            assertTrue(store2.pending.isEmpty())
+            assertTrue(store2.completed.isEmpty())
+            compose.onNodeWithContentDescription("Download photo.png").assertIsEnabled()
+        } finally {
+            gate1.countDown()
+            gate2.countDown()
+            source.delete()
+        }
+    }
+
+    @Test fun other_file_and_viewer_download_semantics_have_no_duplicate_click_label() {
+        val source = File.createTempFile("enclos-a11y", ".apk").apply { writeBytes("payload".toByteArray()) }
+        val store = FakeDownloadStore()
+        try {
+            val doc = Attachment("att-a11y-doc", "application/vnd.android.package-archive", "build.apk", source.length())
+            val img = Attachment("att-a11y-img", "image/png", "photo.png", source.length())
+            compose.setContent {
+                CompositionLocalProvider(LocalDownloadStore provides store) {
+                    ProvideDownloadVisit("conv-a11y") {
+                        OtherFile(a = doc, state = FileState.Ready(source), itself = true, retry = {}, open = {})
+                        Viewer(a = img, file = source) {}
+                    }
+                }
+            }
+            val cardNode = compose.onNodeWithContentDescription("Download build.apk").fetchSemanticsNode()
+            assertEquals(listOf("Download build.apk"), cardNode.config.getOrNull(SemanticsProperties.ContentDescription))
+            assertEquals(Role.Button, cardNode.config.getOrNull(SemanticsProperties.Role))
+            assertNull(cardNode.config.getOrNull(SemanticsActions.OnClick)?.label)
+
+            val viewerNode = compose.onNodeWithContentDescription("Download photo.png").fetchSemanticsNode()
+            assertEquals(listOf("Download photo.png"), viewerNode.config.getOrNull(SemanticsProperties.ContentDescription))
+            assertEquals(Role.Button, viewerNode.config.getOrNull(SemanticsProperties.Role))
+            assertNull(viewerNode.config.getOrNull(SemanticsActions.OnClick)?.label)
+        } finally {
+            source.delete()
+        }
     }
 
     @Test fun an_undecodable_image_whose_file_was_cleared_is_fetched_again_and_then_saved() {
@@ -437,7 +890,7 @@ class DownloadsTest {
             states[attachment.id] = FileState.Loading(0, fresh.length())
             compose.waitForIdle()
             states[attachment.id] = FileState.Ready(fresh)
-            untilMain { store.completed.isNotEmpty() }
+            untilMain { store.completed.isNotEmpty() && ShadowToast.getTextOfLatestToast() != null }
             compose.waitForIdle()
             assertEquals(1, store.beginCalls)
             assertEquals("Saved to Downloads", ShadowToast.getTextOfLatestToast())
@@ -501,7 +954,7 @@ class DownloadsTest {
                 }
             }
             compose.onNodeWithContentDescription("Download build.apk").assertIsDisplayed().performClick()
-            compose.waitUntil(timeoutMillis = 5_000) { store.completed.isNotEmpty() }
+            untilMain { store.completed.isNotEmpty() && ShadowToast.getTextOfLatestToast() != null }
             compose.waitForIdle()
             assertEquals(0, opened)
             assertEquals("Saved to Downloads", ShadowToast.getTextOfLatestToast())
@@ -529,7 +982,7 @@ class DownloadsTest {
             assertEquals(0, store.beginCalls)
             state = FileState.Ready(source)
             compose.waitForIdle()
-            compose.waitUntil(timeoutMillis = 5_000) { store.completed.isNotEmpty() }
+            untilMain { store.completed.isNotEmpty() && ShadowToast.getTextOfLatestToast() != null }
             compose.waitForIdle()
             assertEquals(1, store.beginCalls)
             assertEquals("Saved to Downloads", ShadowToast.getTextOfLatestToast())

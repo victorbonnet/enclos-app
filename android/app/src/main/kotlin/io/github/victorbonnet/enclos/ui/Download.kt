@@ -4,9 +4,10 @@ import android.content.Context
 import androidx.annotation.MainThread
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,7 +74,7 @@ class DownloadController(
     var saved by mutableStateOf(false)
         private set
 
-    private var waiting: Job? = null
+    private var waiting: Wait? = null
 
     // The saves in flight, per file, across every controller of it: a card's save in flight
     // keeps the viewer's Download disabled, and the other way round.
@@ -96,13 +97,13 @@ class DownloadController(
     val actionLabel: String
         get() = "$label ${attachment.shownName}"
 
-    // A notice is always shown from the main thread, whichever thread the copy ended on.
-    private suspend fun notify(text: String) =
-        withContext(Dispatchers.Main.immediate) { showDownloadNotice(context, text) }
-
     @MainThread
     fun start(file: File) {
-        tryStart(file)
+        if (!enabled) return
+        val previous = waiting
+        waiting = null
+        previous?.job?.cancel()
+        if (!tryStart(file) && previous != null && idle) onIdle?.invoke()
     }
 
     @MainThread
@@ -125,12 +126,14 @@ class DownloadController(
             // Enter the finally block even if the scope is cancelled before dispatch.
             scope.launch(start = CoroutineStart.ATOMIC) {
                 try {
-                    ensureActive()
                     // A cancel that lands once the file is published still comes back as Saved.
                     val outcome = try {
+                        ensureActive()
                         saveToDownloads(context, attachment, file, store)
                     } catch (_: CancellationException) {
                         DownloadOutcome.Cancelled
+                    } catch (_: Exception) {
+                        DownloadOutcome.Failed
                     }
                     withContext(NonCancellable + Dispatchers.Main.immediate) {
                         if (outcome == DownloadOutcome.Saved) saved = true
@@ -156,25 +159,72 @@ class DownloadController(
      * a state that is already there when the tap lands (the stale one the fetch
      * replaces) is never taken for the answer.
      */
+    @MainThread
+    @OptIn(DelicateCoroutinesApi::class)
     fun startWhenFetched(stateOf: () -> FileState?, fetch: () -> Unit) {
         if (!Downloads.offered() || saving || busyElsewhere()) return
-        waiting?.cancel()
+        val previous = waiting
+        waiting = null
+        previous?.job?.cancel()
         val before = stateOf()
-        fetch()
-        waiting = scope.launch {
-            // Each write to the state is its own answer, even an equal one: compared by identity.
-            val answer = snapshotFlow { Seen(stateOf()) }
-                .map { it.state }
-                .first { now -> now !== before && (now is FileState.Ready || now is FileState.Failed) }
-            waiting = null
-            when (answer) {
-                is FileState.Ready -> if (tryStart(answer.file)) return@launch
-                is FileState.Failed -> notify(downloadFetchFailureNotice(answer.why))
-                else -> {}
+        try {
+            fetch()
+        } catch (failure: Throwable) {
+            if (previous != null && idle) onIdle?.invoke()
+            throw failure
+        }
+        val token = Wait()
+        waiting = token
+        try {
+            val job = scope.launch(start = CoroutineStart.ATOMIC) {
+                try {
+                    ensureActive()
+                    // Each write to the state is its own answer, even an equal one: compared by identity.
+                    val answer = snapshotFlow { Seen(stateOf()) }
+                        .map { it.state }
+                        .first { now -> now !== before && (now is FileState.Ready || now is FileState.Failed) }
+                    withContext(Dispatchers.Main.immediate) {
+                        if (waiting !== token) return@withContext
+                        waiting = null
+                        when (answer) {
+                            is FileState.Ready -> if (!tryStart(answer.file) && idle) onIdle?.invoke()
+                            is FileState.Failed -> try {
+                                showDownloadNotice(context, downloadFetchFailureNotice(answer.why))
+                            } finally {
+                                if (idle) onIdle?.invoke()
+                            }
+                            else -> if (idle) onIdle?.invoke()
+                        }
+                    }
+                } finally {
+                    withContext(NonCancellable + Dispatchers.Main.immediate) {
+                        if (waiting === token) {
+                            waiting = null
+                            if (idle) onIdle?.invoke()
+                        }
+                    }
+                }
             }
-            if (idle) onIdle?.invoke()
+            if (waiting === token) token.job = job else job.cancel()
+        } catch (failure: Throwable) {
+            if (waiting === token) {
+                waiting = null
+                if (idle) onIdle?.invoke()
+            }
+            throw failure
         }
     }
+
+    /** Cancels an in-flight fetch wait without showing a toast, releasing idle state once. */
+    @MainThread
+    internal fun cancelWait() {
+        val current = waiting ?: return
+        waiting = null
+        current.job?.cancel()
+        if (idle) onIdle?.invoke()
+    }
+
+    private class Wait(var job: Job? = null)
 
     private class Seen(val state: FileState?)
 
@@ -186,40 +236,79 @@ class DownloadController(
 }
 
 /**
- * The saves and the waits for a fetch that outlive the card they started from, one
- * [DownloadController] per attachment, run in the app's own scope. Without it a
- * download stops when its card scrolls out of the chat. Used from the main thread.
+ * One conversation visit's card download controllers, keyed per attachment.
  *
- * A visit lasts while any file card is composed: when the last one leaves, idle
- * controllers are dropped (so "Download again" does not outlive the visit); one still
- * saving or waiting for a fetch goes on, and is dropped once it ends.
+ * A visit lives for the duration of a conversation screen, not for individual
+ * lazy-list cards: scrolling a card off and back on keeps its "Download again"
+ * label, and scrolling away never cancels an active save or fetch wait.
+ *
+ * When the visit ends:
+ * - idle controllers are released immediately;
+ * - abandoned fetch waits are cancelled and released;
+ * - active saves keep running safely in [scope] and release once idle.
+ *
+ * Concurrent visits each have their own [DownloadVisit] so they never conflate
+ * per-visit state or cleanup, while still sharing [DownloadController]'s
+ * process-wide active-save lock.
  */
-internal object DownloadHub {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+internal class DownloadVisit(
+    private val scope: CoroutineScope = DownloadHub.scope,
+) {
     private data class Key(val id: String, val context: Context, val store: DownloadStore?)
-    private val controllers = HashMap<Key, DownloadController>()
-    private var cards = 0
 
+    private val controllers = HashMap<Key, DownloadController>()
+    private var ended = false
+
+    internal val size: Int
+        get() = controllers.size
+
+    @MainThread
     fun controller(attachment: Attachment, context: Context, store: DownloadStore?): DownloadController {
         val app = context.applicationContext
+        if (ended) return DownloadController(attachment, app, scope, store)
         val key = Key(attachment.id, app, store)
         return controllers.getOrPut(key) {
-            DownloadController(attachment, app, scope, store).also { c -> c.onIdle = { dropIfOver(key, c) } }
+            DownloadController(attachment, app, scope, store).also { c ->
+                c.onIdle = { dropIfEnded(key, c) }
+            }
         }
     }
 
-    fun cardEntered() { cards++ }
-
-    fun cardLeft() {
-        cards = (cards - 1).coerceAtLeast(0)
-        if (cards == 0) {
-            controllers.values.removeAll { it.idle }
+    @MainThread
+    fun end() {
+        if (ended) return
+        ended = true
+        for (c in controllers.values.toList()) {
+            c.cancelWait()
         }
+        controllers.values.removeAll { it.idle }
     }
 
-    private fun dropIfOver(key: Key, c: DownloadController) {
-        if (cards == 0 && controllers[key] === c) controllers.remove(key)
+    private fun dropIfEnded(key: Key, c: DownloadController) {
+        if (ended && controllers[key] === c) controllers.remove(key)
     }
+}
+
+/**
+ * App-wide scope for card saves and fetch waits that outlive individual lazy-list cards.
+ */
+internal object DownloadHub {
+    internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** Fallback visit for standalone file cards composed outside a conversation screen. */
+    internal val fallback = DownloadVisit(scope)
+}
+
+internal val LocalDownloadVisit = staticCompositionLocalOf<DownloadVisit?> { null }
+
+/** Scopes card download state ("Download again" and fetch waits) to one conversation visit. */
+@Composable
+internal fun ProvideDownloadVisit(key: Any = Unit, content: @Composable () -> Unit) {
+    val visit = remember(key) { DownloadVisit() }
+    DisposableEffect(visit) {
+        onDispose { visit.end() }
+    }
+    CompositionLocalProvider(LocalDownloadVisit provides visit, content = content)
 }
 
 /** For a viewer: a copy that ends with the viewer. */
@@ -238,11 +327,10 @@ fun rememberDownload(attachment: Attachment): DownloadController {
 internal fun rememberCardDownload(attachment: Attachment): DownloadController {
     val context = LocalContext.current
     val store = LocalDownloadStore.current
-    DisposableEffect(Unit) {
-        DownloadHub.cardEntered()
-        onDispose { DownloadHub.cardLeft() }
+    val visit = LocalDownloadVisit.current ?: DownloadHub.fallback
+    return remember(visit, attachment.id, context, store) {
+        visit.controller(attachment, context, store)
     }
-    return remember(attachment.id, context, store) { DownloadHub.controller(attachment, context, store) }
 }
 
 /** Shared bottom-row Download button for document and HTML viewers. */

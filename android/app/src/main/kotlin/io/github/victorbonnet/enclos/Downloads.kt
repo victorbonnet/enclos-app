@@ -184,7 +184,9 @@ class MediaStoreDownloadStore(private val resolver: ContentResolver) : DownloadS
         }
         cursor?.use { if (!it.moveToFirst()) RowState.Gone else if (it.getInt(0) == 1) RowState.Pending else RowState.Done }
             ?: RowState.Gone
-    } catch (_: Throwable) {
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
         // Unknown is not "published": the caller removes the row and says nothing was saved.
         RowState.Pending
     }
@@ -220,16 +222,25 @@ fun saveToDownloads(
     file: File,
     isActive: () -> Boolean = { true },
 ): DownloadOutcome {
-    if (!file.isFile) return DownloadOutcome.Missing
+    val exists = try {
+        file.isFile
+    } catch (_: CancellationException) {
+        return DownloadOutcome.Cancelled
+    } catch (e: Exception) {
+        return failureOf(e)
+    }
+    if (!exists) return DownloadOutcome.Missing
     if (!isActive()) return DownloadOutcome.Cancelled
 
     // The source is opened before the store is touched: a file that cannot be read
     // leaves no pending row, and no output stream is open to leak.
     val input = try {
         file.inputStream()
+    } catch (_: CancellationException) {
+        return DownloadOutcome.Cancelled
     } catch (e: FileNotFoundException) {
         return if (!file.isFile) DownloadOutcome.Missing else failureOf(e)
-    } catch (e: Throwable) {
+    } catch (e: Exception) {
         return failureOf(e)
     }
     return input.use { writeThrough(store, Downloads.savedName(name), input, file, isActive) }
@@ -249,14 +260,18 @@ private fun writeThrough(
         // Names this app lists, and names another app owns that only the folder answers for.
         val taken = store.taken()
         Downloads.freeName(cleanName) { it in taken || store.exists(it) }
-    } catch (e: Throwable) {
+    } catch (_: CancellationException) {
+        return DownloadOutcome.Cancelled
+    } catch (e: Exception) {
         return failureOf(e)
     }
     if (!isActive()) return DownloadOutcome.Cancelled
 
     val uri = try {
         store.begin(targetName, cleanType)
-    } catch (e: Throwable) {
+    } catch (_: CancellationException) {
+        return DownloadOutcome.Cancelled
+    } catch (e: Exception) {
         return failureOf(e)
     } ?: return DownloadOutcome.Failed
 
@@ -282,7 +297,7 @@ private fun writeThrough(
         return DownloadOutcome.Cancelled
     } catch (e: FileNotFoundException) {
         return if (!file.isFile) DownloadOutcome.Missing else failureOf(e)
-    } catch (e: Throwable) {
+    } catch (e: Exception) {
         return failureOf(e)
     } finally {
         if (!finished) {
@@ -303,6 +318,11 @@ private fun writeThrough(
 private fun publish(store: DownloadStore, uri: Uri): Boolean {
     try {
         return store.finish(uri)
+    } catch (e: CancellationException) {
+        // The provider may have published the row before throwing. Preserve the
+        // existing hand-off rule before reporting cancellation and discarding it.
+        if (store.state(uri) == RowState.Gone) return true
+        throw e
     } catch (_: Exception) {
         return store.state(uri) == RowState.Gone
     }
