@@ -1,6 +1,7 @@
 package io.github.victorbonnet.enclos
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -33,6 +34,8 @@ fun ModelScreen(client: ModelClient, address: String, hostConnected: Boolean, ba
     var provider by rememberSaveable(address) { mutableStateOf<String?>(null) }
     var chosen by rememberSaveable(address) { mutableStateOf<String?>(null) }
     var typed by rememberSaveable(address) { mutableStateOf("") }
+    var query by rememberSaveable(address) { mutableStateOf("") }
+    var filter by rememberSaveable(address) { mutableStateOf<ModelProviderFilter?>(null) }
     var confirming by rememberSaveable(address) { mutableStateOf(false) }
     // The saves this page has seen confirmed: kept across rotation and the
     // app lock, so that only a new one clears what was picked.
@@ -70,12 +73,47 @@ fun ModelScreen(client: ModelClient, address: String, hostConnected: Boolean, ba
             client.errors[address] = "Not sent: the page changed meanwhile. Check it and save again."
         }
     }
+    val providers = options?.providers.orEmpty()
+    val providersView = providersView(providers, provider, query, filter)
+    val readyCount = providersView.ready
+    val needsSetupCount = providersView.total - providersView.ready
+    val trimmedQuery = query.trim()
+    val hasQuery = trimmedQuery.isNotEmpty()
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("Model", style = Type.name, color = p.text, modifier = Modifier.weight(1f))
             ActionButton("Refresh", enabled = live && !busy, onClick = { client.refresh(address) })
             ActionButton("Save", enabled = canSave, onClick = { if (options?.restarts == true) confirming = true else save() })
+        }
+        Hairline()
+        // Pinned search-and-filter band: 104dp as approved (4 + 44 + 4 + 1 + 3 + 44 + 3 + 1).
+        SearchField(
+            query = query,
+            onQuery = { query = it },
+            label = "Search model providers and models",
+            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+        )
+        Hairline()
+        Row(
+            Modifier.fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 3.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Choice(
+                label = if (options == null) "Ready here" else "Ready here · $readyCount",
+                on = filter == ModelProviderFilter.ReadyHere,
+                multiple = true,
+                onClick = { filter = if (filter == ModelProviderFilter.ReadyHere) null else ModelProviderFilter.ReadyHere },
+            )
+            Choice(
+                label = if (options == null) "Needs host setup" else "Needs host setup · $needsSetupCount",
+                on = filter == ModelProviderFilter.NeedsHostSetup,
+                multiple = true,
+                onClick = { filter = if (filter == ModelProviderFilter.NeedsHostSetup) null else ModelProviderFilter.NeedsHostSetup },
+            )
         }
         Hairline()
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
@@ -100,42 +138,132 @@ fun ModelScreen(client: ModelClient, address: String, hostConnected: Boolean, ba
                 Text(why, style = Type.small, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
             if (options != null) {
-                Section("Model provider") {
-                    options.providers.forEach { row ->
+                val providerTitle = when (filter) {
+                    null -> "Model provider"
+                    ModelProviderFilter.ReadyHere -> "Model provider · Ready here"
+                    ModelProviderFilter.NeedsHostSetup -> "Model provider · Needs host setup"
+                }
+                Section(providerTitle, count = providersView.count) {
+                    providersView.rows.forEach { (row, kept) ->
                         val selected = row.id == provider
                         SettingRow(Modifier.selectable(selected = selected, enabled = row.usable, role = Role.RadioButton) { if (!selected) { provider = row.id; chosen = null; typed = "" } }) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Column(Modifier.weight(1f)) {
-                                    Text(row.label, style = Type.name, color = if (row.usable) p.text else p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(highlighted(row.label, query, p.accent), style = Type.name, color = if (row.usable) p.text else p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    if (kept) Text("Kept: your pick.", style = Type.small, color = p.textMuted)
                                     if (!row.usable) Text(row.setup ?: "Not set up for this agent on the host.", style = Type.small, color = p.textMuted)
                                 }
                                 if (selected) Glyph(Glyphs.check, p.accent, size = 18.dp)
                             }
                         }
                     }
-                    if (options.providers.isEmpty()) SettingRow { Text("The runtime lists no model provider.", style = Type.small, color = p.textMuted) }
+                    if (options.providers.isEmpty()) {
+                        SettingRow { Text("The runtime lists no model provider.", style = Type.small, color = p.textMuted) }
+                    } else if (providersView.matches.isEmpty() && providersView.narrowed) {
+                        when {
+                            hasQuery && filter == null -> SettingRow {
+                                Text("No model provider matches \u201C$trimmedQuery\u201D.", style = Type.small, color = p.textMuted)
+                            }
+                            hasQuery && filter == ModelProviderFilter.ReadyHere -> SettingRow {
+                                Text("No model provider matches \u201C$trimmedQuery\u201D with Ready here on.", style = Type.small, color = p.textMuted)
+                                Text(
+                                    if (readyCount == 1) "1 of the ${providersView.total} is ready to use here."
+                                    else "$readyCount of the ${providersView.total} are ready to use here.",
+                                    style = Type.small,
+                                    color = p.textMuted,
+                                )
+                            }
+                            hasQuery && filter == ModelProviderFilter.NeedsHostSetup -> SettingRow {
+                                Text("No model provider matches \u201C$trimmedQuery\u201D with Needs host setup on.", style = Type.small, color = p.textMuted)
+                                Text(
+                                    if (needsSetupCount == 1) "1 of the ${providersView.total} needs setup on the host."
+                                    else "$needsSetupCount of the ${providersView.total} need setup on the host.",
+                                    style = Type.small,
+                                    color = p.textMuted,
+                                )
+                            }
+                            filter == ModelProviderFilter.ReadyHere -> SettingRow {
+                                Text("No model provider is ready to use here.", style = Type.small, color = p.textMuted)
+                                Text(
+                                    if (needsSetupCount == 1) "Turn the filter off to see the one that needs setup on the host."
+                                    else "Turn the filter off to see the $needsSetupCount that need setup on the host.",
+                                    style = Type.small,
+                                    color = p.textMuted,
+                                )
+                            }
+                            filter == ModelProviderFilter.NeedsHostSetup -> SettingRow {
+                                Text("No model provider needs host setup.", style = Type.small, color = p.textMuted)
+                                Text(
+                                    if (readyCount == 1) "Turn the filter off to see the one that is ready to use here."
+                                    else "Turn the filter off to see the $readyCount that are ready to use here.",
+                                    style = Type.small,
+                                    color = p.textMuted,
+                                )
+                            }
+                        }
+                        if (hasQuery) {
+                            val clearLabel = if (providersView.total == 1) "Show all 1 model provider" else "Show all ${providersView.total} model providers"
+                            SettingRow(Modifier.clickable(role = Role.Button, onClickLabel = clearLabel) { query = "" }) {
+                                Text(clearLabel, style = Type.label, color = p.accent)
+                            }
+                        }
+                    }
                 }
                 provider?.let { picked ->
+                    val pickedProvider = options.providers.firstOrNull { it.id == picked }
                     val listed = client.models[client.modelsKey(address, picked)]
-                    Section("Model") {
-                        listed?.models?.forEach { choice ->
-                            val selected = typed.isBlank() && (choice.id == chosen || (chosen == null && options.current == ModelSelection(picked, choice.id)))
+                    val loadingModels = client.pending[address]?.let { it.action == "models" && it.provider == picked } == true
+                    val isChecked: (ModelChoice) -> Boolean = { choice ->
+                        typed.isBlank() && (choice.id == chosen || (chosen == null && options.current == ModelSelection(picked, choice.id)))
+                    }
+                    val modelsView = listed?.let { modelsView(it.models, isChecked, query) }
+                    val modelCount = when {
+                        loadingModels -> "loading…"
+                        listError != null || listed == null -> "not loaded"
+                        else -> modelsView!!.count
+                    }
+                    Section("Model · ${pickedProvider?.label ?: picked}", count = modelCount) {
+                        modelsView?.rows?.forEach { (choice, kept) ->
+                            val selected = isChecked(choice)
                             SettingRow(Modifier.selectable(selected = selected, role = Role.RadioButton) { chosen = choice.id; typed = "" }) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Column(Modifier.weight(1f)) {
-                                        Text(choice.label, style = Type.label, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                        if (choice.label != choice.id) Text(choice.id, style = Type.code, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(highlighted(choice.label, query, p.accent), style = Type.label, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        if (choice.label != choice.id) Text(highlighted(choice.id, query, p.accent), style = Type.code, color = p.textFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        if (kept) Text("Kept: your pick.", style = Type.small, color = p.textMuted)
                                     }
                                     if (selected) Glyph(Glyphs.check, p.accent, size = 18.dp)
                                 }
                             }
                         }
+                        if (listed != null && listed.models.isNotEmpty() && modelsView != null && modelsView.matches.isEmpty() && hasQuery) {
+                            SettingRow { Text("No model matches \u201C$trimmedQuery\u201D.", style = Type.small, color = p.textMuted) }
+                            if (pickedProvider?.usable == true && options.customModels) {
+                                val useLabel = "Use \u201C$trimmedQuery\u201D as a model ID"
+                                SettingRow(Modifier.clickable(role = Role.Button, onClickLabel = useLabel) { typed = trimmedQuery }) {
+                                    Text(useLabel, style = Type.label, color = p.accent)
+                                }
+                            }
+                        }
                         if (listed == null && !busy) {
                             when {
+                                listError != null && listError.tooLarge -> SettingRow {
+                                    Text(listError.text, style = Type.small, color = p.textMuted)
+                                    Text(
+                                        if (options.customModels) "Search can only match models that load on the phone. Type the model's id below."
+                                        else "Search can only match models that load on the phone. Choose another model provider, or set the model on the host.",
+                                        style = Type.small,
+                                        color = p.textMuted,
+                                    )
+                                }
                                 listError != null && listError.retry -> SettingRow(Modifier.clickable(enabled = live, onClickLabel = "Load its models again") { client.load(address, picked) }) {
                                     Text("${listError.text} Tap to try again.", style = Type.small, color = p.textMuted)
+                                    if (hasQuery) Text("Search matches its models once they load.", style = Type.small, color = p.textMuted)
                                 }
-                                listError != null -> SettingRow { Text(listError.text, style = Type.small, color = p.textMuted) }
+                                listError != null -> SettingRow {
+                                    Text(listError.text, style = Type.small, color = p.textMuted)
+                                    if (hasQuery) Text("Search matches its models once they load.", style = Type.small, color = p.textMuted)
+                                }
                                 !live -> SettingRow { Text("Its models load once the host is connected.", style = Type.small, color = p.textMuted) }
                                 else -> SettingRow(Modifier.clickable(onClickLabel = "Load its models") { client.load(address, picked) }) {
                                     Text("Load its models", style = Type.small, color = p.accent)
@@ -143,7 +271,10 @@ fun ModelScreen(client: ModelClient, address: String, hostConnected: Boolean, ba
                             }
                         }
                         if (listed != null && listed.models.isEmpty()) SettingRow { Text("The runtime lists no model for this model provider.", style = Type.small, color = p.textMuted) }
-                        if (listed?.limited == true) SettingRow { Text("This model provider offers more models than are listed.", style = Type.small, color = p.textMuted) }
+                        if (listed?.limited == true) SettingRow {
+                            Text("This model provider offers more models than are listed.", style = Type.small, color = p.textMuted)
+                            if (hasQuery) Text("Search matches the listed ones.", style = Type.small, color = p.textMuted)
+                        }
                         if (options.customModels) {
                             FormField(typed, { typed = it }, enabled = live, label = "Another model ID", singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
                         }
