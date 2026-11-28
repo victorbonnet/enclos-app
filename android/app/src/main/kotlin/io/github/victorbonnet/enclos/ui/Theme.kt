@@ -50,6 +50,10 @@ data class Palette(
     /** The one primary action, outgoing bubbles. */
     val buttonBg: Color,
     val buttonText: Color,
+    /** The bars' frosted tint: `bg` at 0.76, drawn over the blurred content behind a bar (Android 12 and later). */
+    val glass: Color,
+    /** The bars' opaque fill where a phone cannot blur (before Android 12): `bg`, named for its role. */
+    val veil: Color,
 )
 
 val LightPalette = Palette(
@@ -67,6 +71,8 @@ val LightPalette = Palette(
     lime = Color(0xFFD5E6AF),
     buttonBg = Color(0xFF173C31),
     buttonText = Color(0xFFFAFAF8),
+    glass = Color(0xC2FAFAF8),
+    veil = Color(0xFFFAFAF8),
 )
 
 val DarkPalette = Palette(
@@ -84,6 +90,8 @@ val DarkPalette = Palette(
     lime = Color(0xFFD5E6AF),
     buttonBg = Color(0xFFD5E6AF),
     buttonText = Color(0xFF10291F),
+    glass = Color(0xC20B1A14),
+    veil = Color(0xFF0B1A14),
 )
 
 /** The system's type styles the app uses: one system sans, mono for what a machine would print. */
@@ -116,6 +124,15 @@ object Shapes {
     val bubble = RoundedCornerShape(16.dp)
     val control = RoundedCornerShape(12.dp)
     val pill = RoundedCornerShape(50)
+}
+
+/** The bars' material (see `GlassScaffold`): the blur behind a bar, and the fade where a phone cannot blur. */
+object Glass {
+    val radius = 20.dp
+
+    /** The radius while a list is moving (spec M). */
+    val scrollRadius = 12.dp
+    val fade = 20.dp
 }
 
 val LocalPalette = staticCompositionLocalOf { LightPalette }
@@ -175,6 +192,8 @@ private fun animated(target: Palette): Palette {
         lime = target.lime.moving("lime"),
         buttonBg = target.buttonBg.moving("buttonBg"),
         buttonText = target.buttonText.moving("buttonText"),
+        glass = target.glass.moving("glass"),
+        veil = target.veil.moving("veil"),
     )
 }
 

@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -557,8 +558,7 @@ fun Composer(
     onSend: () -> Unit,
 ) {
     val p = palette
-    Column(Modifier.fillMaxWidth().background(p.bg)) {
-        Hairline()
+    Column(Modifier.fillMaxWidth()) {
         AnimatedVisibility(notice != null, enter = fadeIn(Motion.enter()) + expandVertically(Motion.enter()), exit = fadeOut(Motion.exit()) + shrinkVertically(Motion.exit())) {
             // Kept while it leaves, so the text does not vanish before the line closes.
             var shown by remember { mutableStateOf(notice.orEmpty()) }
@@ -674,15 +674,15 @@ fun FormField(
     }
 }
 
-/** A secondary action with the app's 44dp target and accent type. */
+/** A secondary action with the app's 44dp target and accent type. On a glass bar ([onGlass]) it sits on its own `surface` pill, so accent type keeps its contrast. */
 @Composable
-fun ActionButton(text: String, modifier: Modifier = Modifier, enabled: Boolean = true, wrap: Boolean = false, onClick: () -> Unit) {
+fun ActionButton(text: String, modifier: Modifier = Modifier, enabled: Boolean = true, wrap: Boolean = false, onGlass: Boolean = false, onClick: () -> Unit) {
     Box(
         // 48dp: the platform's minimum touch target.
-        modifier.defaultMinSize(minHeight = 48.dp).clip(Shapes.control).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+        modifier.defaultMinSize(minHeight = 48.dp).clip(Shapes.control).then(if (onGlass) Modifier.background(palette.surface) else Modifier).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center,
-    ) { Text(text, style = Type.label, color = if (enabled) palette.accent else palette.textFaint, maxLines = if (wrap) Int.MAX_VALUE else 1, overflow = if (wrap) TextOverflow.Clip else TextOverflow.Ellipsis) }
+    ) { Text(text, style = Type.label, color = if (enabled) palette.accent else (if (onGlass) palette.textMuted else palette.textFaint), maxLines = if (wrap) Int.MAX_VALUE else 1, overflow = if (wrap) TextOverflow.Clip else TextOverflow.Ellipsis) }
 }
 
 /** A switch in the same palette as the app lock, including disabled states. */
@@ -711,15 +711,21 @@ fun AppSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier:
     )
 }
 
-/** A full-width primary button on `button-bg`. */
+/**
+ * A full-width primary button on `button-bg`, at least 48 dp tall: a label
+ * wrapped by large text makes it taller rather than being cut.
+ */
 @Composable
 fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
     Box(
-        Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(12.dp))
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
             .background(if (enabled) palette.buttonBg else palette.surface)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) { Text(text, style = Type.label, color = if (enabled) palette.buttonText else palette.textFaint) }
+    ) {
+        Text(text, style = Type.label, color = if (enabled) palette.buttonText else palette.textFaint, textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+    }
 }
 
 /** Vertical space. */

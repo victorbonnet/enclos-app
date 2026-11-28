@@ -112,14 +112,14 @@ fun SandboxPolicyScreen(model: AppModel, address: String, back: () -> Unit) {
     val review = model.policyReviews[address]
     LaunchedEffect(review) { if (review != null) editing = null }
     DisposableEffect(address) { onDispose { model.policyReviews.remove(address) } }
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("${address.substringAfter('/')} policy", style = Type.name, color = p.text, modifier = Modifier.weight(1f))
             TextButton(onClick = { model.loadPolicy(address) }, enabled = live && !busy) { Text("Refresh") }
         }
-        Hairline()
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+    }) { room ->
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(room).padding(bottom = 24.dp)) {
             Text("Access applies to every agent in this sandbox. Editing defaults changes this sandbox only.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))
             if (!live) Text("Connect to ${address.substringBefore('/')} to load or change its policy.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp))
             if (busy) Text("Waiting for the host…", style = Type.small, color = p.textMuted, modifier = Modifier.padding(16.dp))

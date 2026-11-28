@@ -40,6 +40,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.victorbonnet.enclos.ui.AppBar
+import io.github.victorbonnet.enclos.ui.GlassScaffold
 import io.github.victorbonnet.enclos.ui.Gap
 import io.github.victorbonnet.enclos.ui.Glyphs
 import io.github.victorbonnet.enclos.ui.Hairline
@@ -85,13 +86,13 @@ fun CreateSandboxScreen(model: AppModel, host: String, back: () -> Unit, created
             model.clearProvisioning(host)
         }
     }
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
+    GlassScaffold(insets = WindowInsets.ime.union(WindowInsets.navigationBars), top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("Create sandbox", style = Type.heading.copy(fontSize = 18.sp), color = p.text)
         }
-        Hairline()
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
+    }) { room ->
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(room).padding(16.dp)) {
             Text("On $host", style = Type.name, color = p.text)
             Gap(8.dp)
             Text("Create a sandbox with its own home and policy, then install a runtime in it.", style = Type.small, color = p.textMuted)

@@ -2,6 +2,7 @@ package io.github.victorbonnet.enclos
 
 import android.content.Intent
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.core.content.edit
@@ -30,10 +31,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.CompositionLocalProvider
 import io.github.victorbonnet.enclos.ui.LocalAgentPictures
 import androidx.compose.runtime.Composable
@@ -225,8 +223,17 @@ class MainActivity : ComponentActivity() {
         open(intent)
     }
 
+    /** Android 10+ paints a scrim behind a 3-button navigation bar unless told not to: that is a band. */
+    private fun clearNavigationBarScrim() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Edge to edge from the first frame, not after the first composition: the window never shows its
+        // own background where a bar is; the navigation bar is transparent, with no contrast scrim.
+        enableEdgeToEdge()
+        clearNavigationBarScrim()
         applyTheme(this, model.theme.value)
         // Before the first frame, so none is drawn unsecured.
         secure(model.lock.on.value)
@@ -253,6 +260,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(dark) {
                 val bars = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark }
                 enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
+                clearNavigationBarScrim()
             }
             val lockOn = model.lock.on.value
             LaunchedEffect(lockOn) { secure(lockOn) }
@@ -372,7 +380,8 @@ internal fun Screens(model: AppModel, ask: Ask) {
     // swipe half way does not change what Back does.
     BackHandler(enabled = !onFullScreen && views.settledPage != View.Conversations.ordinal) { onView(View.Conversations) }
 
-    Box(Modifier.fillMaxSize().background(palette.bg).windowInsetsPadding(WindowInsets.statusBars)) {
+    // The status bar's room is each screen's own: its top bar is glass that fills it (`GlassScaffold`).
+    Box(Modifier.fillMaxSize().background(palette.bg)) {
         transition.AnimatedContent(transitionSpec = { routeMove(forward = targetState.depth > initialState.depth) }) { route ->
             val line = palette.line
             // A full screen's left edge is a hairline, so it reads crisply
@@ -413,10 +422,7 @@ internal fun Screens(model: AppModel, ask: Ask) {
                         )
                     }
                     is Route.Chat -> ConversationScreen(model, route.id, back = { go(route.up) })
-                    Route.Settings -> Column(Modifier.fillMaxSize()) {
-                        AppBar { IconButton(Glyphs.back, "Back", { go(Route.Tabs) }) }
-                        SettingsScreen(model, pair = { go(Route.Pair) }, ask = ask, openHost = { go(Route.HostPage(it, fromSettings = true)) })
-                    }
+                    Route.Settings -> SettingsScreen(model, back = { go(Route.Tabs) }, pair = { go(Route.Pair) }, ask = ask, openHost = { go(Route.HostPage(it, fromSettings = true)) })
                     Route.NewChat -> NewChatScreen(model, back = { go(Route.Tabs) }, opened = { go(Route.Chat(it)) })
                     is Route.AgentPage -> AgentScreen(model, route.address, back = { go(route.up) }, openChat = { go(Route.Chat(it)) }, start = start, openRoutines = { go(Route.RoutinesPage(route.address, fromAgent = true, inSandbox = route.inSandbox)) }, openModel = { go(Route.ModelPage(route.address, inSandbox = route.inSandbox)) })
                     is Route.RoutinesPage -> RoutinesScreen(model, route.address, back = { go(route.up) })

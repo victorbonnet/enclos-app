@@ -3,6 +3,7 @@ package io.github.victorbonnet.enclos
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +24,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.victorbonnet.enclos.ui.AppBar
+import io.github.victorbonnet.enclos.ui.GlassScaffold
 import io.github.victorbonnet.enclos.ui.ConnectionDot
 import io.github.victorbonnet.enclos.ui.Gap
 import io.github.victorbonnet.enclos.ui.Glyph
@@ -64,13 +66,13 @@ fun HostScreen(model: AppModel, name: String, back: () -> Unit, openSandbox: (St
     val slots = usageSlots(model.agents.filter { it.host == name }.map { it.name }, charted)
     val colors: Map<String, Color> = slots.mapValues { (_, slot) -> seriesColor(slot) }
     val removed = model.forgetting.offered(name)
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text(name, style = Type.heading.copy(fontSize = 18.sp), color = p.text)
         }
-        Hairline()
-        LazyColumn(Modifier.weight(1f)) {
+    }) { room ->
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = room.calculateTopPadding(), bottom = room.calculateBottomPadding())) {
             item {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {

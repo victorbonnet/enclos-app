@@ -70,15 +70,15 @@ fun ModelScreen(client: ModelClient, address: String, hostConnected: Boolean, ba
             client.errors[address] = "Not sent: the page changed meanwhile. Check it and save again."
         }
     }
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("Model", style = Type.name, color = p.text, modifier = Modifier.weight(1f))
-            ActionButton("Refresh", enabled = live && !busy, onClick = { client.refresh(address) })
-            ActionButton("Save", enabled = canSave, onClick = { if (options?.restarts == true) confirming = true else save() })
+            ActionButton("Refresh", enabled = live && !busy, onGlass = true, onClick = { client.refresh(address) })
+            ActionButton("Save", enabled = canSave, onGlass = true, onClick = { if (options?.restarts == true) confirming = true else save() })
         }
-        Hairline()
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+    }) { room ->
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(room).padding(bottom = 24.dp)) {
             Text(address, style = Type.code, color = p.textFaint, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
             Text("The model this agent uses for all its conversations, as its runtime on the host keeps it.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp))
             options?.current?.let { Text("Now: ${it.label}", style = Type.label, color = p.text, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }

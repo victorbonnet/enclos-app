@@ -39,15 +39,15 @@ fun RoutinesScreen(model: AppModel, address: String, back: () -> Unit) {
     var editorDirty by remember { mutableStateOf(false) }
     var discardSheet by remember { mutableStateOf(false) }
     LaunchedEffect(address, live) { if (live) client.refresh(address) }
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("Routines", style = Type.name, color = p.text, modifier = Modifier.weight(1f))
-            ActionButton("Refresh", enabled = live && !busy, onClick = { client.refresh(address) })
+            ActionButton("Refresh", enabled = live && !busy, onGlass = true, onClick = { client.refresh(address) })
             if (client.canOperate(address, "create")) IconButton(Glyphs.plus, "New routine", { creating = true })
         }
-        Hairline()
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+    }) { room ->
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(room).padding(bottom = 24.dp)) {
             Text(address, style = Type.code, color = p.textFaint, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
             Text("Routines run on this agent's host, including while the app is closed.", style = Type.small, color = p.textMuted, modifier = Modifier.padding(horizontal = 16.dp))
             list?.options?.let { Text("Schedule time zone: ${Visible.stripped(it.timezone)}", style = Type.small, color = p.textFaint, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }

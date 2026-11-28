@@ -3,5 +3,6 @@
         <activity android:name=".AgentListProbeActivity" android:exported="false" />
         <activity android:name=".NeedsYouProbeActivity" android:exported="false" />
         <activity android:name=".HeldTaskProbeActivity" android:exported="false" />
+        <activity android:name=".PolicyRequestProbeActivity" android:exported="false" />
     </application>
 </manifest>

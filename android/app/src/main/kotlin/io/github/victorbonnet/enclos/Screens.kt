@@ -52,6 +52,7 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -106,6 +107,7 @@ import io.github.victorbonnet.enclos.ui.AgentAvatar
 import io.github.victorbonnet.enclos.ui.AgentInitial
 import io.github.victorbonnet.enclos.ui.SandboxMark
 import io.github.victorbonnet.enclos.ui.AppBar
+import io.github.victorbonnet.enclos.ui.GlassScaffold
 import io.github.victorbonnet.enclos.ui.ActionButton
 import io.github.victorbonnet.enclos.ui.AppSwitch
 import io.github.victorbonnet.enclos.ui.Bubble
@@ -308,6 +310,8 @@ fun InboxScreen(
     pair: () -> Unit,
     openApproval: (String) -> Unit,
     state: LazyListState = rememberLazyListState(),
+    /** What the bars over the list take (`GlassScaffold`): the list scrolls under them. */
+    room: PaddingValues = PaddingValues(),
 ) {
     // "5 min ago" stays true while the screen shows.
     val now by produceState(System.currentTimeMillis() / 1000) {
@@ -376,13 +380,15 @@ fun InboxScreen(
                     "On a host, run enclos app serve, then enclos app pair, and scan its code.",
                     "Pair a host →",
                     pair,
+                    room = room,
                 )
                 sorted.isEmpty() && requests.isEmpty() && model.needsYou.staleHosts.isEmpty() && model.reminderDismissals.errors.isEmpty() -> Empty(
                     if (archivedOnly) "No archived conversation." else "No active conversation yet.",
                     if (archivedOnly) "Archived conversations stay here until you unarchive them." else "Start one below, or find archived conversations with the archive filter above.",
+                    room = room,
                 )
                 else -> {
-                    LazyColumn(Modifier.weight(1f), state = state) {
+                    LazyColumn(Modifier.weight(1f), state = state, contentPadding = PaddingValues(top = room.calculateTopPadding(), bottom = room.calculateBottomPadding())) {
                         if (searching) return@LazyColumn
                         if (archivedOnly) item(key = "archive-view") {
                             Text("Archived conversations", style = Type.meta, color = palette.accent, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
@@ -412,7 +418,7 @@ fun InboxScreen(
                                 items(groupsFound, key = { "group:${it.conversation.id}" }) { f ->
                                     Arriving { GroupRow(model, f.conversation, f.match, query, now) { open(f.conversation.id) } }
                                 }
-                                item(key = "groups-gap") { Gap(6.dp) }
+                                item(key = "groups-gap") { Gap(if (agents.isEmpty()) 14.dp else 6.dp) }
                             }
                         }
                         if (agents.isNotEmpty()) {
@@ -484,8 +490,6 @@ fun InboxScreen(
                             }
                             item(key = "gap:${entry.address}") { Gap(14.dp) }
                         }
-                        // Room for the search and compose bar over the list's end.
-                        item { Spacer(Modifier.height(96.dp)) }
                     }
                 }
             }
@@ -893,9 +897,8 @@ private fun MoreBranch(text: String, expanded: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ColumnScope.Empty(title: String, text: String, action: String? = null, onAction: () -> Unit = {}) {
-    Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
-        Hairline()
+private fun ColumnScope.Empty(title: String, text: String, action: String? = null, onAction: () -> Unit = {}, room: PaddingValues = PaddingValues()) {
+    Column(Modifier.weight(1f).padding(room).padding(horizontal = 16.dp)) {
         Gap(24.dp)
         Text(title, style = Type.name, color = palette.text)
         Gap(4.dp)
@@ -1156,7 +1159,7 @@ private fun MoreRow(name: String, hidden: Int, shown: Int, unfolded: Boolean, on
  * whose address or runtime has every word of it.
  */
 @Composable
-fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, openSandbox: (String) -> Unit, pair: () -> Unit, createSandbox: (String) -> Unit, openHost: (String) -> Unit, state: LazyListState = rememberLazyListState()) {
+fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, openSandbox: (String) -> Unit, pair: () -> Unit, createSandbox: (String) -> Unit, openHost: (String) -> Unit, state: LazyListState = rememberLazyListState(), room: PaddingValues = PaddingValues()) {
     // "5 min ago" stays true while the screen shows.
     val now by produceState(System.currentTimeMillis() / 1000) {
         while (true) {
@@ -1166,7 +1169,8 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
     }
     val workingOnly by model.agentsWorkingOnly
     if (model.paired.isEmpty()) {
-        Column(Modifier.fillMaxSize()) {
+        // Clear of the glass bars: the header below the top one, the action above the bottom one.
+        Column(Modifier.fillMaxSize().padding(room)) {
             // Nothing listed yet: the total says so, with no Working only to choose.
             AgentsHeader(0, workingOnly = null, onWorkingOnly = {})
             Empty("No host yet.", "On a host, run enclos app serve, then enclos app pair, and scan its code.", "Pair a host →", pair)
@@ -1193,7 +1197,7 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
             refocus = false
         }
     }
-    LazyColumn(Modifier.fillMaxSize(), state = state) {
+    LazyColumn(Modifier.fillMaxSize(), state = state, contentPadding = PaddingValues(top = room.calculateTopPadding(), bottom = room.calculateBottomPadding())) {
         // The total and the switch scroll with the list, so large text reaches every row.
         item(key = "agents-header") {
             AgentsHeader(view.total, workingOnly, { model.agentsWorkingOnly.value = it }, Modifier.focusRequester(toggleFocus))
@@ -1259,8 +1263,6 @@ fun AgentsScreen(model: AppModel, query: String, openAgent: (String) -> Unit, op
             }
             null -> Unit
         }
-        // Room for the search and compose bar over the list's end.
-        item { Spacer(Modifier.height(96.dp)) }
     }
 }
 
@@ -1444,10 +1446,11 @@ internal fun ListHeading(
  * The app's settings, in sections: the paired hosts (each connection,
  * Reconnect, Forget, and pairing another), security (the app lock),
  * appearance (the theme), what is kept on this phone (Clear cache), and
- * the versions. Nothing here acts on a sandbox.
+ * the versions. Nothing here acts on a sandbox. [core] gives the core's
+ * version (a JVM test, where the native core does not load, passes its own).
  */
 @Composable
-fun SettingsScreen(model: AppModel, pair: () -> Unit, ask: Ask, openHost: (String) -> Unit) {
+fun SettingsScreen(model: AppModel, back: () -> Unit, pair: () -> Unit, ask: Ask, openHost: (String) -> Unit, core: () -> String = { coreVersion() }) {
     val p = palette
     var forgetting by remember { mutableStateOf<String?>(null) }
     // A host forgotten without being told: the dialog said it would be.
@@ -1498,9 +1501,14 @@ fun SettingsScreen(model: AppModel, pair: () -> Unit, ask: Ask, openHost: (Strin
             clearing = false
         }
     }
-    Column(Modifier.fillMaxSize()) {
-        LargeTitle("Settings")
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+    GlassScaffold(insets = WindowInsets.navigationBars, top = {
+        // Back, then the title under it: one bar of two rows.
+        Column {
+            AppBar { IconButton(Glyphs.back, "Back", back) }
+            LargeTitle("Settings")
+        }
+    }) { room ->
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(room)) {
             Section("Hosts") {
                 model.paired.forEach { host ->
                     val live = model.connected(host.name)
@@ -1557,7 +1565,7 @@ fun SettingsScreen(model: AppModel, pair: () -> Unit, ask: Ask, openHost: (Strin
                     val app = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() }
                     Text("Enclos ${app.orEmpty()}".trim(), style = Type.name, color = p.text)
                     Gap(2.dp)
-                    Text("core ${coreVersion()}", style = Type.code, color = p.textFaint)
+                    Text("core ${core()}", style = Type.code, color = p.textFaint)
                 }
             }
             Gap(24.dp)
@@ -1685,72 +1693,123 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             model.rename(conversation, it).also { sent -> if (sent) renaming = false }
         }
     }
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
-        AppBar {
-            IconButton(Glyphs.back, "Back", back)
-            if (conversation.group) MemberStack(handles, side = 30.dp, label = { model.agentLabel("$scope/$it") }) { PhotoKey(conversation.host, "${conversation.agent}/$it") } else AgentAvatar(agent, live, small = true, working = activity != null, photo = PhotoKey(conversation.host, conversation.agent))
-            // Its name, and the agent under it; tap to rename.
-            Column(Modifier.weight(1f).clickable(onClickLabel = "Rename the conversation") { renaming = true }) {
-                Text(
-                    conversation.title ?: agent,
-                    style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp),
-                    color = p.text,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                val doing = activity?.label
-                if (doing != null) {
-                    // The agent at work, wherever: the wave and what it does, in place of its address;
-                    // working on a task the phone keeps, tapping it opens the task's sheet.
-                    val task = model.activeTask(scope)
-                    val open = if (task != null) Modifier.clickable(onClickLabel = "Open the task") { model.taskDetails.show(task.key) } else Modifier
-                    Row(open, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        WorkingWave(square = 4.dp, lift = 3.dp)
+    GlassScaffold(
+        insets = WindowInsets.ime.union(WindowInsets.navigationBars),
+        scrolling = { list.isScrollInProgress },
+        top = {
+            Column {
+            AppBar {
+                IconButton(Glyphs.back, "Back", back)
+                if (conversation.group) MemberStack(handles, side = 30.dp, label = { model.agentLabel("$scope/$it") }) { PhotoKey(conversation.host, "${conversation.agent}/$it") } else AgentAvatar(agent, live, small = true, working = activity != null, photo = PhotoKey(conversation.host, conversation.agent))
+                // Its name, and the agent under it; tap to rename.
+                Column(Modifier.weight(1f).clickable(onClickLabel = "Rename the conversation") { renaming = true }) {
+                    Text(
+                        conversation.title ?: agent,
+                        style = Type.heading.copy(fontSize = 18.sp, lineHeight = 22.sp),
+                        color = p.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val doing = activity?.label
+                    if (doing != null) {
+                        // The agent at work, wherever: the wave and what it does, in place of its address;
+                        // working on a task the phone keeps, tapping it opens the task's sheet.
+                        val task = model.activeTask(scope)
+                        val open = if (task != null) Modifier.clickable(onClickLabel = "Open the task") { model.taskDetails.show(task.key) } else Modifier
+                        // Frame 2: a `surface` chip, the live wave and the words in `accent`.
+                        Row(
+                            Modifier.clip(Shapes.pill).background(p.surface).then(open).padding(horizontal = 10.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            WorkingWave(square = 4.dp, lift = 3.dp)
+                            Text(
+                                if (conversation.title != null) "$agent · $doing" else doing,
+                                style = Type.small,
+                                color = p.accent,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    } else {
                         Text(
-                            if (conversation.title != null) "$agent · $doing" else doing,
-                            style = Type.small,
-                            color = p.accent,
+                            when {
+                                conversation.group -> handles.joinToString(" ") { "@$it" } + " · ${conversation.host}/${conversation.agent}"
+                                conversation.title != null -> "$agent · ${conversation.host}/${conversation.agent}"
+                                else -> "${conversation.host}/${conversation.agent}"
+                            },
+                            style = Type.code,
+                            color = p.textMuted,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                } else {
-                    Text(
-                        when {
-                            conversation.group -> handles.joinToString(" ") { "@$it" } + " · ${conversation.host}/${conversation.agent}"
-                            conversation.title != null -> "$agent · ${conversation.host}/${conversation.agent}"
-                            else -> "${conversation.host}/${conversation.agent}"
-                        },
-                        style = Type.code,
-                        color = p.textFaint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                }
+                Box {
+                    IconButton(Glyphs.more, "Conversation actions", { options = true })
+                    DropdownMenu(options, { options = false }, modifier = Modifier.background(p.bg)) {
+                        MenuRow(Glyphs.compose, "Rename") { options = false; renaming = true }
+                        MenuRow(Glyphs.usage, "Usage") { options = false; showingUsage = true }
+                        ArchiveMenuItem(model, conversation) { options = false }
+                        DeleteMenuItem(model, conversation) { options = false; deleting = true }
+                    }
                 }
             }
-            Box {
-                IconButton(Glyphs.more, "Conversation actions", { options = true })
-                DropdownMenu(options, { options = false }, modifier = Modifier.background(p.bg)) {
-                    MenuRow(Glyphs.compose, "Rename") { options = false; renaming = true }
-                    MenuRow(Glyphs.usage, "Usage") { options = false; showingUsage = true }
-                    ArchiveMenuItem(model, conversation) { options = false }
-                    DeleteMenuItem(model, conversation) { options = false; deleting = true }
-                }
+            if (conversation.archived) SystemLine("Archived · kept out of Active conversations.")
+            if (model.archiving(conversation)) SystemLine("Saving archive state…")
+            model.archiveError(conversation)?.let { SystemLine(it) }
+            DeleteFeedback(model, conversation, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
-        }
-        Hairline()
-        if (conversation.archived) SystemLine("Archived · kept out of Active conversations.")
-        if (model.archiving(conversation)) SystemLine("Saving archive state…")
-        model.archiveError(conversation)?.let { SystemLine(it) }
-        DeleteFeedback(model, conversation, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        },
+        bottom = {
+            Column {
+            if (conversation.group) {
+                // Members to address, as the person types `@`.
+                val labels = handles.associateWith { model.agentLabel("$scope/$it") }
+                val members = remember(handles, draft, labels) { mentionsFor(handles, draft) { labels[it] ?: it } }
+                MentionSuggestions(members, { PhotoKey(conversation.host, "${conversation.agent}/$it") }, label = { labels[it] ?: it }) { model.unsent[id] = mentioned(draft, it) }
+                if (status != null) GroupStrip(status, turnOf) { model.stopGroup(conversation) }
+            } else {
+                // The agent's commands that match what is typed after `/`; picking one puts it in the field.
+                val known = model.commands["${conversation.host}/${conversation.agent}"].orEmpty()
+                val offered = remember(known, draft) { suggest(known, draft) }
+                CommandSuggestions(offered, draft.drop(1)) { model.unsent[id] = picked(it) }
+            }
+            // Not connected: write, but nothing goes until the host is back. A
+            // message the bridge did not get is back in the field, saying so; one
+            // that could not go (too long) stays, saying why.
+            val notSent = model.outgoing.notSent[id]?.let { "Not sent: $it." }
+            val away = if (live) null else "Not connected to ${conversation.host}: send once it's back."
+            FileComposer(model, conversation) { attach, filesReady ->
+            Composer(
+                draft,
+                {
+                    unsent = null
+                    model.outgoing.write(id, it)
+                },
+                if (conversation.group) "Message the group, @ to address" else "Message $agent",
+                canSend = live && filesReady,
+                hasFiles = model.outgoing.files.draft(FileKey(conversation.host, id)).isNotEmpty(),
+                attachment = attach,
+                notice = listOfNotNull(unsent, notSent, model.outgoing.notes[id], away).joinToString(" ").ifEmpty { null },
+            ) {
+                // Cleared once handed to the connection; else it stays, to send again.
+                unsent = model.send(conversation, draft.trim())
+                // What the person just sent shows, wherever they had scrolled.
+                if (unsent == null) atNewest = true
+            }
+            }
+            }
+        },
+    ) { room ->
         // Newest first, drawn from the bottom up: the conversation stays
         // anchored at its last message when the keyboard opens or a message
         // arrives. What arrives fades in while the rest slides up.
         LazyColumn(
-            Modifier.weight(1f),
+            Modifier.fillMaxSize(),
             state = list,
             reverseLayout = true,
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 12.dp),
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp + room.calculateTopPadding(), bottom = 12.dp + room.calculateBottomPadding()),
             verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Bottom),
         ) {
             model.said[conversation.host]?.let { item(key = "said") { Arriving { SystemLine("The bridge said: $it") } } }
@@ -1856,42 +1915,6 @@ fun ConversationScreen(model: AppModel, id: String, back: () -> Unit) {
             }
             cardsAt(-1)
         }
-        if (conversation.group) {
-            // Members to address, as the person types `@`.
-            val labels = handles.associateWith { model.agentLabel("$scope/$it") }
-            val members = remember(handles, draft, labels) { mentionsFor(handles, draft) { labels[it] ?: it } }
-            MentionSuggestions(members, { PhotoKey(conversation.host, "${conversation.agent}/$it") }, label = { labels[it] ?: it }) { model.unsent[id] = mentioned(draft, it) }
-            if (status != null) GroupStrip(status, turnOf) { model.stopGroup(conversation) }
-        } else {
-            // The agent's commands that match what is typed after `/`; picking one puts it in the field.
-            val known = model.commands["${conversation.host}/${conversation.agent}"].orEmpty()
-            val offered = remember(known, draft) { suggest(known, draft) }
-            CommandSuggestions(offered, draft.drop(1)) { model.unsent[id] = picked(it) }
-        }
-        // Not connected: write, but nothing goes until the host is back. A
-        // message the bridge did not get is back in the field, saying so; one
-        // that could not go (too long) stays, saying why.
-        val notSent = model.outgoing.notSent[id]?.let { "Not sent: $it." }
-        val away = if (live) null else "Not connected to ${conversation.host}: send once it's back."
-        FileComposer(model, conversation) { attach, filesReady ->
-        Composer(
-            draft,
-            {
-                unsent = null
-                model.outgoing.write(id, it)
-            },
-            if (conversation.group) "Message the group, @ to address" else "Message $agent",
-            canSend = live && filesReady,
-            hasFiles = model.outgoing.files.draft(FileKey(conversation.host, id)).isNotEmpty(),
-            attachment = attach,
-            notice = listOfNotNull(unsent, notSent, model.outgoing.notes[id], away).joinToString(" ").ifEmpty { null },
-        ) {
-            // Cleared once handed to the connection; else it stays, to send again.
-            unsent = model.send(conversation, draft.trim())
-            // What the person just sent shows, wherever they had scrolled.
-            if (unsent == null) atNewest = true
-        }
-        }
     }
 }
 
@@ -1924,7 +1947,6 @@ private fun MentionSuggestions(offered: List<String>, photoOf: (String) -> Photo
         exit = fadeOut(Motion.exit()) + shrinkVertically(Motion.exit(), shrinkTowards = Alignment.Bottom),
     ) {
         Column(Modifier.fillMaxWidth().background(p.surface)) {
-            Hairline()
             offered.forEach { h ->
                 Row(
                     Modifier.fillMaxWidth().clickable(onClickLabel = "Address @$h") { onPick(h) }.padding(horizontal = 16.dp, vertical = 9.dp),
@@ -1955,7 +1977,6 @@ private fun GroupStrip(status: GroupStatus, turnOf: String?, onStop: () -> Unit)
     val p = palette
     val text = status.label(turnOf) ?: return
     Column(Modifier.fillMaxWidth()) {
-        Hairline()
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1965,12 +1986,12 @@ private fun GroupStrip(status: GroupStatus, turnOf: String?, onStop: () -> Unit)
             Text(
                 text,
                 style = Type.small,
-                color = if (status.state == "working") p.accent else p.textMuted,
+                color = if (status.state == "working") p.text else p.textMuted,
                 maxLines = if (status.state == "stopped") Int.MAX_VALUE else 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            if (status.state == "working") TextLink("Stop", onStop) else Spacer(Modifier.height(44.dp))
+            if (status.state == "working") ActionButton("Stop", onGlass = true, onClick = onStop) else Spacer(Modifier.height(48.dp))
         }
     }
 }
@@ -1994,7 +2015,6 @@ private fun CommandSuggestions(offered: List<AgentCommand>, typed: String, onPic
         exit = fadeOut(Motion.exit()) + shrinkVertically(Motion.exit(), shrinkTowards = Alignment.Bottom),
     ) {
         Column(Modifier.fillMaxWidth().background(p.surface)) {
-            Hairline()
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
                 items(shown, key = { it.name }) { c ->
                     Column(
@@ -2181,7 +2201,8 @@ fun PairScreen(model: AppModel, back: () -> Unit, done: () -> Unit) {
             delay(1000)
         }
     }
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
+    // Opaque, as before: a live viewfinder is no backdrop for glass. With the status bar's room taken here, as the root no longer does.
+    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.ime).union(WindowInsets.navigationBars))) {
         AppBar {
             IconButton(Glyphs.back, "Back", back)
             Text("Pair a host", style = Type.heading, color = p.text, modifier = Modifier.weight(1f))

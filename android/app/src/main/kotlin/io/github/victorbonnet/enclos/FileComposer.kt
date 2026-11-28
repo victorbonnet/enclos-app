@@ -255,7 +255,8 @@ internal fun FileOutcome(phase: FilePhase, text: String, names: List<String>, on
         is FilePhase.Unknown -> "Delivery unknown. Check history before sending it again." to true
         else -> return
     }
-    Column(Modifier.fillMaxWidth().heightIn(max = 160.dp).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp)) {
+    // On its own `surface` so accent actions keep their contrast over the glass bar.
+    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp).clip(Shapes.control).background(palette.surface).heightIn(max = 160.dp).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 8.dp)) {
         Text(listOf(text, names.joinToString()).filter { it.isNotBlank() }.joinToString(" · "), style = Type.small, color = palette.text)
         Text(line, style = Type.small, color = palette.text)
         Column {
@@ -292,13 +293,13 @@ internal fun FileComposerControls(
     var menu by rememberSaveable { mutableStateOf(false) }
     val p = palette
     val canAttach = offersFiles && online && !blocked && names.size < MAX_SEND_FILES
-    Column(Modifier.fillMaxWidth().background(p.bg)) {
+    Column(Modifier.fillMaxWidth()) {
         composer({
             if (offersFiles) IconButton(
                 modifier = Modifier.size(48.dp).semantics { contentDescription = "Attach files" },
                 enabled = canAttach,
                 onClick = { menu = true },
-            ) { Icon(Glyphs.plus, contentDescription = null, tint = if (canAttach) p.accent else p.textFaint) }
+            ) { Icon(Glyphs.plus, contentDescription = null, tint = if (canAttach) p.text else p.textMuted) }
         }, !preparing && !sending)
         Column(Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp)) {
             if (names.isNotEmpty()) FlowRow(
