@@ -1436,10 +1436,11 @@ internal fun ListHeading(
  * The app's settings, in sections: the paired hosts (each connection,
  * Reconnect, Forget, and pairing another), security (the app lock),
  * appearance (the theme), what is kept on this phone (Clear cache), and
- * the versions. Nothing here acts on a sandbox.
+ * the versions. Nothing here acts on a sandbox. [core] gives the core's
+ * version (a JVM test, where the native core does not load, passes its own).
  */
 @Composable
-fun SettingsScreen(model: AppModel, back: () -> Unit, pair: () -> Unit, ask: Ask, openHost: (String) -> Unit) {
+fun SettingsScreen(model: AppModel, back: () -> Unit, pair: () -> Unit, ask: Ask, openHost: (String) -> Unit, core: () -> String = { coreVersion() }) {
     val p = palette
     var forgetting by remember { mutableStateOf<String?>(null) }
     // A host forgotten without being told: the dialog said it would be.
@@ -1491,8 +1492,11 @@ fun SettingsScreen(model: AppModel, back: () -> Unit, pair: () -> Unit, ask: Ask
         }
     }
     GlassScaffold(insets = WindowInsets.navigationBars, top = {
-        AppBar { IconButton(Glyphs.back, "Back", back) }
-        LargeTitle("Settings")
+        // Back, then the title under it: one bar of two rows.
+        Column {
+            AppBar { IconButton(Glyphs.back, "Back", back) }
+            LargeTitle("Settings")
+        }
     }) { room ->
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(room)) {
             Section("Hosts") {
@@ -1551,7 +1555,7 @@ fun SettingsScreen(model: AppModel, back: () -> Unit, pair: () -> Unit, ask: Ask
                     val app = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() }
                     Text("Enclos ${app.orEmpty()}".trim(), style = Type.name, color = p.text)
                     Gap(2.dp)
-                    Text("core ${coreVersion()}", style = Type.code, color = p.textFaint)
+                    Text("core ${core()}", style = Type.code, color = p.textFaint)
                 }
             }
             Gap(24.dp)

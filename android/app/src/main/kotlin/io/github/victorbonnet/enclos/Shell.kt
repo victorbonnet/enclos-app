@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -729,7 +730,8 @@ fun SandboxScreen(model: AppModel, address: String, back: () -> Unit, openAgent:
 
 /**
  * Choosing a group's members: a name, then every agent, ticked or not;
- * once one is ticked, only the agents of its sandbox can be.
+ * once one is ticked, only the agents of its sandbox can be. [room] is the
+ * bars' room, padded inside the scroll so the list passes under the glass.
  */
 @Composable
 private fun GroupPicker(
@@ -737,11 +739,12 @@ private fun GroupPicker(
     members: androidx.compose.runtime.snapshots.SnapshotStateList<Agent>,
     name: String,
     onName: (String) -> Unit,
+    room: PaddingValues,
     modifier: Modifier,
 ) {
     val p = palette
     val first = members.firstOrNull()
-    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(room)) {
         BasicTextField(
             value = name,
             onValueChange = onName,
@@ -968,7 +971,7 @@ fun NewChatScreen(model: AppModel, back: () -> Unit, opened: (String) -> Unit, s
         },
     ) { room ->
         if (grouping) {
-            GroupPicker(agents, members, name, { name = it }, Modifier.fillMaxSize().padding(room))
+            GroupPicker(agents, members, name, { name = it }, room, Modifier.fillMaxSize())
         } else Box(Modifier.fillMaxSize().padding(room), contentAlignment = Alignment.Center) {
             val agent = chosen?.let { selected -> model.agents.firstOrNull { it.address == selected.address } }
             if (agent == null) {

@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -710,15 +711,21 @@ fun AppSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier:
     )
 }
 
-/** A full-width primary button on `button-bg`. */
+/**
+ * A full-width primary button on `button-bg`, at least 48 dp tall: a label
+ * wrapped by large text makes it taller rather than being cut.
+ */
 @Composable
 fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
     Box(
-        Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(12.dp))
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
             .background(if (enabled) palette.buttonBg else palette.surface)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) { Text(text, style = Type.label, color = if (enabled) palette.buttonText else palette.textFaint) }
+    ) {
+        Text(text, style = Type.label, color = if (enabled) palette.buttonText else palette.textFaint, textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+    }
 }
 
 /** Vertical space. */
